@@ -2,10 +2,15 @@ https://odmarken.github.io/Investing-tool/
 
 # Riptide Investments Panel
 
-En handelspanel för Nasdaq-terminen som körs helt i webbläsaren, plus en
+En handelspanel för mikroterminen på Nasdaq (**MNQ**) som körs helt i webbläsaren, plus en
 TradingView-feed som gör att signalmotorn räknar på dina realtidsstaplar i stället
 för Yahoos fördröjda data.
 
+> **Signaler och graf går på MNQ**, mikroterminen: samma index och samma tick som NQ,
+> men $2 per punkt i stället för $20. Nyhetsanalysen och nyhetsbiasen räknas fortfarande
+> på NQ/Nasdaq-100 — det är samma marknad, och rubrikerna handlar om indexet. Korten visar
+> risk och mål i dollar per kontrakt, räknat på mikrokontraktets värde.
+>
 > **Guld är pausat.** Dashboarden kör bara NQ. Workern och Pine-skriptet klarar
 > fortfarande `GC`, så för att ta tillbaka guld räcker det att avkommentera
 > `GC`-raden i `INSTR` i html-filen — resten av sidan följer med av sig själv.
@@ -87,9 +92,10 @@ Testa den: `https://.../status` ska svara med `{"NQ":{"bars":0,...}}`.
 
 ## 4. Lägg Pine-skriptet på grafen
 
-Öppna `CME_MINI:NQ1!` i **5-minutersintervall** på TradingView.
+Öppna `CME_MINI:MNQ1!` i **5-minutersintervall** på TradingView.
 Pine Editor → klistra in `riptide-feed.pine` → *Add to chart*.
-Sätt **Hemlig nyckel** till samma värde som `FEED_KEY`, och **Symbolkod** till `NQ`.
+Sätt **Hemlig nyckel** till samma värde som `FEED_KEY`, och **Symbolkod** till `NQ` —
+koden är feedens nyckel och ska stå kvar som `NQ` även när skriptet ligger på MNQ-grafen.
 
 ## 5. Skapa alertet
 
@@ -133,7 +139,9 @@ Graden säger hur mycket av marknaden som talar för riktningen just nu:
 |---|---|
 | **A** | minst tre av fyra familjer pekar åt samma håll — mest potential |
 | **B** | två av fyra |
-| **C** | en eller ingen — lägst potential |
+| **C** | en eller ingen — lägst potential, handlas inte |
+
+C-setups visas i listan som analys men går aldrig till aktiv och tas aldrig av demokontot.
 
 **ICT-familjen** letar hela kedjan: priset tar ut en tidigare swingnivå och stänger
 tillbaka innanför (stopparna är inhämtade), bryter sedan strukturen åt andra hållet
@@ -158,7 +166,7 @@ panelhuvudet filtrerar listan.
 
 ---
 
-## Signalkärnan och backtestet
+## Signalkärnan och demokontot
 
 Längst ned på sidan sitter två sektioner.
 
@@ -170,30 +178,47 @@ chockvåg går ut när det landar. Radarsvepet och aktivitetsmätaren går forta
 strömmar in. Längst ned i rutan skriver kärnan ut vad den just läste, rad för rad och
 tecken för tecken: staplar från Yahoo, EMA/ATR/RSI/VWAP-värden, rubriker, nyhetsbias,
 hur de fyra familjerna röstar, ICT-kedjan (svep → MSS → FVG) och vilken setup som är bäst
-just nu. Kärnan lyser grönt när det samlade läget är positivt och rött när det är negativt,
-och siffran i mitten är antalet setups. Animationen pausar när fliken inte syns.
+just nu. Kärnan lyser grönt när det samlade läget är positivt och rött när det är negativt.
+I mitten sitter en HUD-kärna märkt **P** — segmentringar som roterar åt olika håll,
+skalstreck runt kanten och en svepande linje i den inre skivan. Två noder märkta **M**
+matar in i den ovanifrån och en nod märkt **E** tar emot under; de står stilla, det är
+bara kärnan som rör sig. Animationen pausar när fliken inte syns.
 
 Varje signalkort visar dessutom vilken familj setupen kommer från — **TREND**, **SVEP**,
 **BROTT** eller **ICT** — bredvid gradbrickan. Är två familjer sammanslagna till ett kort
 står den andra som `+ SVEP` efter.
 
-**Backtestet** kör exakt samma regler stapel för stapel på ungefär en månads
-femminutershistorik för NQ:
+**Demokontot** längst ned är pappershandel i realtid — inga riktiga pengar, men det
+beter sig som ett terminskonto:
 
-* Kontot startar på **50 000 USD** och riskerar **1 % av rådande kapital** per affär,
-  så vinsterna räknas på växande insats.
-* Entry, stopp och mål tas från signalen. Nås både stopp och mål inom samma stapel
-  räknas stoppen — det är den försiktiga tolkningen.
-* En tick slippage in och en ut är avdragen.
-* Positionen stängs efter 78 staplar om varken stopp eller mål nåtts.
-* Kontot håller **en position i taget** och tar alltid den högst graderade setupen.
+* Startkapital **50 000 USD**, **5 MNQ-kontrakt** per affär, 2 $ per punkt.
+* När en setup går aktiv läggs hela braketten automatiskt: fyllning, stopp och mål.
+  Positionen hålls tills ett av dem nås.
+* **Bara A och B handlas.** C-setups är för svaga och går inte ens till aktiv längre.
+* Panelen visar kapital, realiserat och öppet resultat, marginal (100 $ per kontrakt,
+  ett antagande om dagmarginal), fri marginal, exponering och hävstång, plus
+  träffsäkerhet, snitt per affär, bästa och sämsta, största nedgång, en kapitalkurva,
+  utfall per grad och de åtta senaste affärerna.
+* Utfallet avgörs på 5-minutersstaplarnas högsta och lägsta. Alla staplar som passerat
+  sedan förra kollen gås igenom, så en position som stod öppen medan sidan var stängd
+  får rätt utfall och rätt tidpunkt när du kommer tillbaka. Nås både stopp och mål inom
+  samma stapel räknas stoppen. Inga avgifter eller slippage är avdragna.
 
-Korten per grad räknar i stället **varje enskild setup** var för sig. Annars går
-graderna inte att jämföra, eftersom kontot nästan alltid tar A eller B och de lägre
-graderna aldrig får visa vad de gick för.
+### Var sparas kontot?
 
-Backtestet körs om var femtonde minut i bakgrunden, med pauser så att sidan inte
-hakar upp sig. Kurvan visar vad reglerna faktiskt gav — den kan falla.
+**Lokalt i webbläsaren** (`localStorage`), inte i molnet. Det betyder:
+
+* Kontot överlever att du stänger fliken, webbläsaren och datorn — det räknar vidare
+  nästa gång du öppnar sidan, och tar igen det som hänt under tiden.
+* Det följer **inte** med till telefonen. Varje webbläsare och varje adress har sitt
+  eget konto — `localhost` och GitHub Pages-adressen räknas som olika platser.
+* Simuleringen tickar bara när sidan är öppen någonstans. Är allt stängt händer inget
+  förrän du öppnar den igen, och då spelas historiken upp.
+
+Vill du ha ett konto som är gemensamt för dator och telefon och som tickar av sig självt
+dygnet runt behöver läget ligga på servern: Cloudflare-workern och dess KV finns redan,
+och skulle behöva en kontoslutpunkt plus en cron-utlösare som hämtar pris var femte minut
+och stänger positioner. Det är inte byggt än.
 
 ---
 
@@ -231,6 +256,19 @@ hakar upp sig. Kurvan visar vad reglerna faktiskt gav — den kan falla.
   i stället för villkoret visas när den fylldes, hur den ligger i R, hur långt det är
   kvar till mål och stopp, och varför setupen är bra. Avslutade affärer ligger kvar
   i en halvtimme så att du ser utfallet.
+* **Grafen går att zooma och dra.** Dra i grafen för att panorera bakåt i historiken.
+  **Dra i tidsaxeln längst ned** (eller i prisaxeln till höger) för att sträcka ut
+  staplarna — åt höger blir de bredare och färre, åt vänster smalare och fler. Scrolla
+  eller nyp zoomar också, dubbelklick eller *Återställ* tar dig tillbaka till de senaste
+  staplarna, och knapparna **−**/**+** gör samma sak. Pekaren byter form när du är över
+  axeln så du ser vilket läge du är i.
+* **Fyra nivåer, räknade på 15-minutersstaplar.** Grafen visar 5m, men stöd och motstånd
+  räknas på 15m — 5-minutersstaplarna i det synliga fönstret plus 180 staplar historik
+  slås ihop till kvartsstaplar, svängpunkterna klustras till zoner inom 0,35 ATR och
+  poängsätts på antal träffar, färskhet och närhet till priset. De två starkaste över
+  priset ritas som **R1/R2** i gult och de två under som **S1/S2** i turkost, och de
+  räknas om varje gång du zoomar, drar eller får ny data.
+  TradingView-widgeten är borttagen — grafen är helt egen.
 * **Klicka på en rubrik** i nyhetsflödet så fälls en flik ned med hela analysen:
   källa, publiceringstid, kategori, hur hårt nyheten väger på NQ (skala ±6), alla
   slutsatser regelmotorn drog, flödets egen text och en länk till källan. Ett kort

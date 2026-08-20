@@ -350,16 +350,6 @@ header.topbar{
 
 /* ---------- HUVUDGRAF ---------- */
 .chartbox{position:relative;background:#04090F;border-top:1px solid var(--line)}
-#tvBox{display:none;background:#0B1728;border-top:1px solid var(--line);height:430px;position:relative}
-#tvBox.on{display:block}
-#tvHost{width:100%;height:100%}
-#tvHost iframe{display:block;width:100%!important;height:100%!important;border:0}
-.tvfail{position:absolute;inset:0;display:none;place-items:center;text-align:center;padding:26px;color:var(--muted);font-size:11.5px;line-height:1.7}
-.tvfail.on{display:grid}
-.tvlv{display:flex;align-items:center;gap:7px;padding:7px 13px;border-top:1px solid var(--line);background:rgba(3,6,14,.5);flex-wrap:wrap}
-.tvlv .lp{display:inline-flex;align-items:baseline;gap:6px;padding:3px 9px;border-radius:6px;border:1px solid var(--line-2);background:#060D18}
-.tvlv .lp i{font-style:normal;font-size:8.5px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:var(--muted)}
-.tvlv .lp b{font-family:var(--mono);font-size:12px;font-weight:700}
 .tvlv .lp.e b{color:var(--lblue)} .tvlv .lp.s b{color:var(--red)} .tvlv .lp.t b{color:var(--green)}
 .tvlv .note{font-size:10px;color:var(--muted-2)}
 .chartbox canvas{display:block;width:100%}
@@ -387,6 +377,20 @@ header.topbar{
 .btgrade .row{display:flex;justify-content:space-between;padding:1.5px 0}
 .btgrade .row b{font-family:var(--mono);color:var(--text-2);font-weight:500}
 .btnote{margin-top:10px;font-size:10px;line-height:1.55;color:var(--muted)}
+.oppen{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;margin-bottom:8px;border-radius:8px;
+  border:1px solid rgba(6,255,165,.35);background:rgba(6,255,165,.06);font-size:10.5px}
+.oppen b{font-family:var(--mono);font-size:11.5px}
+.oppen .tag{font-size:8.5px;font-weight:800;letter-spacing:.8px;padding:2px 6px;border-radius:5px;
+  border:1px solid var(--line-2);color:var(--muted)}
+.dlista{margin-top:11px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.dlista .rad{display:grid;grid-template-columns:52px 46px 34px minmax(0,1fr) 66px 62px;gap:8px;padding:6px 10px;
+  font-size:10px;border-bottom:1px solid var(--line);align-items:center}
+.dlista .rad:last-child{border-bottom:none}
+.dlista .rad.hd{background:rgba(3,6,14,.5);color:var(--muted);font-size:8.5px;letter-spacing:.9px;text-transform:uppercase}
+.dlista .rad b{font-family:var(--mono);font-weight:700}
+.dlista .rad span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:680px){.dlista .rad{grid-template-columns:46px 40px 28px 60px 58px;font-size:9.5px}
+  .dlista .rad .namn{display:none}}
 .votes{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:7px 11px;margin-bottom:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);font-size:10.5px;color:var(--muted)}
 .votes b{color:var(--text-2);font-weight:600;letter-spacing:.3px}
 .votes i{font-style:normal}
@@ -515,7 +519,7 @@ footer b{color:var(--muted)}
       <div class="mark">RI</div>
       <div>
         <h1>RIPTIDE <span>INVESTMENTS</span> PANEL</h1>
-        <div class="sub">NQ · Nasdaq-100 · Realtidsanalys · 5 min · Day trades</div>
+        <div class="sub">MNQ · Micro Nasdaq-100 · Realtidsanalys · 5 min · Day trades</div>
       </div>
     </div>
     <div class="tb-spacer"></div>
@@ -596,7 +600,7 @@ footer b{color:var(--muted)}
         <div style="height:12px"></div>
         <div class="bias-wrap">
           <div class="biasbox">
-            <div class="bt"><span class="chip b">NQ</span><b>Nasdaq-bias</b><span class="v" id="biasNqV">–</span></div>
+            <div class="bt"><span class="chip b">MNQ</span><b>Nasdaq-bias</b><span class="v" id="biasNqV">–</span></div>
             <div class="meter"><span class="mid"></span><span class="kn" id="biasNqK" style="left:50%"></span></div>
             <div class="txt" id="biasNqT">–</div>
           </div>
@@ -609,23 +613,15 @@ footer b{color:var(--muted)}
       <div class="ph">
         <span class="accent"></span><h2>5-minutersgraf</h2>
         <div class="chart-tabs">
-          <button class="ct on" data-sym="NQ">NQ · Nasdaq-100</button>
+          <button class="ct on" data-sym="NQ">MNQ · Micro Nasdaq-100</button>
         </div>
-        <div class="chart-tabs" style="margin-left:10px;padding-left:10px;border-left:1px solid var(--line-2)">
-          <button class="ct on" data-cm="own">Egen</button>
-          <button class="ct" data-cm="tv">TradingView</button>
+        <div class="chart-tabs" style="margin-left:auto;gap:5px">
+          <button class="ct" data-zoom="ut" title="Zooma ut">−</button>
+          <button class="ct" data-zoom="in" title="Zooma in">+</button>
+          <button class="ct" data-zoom="reset" title="Tillbaka till senaste staplarna">Återställ</button>
         </div>
       </div>
       <div class="chartbox" id="ownBox"><canvas id="mainChart" height="330"></canvas></div>
-      <div id="tvBox">
-        <div id="tvHost"></div>
-        <div class="tvfail" id="tvFail">
-          <div><b style="color:var(--scarlet-2)">TradingView-widgeten kunde inte laddas.</b><br>
-          Den hämtas från s3.tradingview.com och blockeras i förhandsvisningen här i chatten.<br>
-          Ladda ner filen och öppna den lokalt eller på din egen domän, så fungerar den.</div>
-        </div>
-      </div>
-      <div class="tvlv" id="tvLevels" style="display:none"></div>
       <div class="legendline" id="ownLegend">
         <span><em style="background:#4FD3FF"></em>EMA 9</span>
         <span><em style="background:#FF2E4C"></em>EMA 21</span>
@@ -633,6 +629,9 @@ footer b{color:var(--muted)}
         <span><em style="background:#8CE6FF;opacity:.8"></em>VWAP</span>
         <span><em style="background:#00E58C"></em>Mål</span>
         <span><em style="background:#FF3355"></em>SL</span>
+        <span><em style="background:#FFB020"></em>Motstånd 15m</span>
+        <span><em style="background:#2BD6C4"></em>Stöd 15m</span>
+        <span class="dim">dra = panorera · dra i tidsaxeln = sträck staplarna · scrolla = zoom</span>
         <span style="margin-left:auto" id="chartMeta" class="mono"></span>
       </div>
     </div>
@@ -684,24 +683,24 @@ footer b{color:var(--muted)}
   </div>
 </div>
 
-<!-- ============ BACKTEST ============ -->
+<!-- ============ DEMOKONTO ============ -->
 <div class="wrap bottom">
 
   <div class="panel">
     <div class="ph">
-      <span class="accent"></span><h2>Backtest · konto 50 000 USD</h2>
+      <span class="accent"></span><h2>Demokonto · live</h2>
       <div class="chart-tabs">
-        <button class="ct on" data-bt="all">Alla</button>
-        <button class="ct" data-bt="AB">A + B</button>
-        <button class="ct" data-bt="A">Bara A</button>
+        <button class="ct" id="btnDemoReset" title="Nollställ kontot och börja om från 50 000">Nollställ</button>
       </div>
-      <span class="right"><span id="btStamp" class="dim">–</span></span>
+      <span class="right"><span id="demoStamp" class="dim">–</span></span>
     </div>
     <div class="pb">
-      <div class="btstats" id="btStats"></div>
-      <canvas id="btChart"></canvas>
-      <div class="btgrades" id="btGrades"></div>
-      <div class="btnote" id="btNote"></div>
+      <div class="btstats" id="demoStats"></div>
+      <div id="demoOppna"></div>
+      <canvas id="demoChart"></canvas>
+      <div class="btgrades" id="demoGrades"></div>
+      <div id="demoLista"></div>
+      <div class="btnote" id="demoNote"></div>
     </div>
   </div>
 </div>
@@ -839,8 +838,11 @@ function saveCfg(){
 }
 
 const INSTR = {
-  NQ: { key:'NQ', yahoo:'NQ=F', alt:['^NDX','QQQ'], label:'NQ · Nasdaq-100', unit:'p',
-        tick:0.25, dec:2, ptValue:20, base:23150, vol:0.0022 },
+  // Nyckeln heter NQ eftersom det är den koden feeden och nyhetsanalysen använder,
+  // men instrumentet som handlas och ritas är mikroterminen MNQ: samma index och
+  // samma tick, en tiondel av kontraktsvärdet ($2 per punkt mot $20).
+  NQ: { key:'NQ', yahoo:'MNQ=F', alt:['NQ=F','^NDX','QQQ'], label:'MNQ · Micro Nasdaq-100', unit:'p',
+        kort:'MNQ', tick:0.25, dec:2, ptValue:2, base:23150, vol:0.0022 },
   // Guld är pausat. Lägg tillbaka raden nedan så följer resten av sidan med av sig själv:
   // GC: { key:'GC', yahoo:'GC=F', alt:['XAUUSD=X','GLD'], label:'GC · Guld', unit:'$',
   //       tick:0.1, dec:1, ptValue:100, base:3385, vol:0.0016 }
@@ -1743,7 +1745,9 @@ function assignStatus(sigs, pxByInst){
     // Eftersom en fylld affär låses som ACTIVE tills mål eller stopp krävs en riktig
     // träff: priset står på nivån, eller har gått igenom den medan vi tittade.
     // Att bara ligga nära räcker inte, och en omladdning fyller inte gamla nivåer.
-    if(!st && (traff || (fylld && foreDetta === false))){
+    // C-setups får aldrig gå aktiva — de är för svaga för att handlas.
+    const fargodkand = s.grade === 'A' || s.grade === 'B';
+    if(!st && fargodkand && (traff || (fylld && foreDetta === false))){
       st = { triggered:true, at:Date.now(), entryPx:s.entry, sig:Object.assign({}, s) };
     }
     if(!st) SEDD.set(s.id, fylld);
@@ -2092,7 +2096,8 @@ function drawCandles(cv, opts){
 const STATE = {
   ctx:{}, signals:[], news:[], seNews:[], quotes:{}, se:{},
   bias:{nq:0, gc:0}, newsBias:{nq:0, gc:0},
-  chartSym:'NQ', chartMode:'own', feed:{}, newsFilter:'all', sigFilter:'all',
+  chartSym:'NQ', feed:{}, newsFilter:'all', sigFilter:'all',
+  vy:{ n:96, off:0 },                       // grafens fönster: antal staplar och hur långt bak
   lastPx:{}, stamp:0, loading:false, newsOpen:null
 };
 
@@ -2141,9 +2146,9 @@ function makeSummary(){
   const hot = STATE.news.filter(x=>x.an && x.an.hot).slice(0,3);
   const vol = n.atrPct > 0.22 ? 'förhöjd' : (n.atrPct < 0.09 ? 'låg' : 'normal');
 
-  const lead = `${ss.t}. NQ handlas kring <b>${fmt(n.px,1)}</b> med en 5-minuters ATR på ${fmt(n.atr,1)} punkter (${vol} volatilitet).`;
+  const lead = `${ss.t}. ${n.inst.kort || 'NQ'} handlas kring <b>${fmt(n.px,1)}</b> med en 5-minuters ATR på ${fmt(n.atr,1)} punkter (${vol} volatilitet).`;
 
-  const tech = `Tekniskt är 5m-strukturen i NQ <b>${trendWord(n.trend)}</b> — priset ligger ${n.px>n.vwap?'över':'under'} VWAP (${fmt(n.vwap,1)}) och EMA21 står i ${fmt(n.e21,1)}. RSI ${Math.round(n.rsi)}${n.rsi>70?' (överköpt — akta jaganden)':n.rsi<30?' (översålt — leta reclaim, inte fritt fall)':''}. Relativ volym ${n.relVol.toFixed(2)}x.`;
+  const tech = `Tekniskt är 5m-strukturen i ${n.inst.kort || 'NQ'} <b>${trendWord(n.trend)}</b> — priset ligger ${n.px>n.vwap?'över':'under'} VWAP (${fmt(n.vwap,1)}) och EMA21 står i ${fmt(n.e21,1)}. RSI ${Math.round(n.rsi)}${n.rsi>70?' (överköpt — akta jaganden)':n.rsi<30?' (översålt — leta reclaim, inte fritt fall)':''}. Relativ volym ${n.relVol.toFixed(2)}x.`;
 
   const flow = STATE.news.length
     ? `Nyhetsflödet lutar ${STATE.newsBias.nq>10?'positivt':STATE.newsBias.nq<-10?'negativt':'neutralt'} för Nasdaq (${STATE.news.length} rubriker analyserade).`
@@ -2187,7 +2192,7 @@ function renderTape(){
   SYMS.forEach(k=>{
     const c = STATE.ctx[k]; if(!c) return;
     const q = STATE.quotes[k] || {};
-    rows.push({n: k==='NQ'?'NQ':'GULD', p:c.px, d:INSTR[k].dec, chg:q.chgPct});
+    rows.push({n: INSTR[k].kort || k, p:c.px, d:INSTR[k].dec, chg:q.chgPct});
   });
   SIDE_SYMS.forEach(s=>{ const q = STATE.quotes[s.k]; if(q&&q.ok) rows.push({n:s.n,p:q.px,d:s.dec,chg:q.chgPct,suffix:s.suffix}); });
   SE_SYMS.slice(0,2).forEach(s=>{ const q = STATE.quotes[s.k]; if(q&&q.ok) rows.push({n:s.n,p:q.px,d:s.dec,chg:q.chgPct}); });
@@ -2426,7 +2431,7 @@ function renderSignals(){
       const val = c.votes[code];
       return `<i class="${val>0?'up':val<0?'dn':'fl'}">${FAM[code].toLowerCase()} ${val>0?'↑':val<0?'↓':'–'}</i>`;
     };
-    return `<span><b>${k}</b> ${Object.keys(FAM).map(cell).join(' · ')}</span>`;
+    return `<span><b>${(INSTR[k] && INSTR[k].kort) || k}</b> ${Object.keys(FAM).map(cell).join(' · ')}</span>`;
   }).join('');
 
   el.innerHTML = `<div class="votes">${strip}<span style="margin-left:auto">A = minst 3 av ${FAM_N} familjer · B = 2 · C = 1 eller ingen</span></div>` + list.map((s,ix)=>{
@@ -2455,6 +2460,8 @@ function renderSignals(){
       </div>
       <div class="metrics">
         <div class="m"><i>R:R</i><b class="${s.rr>=2?'pos':s.rr<1.3?'neg':''}">${s.rr.toFixed(2)}</b></div>
+        <div class="m"><i>Risk/kontrakt</i><b class="neg">${fmt(s.risk*(INSTR[s.inst]?INSTR[s.inst].ptValue:1), 0)} $</b></div>
+        <div class="m"><i>Mål/kontrakt</i><b class="pos">${fmt(Math.abs(s.tp-s.entry)*(INSTR[s.inst]?INSTR[s.inst].ptValue:1), 0)} $</b></div>
         ${pnl}
         <div class="conf"><i class="dim" style="font-style:normal;font-size:9px;letter-spacing:.8px">KONF</i>
           <div class="confbar ${cCls}"><i style="width:${s.conf}%"></i></div>
@@ -2475,96 +2482,170 @@ function renderSignals(){
 }
 
 /* ---- TradingView-widget ---- */
-const TV_SYMBOL = { NQ:'CME_MINI:NQ1!' };
-let tvMounted = null, tvTimer = null;
-
-function mountTV(){
-  const sym = TV_SYMBOL[STATE.chartSym];
-  if(tvMounted === sym) return;
-  tvMounted = sym;
-  const host = $('#tvHost');
-  host.innerHTML = '';
-  $('#tvFail').classList.remove('on');
-
-  const holder = document.createElement('div');
-  holder.className = 'tradingview-widget-container';
-  holder.style.height = '100%';
-  const inner = document.createElement('div');
-  inner.className = 'tradingview-widget-container__widget';
-  inner.style.height = '100%';
-  holder.appendChild(inner);
-
-  const sc = document.createElement('script');
-  sc.type = 'text/javascript';
-  sc.async = true;
-  sc.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  sc.innerHTML = JSON.stringify({
-    symbol: sym,
-    interval: '5',
-    timezone: 'Europe/Stockholm',
-    theme: 'dark',
-    style: '1',
-    locale: 'sv',
-    autosize: true,
-    hide_side_toolbar: false,
-    allow_symbol_change: true,
-    withdateranges: true,
-    details: false,
-    backgroundColor: 'rgba(11,23,40,1)',
-    gridColor: 'rgba(18,38,62,0.6)',
-    studies: ['STD;VWAP','STD;EMA'],
-    studies_overrides: { 'moving average exponential.length': 21 },
-    support_host: 'https://www.tradingview.com'
+/* Slår ihop 5-minutersstaplar till 15-minuters. Nivåerna blir stabilare av att
+   räknas på den högre tidsramen, medan grafen fortsätter visa 5m. */
+function till15m(bars){
+  const ut = [];
+  let nu = null;
+  (bars || []).forEach(b => {
+    const hink = Math.floor(b.t/900000)*900000;
+    if(!nu || nu.t !== hink){
+      nu = { t:hink, o:b.o, h:b.h, l:b.l, c:b.c, v:b.v || 0 };
+      ut.push(nu);
+    }else{
+      nu.h = Math.max(nu.h, b.h);
+      nu.l = Math.min(nu.l, b.l);
+      nu.c = b.c;
+      nu.v += b.v || 0;
+    }
   });
-  sc.onerror = ()=> $('#tvFail').classList.add('on');
-  holder.appendChild(sc);
-  host.appendChild(holder);
-
-  clearTimeout(tvTimer);
-  tvTimer = setTimeout(()=>{ if(!host.querySelector('iframe')) $('#tvFail').classList.add('on'); }, 6000);
+  return ut;
 }
 
-function renderTvLevels(){
-  const box = $('#tvLevels');
-  if(STATE.chartMode !== 'tv'){ box.style.display = 'none'; return; }
-  box.style.display = 'flex';
-  const act = fokusSignal(STATE.chartSym);
-  if(!act){ box.innerHTML = '<span class="note">Ingen aktiv setup för det här instrumentet just nu.</span>'; return; }
-  const d = act.dec;
-  box.innerHTML = `
-    <span class="chip ${act.side==='long'?'g':'r'}">${act.grade}-setup · ${act.side==='long'?'LONG':'SHORT'}</span>
-    <span class="lp e"><i>Entry</i><b>${fmt(act.entry,d)}</b></span>
-    <span class="lp s"><i>Stop</i><b>${fmt(act.sl,d)}</b></span>
-    <span class="lp t"><i>Mål</i><b>${fmt(act.tp,d)}</b></span>
-    <button class="btn" id="btnCopyLv" style="padding:4px 10px">⧉ Kopiera</button>
-    <span class="note">Rita in nivåerna själv — widgeten är en iframe och går inte att teckna på härifrån.</span>`;
-  const btn = $('#btnCopyLv');
-  if(btn) btn.onclick = async ()=>{
-    const txt = `${act.instLabel} ${act.side.toUpperCase()} | Entry ${fmt(act.entry,d)} | SL ${fmt(act.sl,d)} | TP ${fmt(act.tp,d)} | R:R ${act.rr.toFixed(2)}`;
-    try{ await navigator.clipboard.writeText(txt); btn.textContent = '✓ Kopierat'; }
-    catch(e){ btn.textContent = '✕ Blockerat'; }
-    setTimeout(()=>{ btn.textContent = '⧉ Kopiera'; }, 1800);
+/* Fyra nivåer som faktiskt ligger där grafen står: två motstånd över priset och
+   två stöd under. Svängpunkter i det synliga fönstret klustras ihop, och zonerna
+   poängsätts på antal träffar, hur färska de är och hur nära priset de ligger. */
+function stodOchMotstand(bars, px, atr){
+  if(!bars || bars.length < 12 || !(atr > 0)) return [];
+  const sw = swings(bars, 2);
+  const punkter = sw.hi.map(x => ({p:x.p, i:x.i})).concat(sw.lo.map(x => ({p:x.p, i:x.i})));
+  if(bars.length > 8){                                   // fönstrets egna ytterlägen räknas också
+    punkter.push({ p: Math.max.apply(null, bars.map(b => b.h)), i: bars.length - 1 });
+    punkter.push({ p: Math.min.apply(null, bars.map(b => b.l)), i: bars.length - 1 });
+  }
+  if(!punkter.length) return [];
+
+  const tolerans = 0.35*atr;
+  const kluster = [];
+  punkter.sort((a,b) => a.p - b.p).forEach(pt => {
+    const k = kluster[kluster.length - 1];
+    if(k && Math.abs(pt.p - k.niva) <= tolerans){
+      k.pris.push(pt.p); k.traff++; k.sist = Math.max(k.sist, pt.i);
+      k.niva = k.pris.reduce((a,b) => a + b, 0)/k.pris.length;
+    }else{
+      kluster.push({ niva:pt.p, pris:[pt.p], traff:1, sist:pt.i });
+    }
+  });
+
+  const n = bars.length;
+  kluster.forEach(k => {
+    k.farskhet = k.sist/n;                               // 0 = längst bak i fönstret, 1 = senast
+    k.avstand  = Math.abs(k.niva - px)/atr;
+    k.poang    = k.traff*2 + k.farskhet*3 - k.avstand*0.4;
+  });
+
+  const valj = arr => arr.slice(0, 5).sort((a,b) => b.poang - a.poang).slice(0, 2)
+                         .sort((a,b) => Math.abs(a.niva - px) - Math.abs(b.niva - px));
+  const over  = kluster.filter(k => k.niva > px + atr*0.12).sort((a,b) => (a.niva - px) - (b.niva - px));
+  const under = kluster.filter(k => k.niva < px - atr*0.12).sort((a,b) => (px - a.niva) - (px - b.niva));
+
+  return valj(over).map((k,i) => Object.assign({ roll:'motstånd', namn:'R' + (i+1) }, k))
+    .concat(valj(under).map((k,i) => Object.assign({ roll:'stöd', namn:'S' + (i+1) }, k)));
+}
+
+/* Hjul zoomar, drag panorerar. Fungerar med både mus och finger. */
+function grafInteraktion(){
+  const cv = $('#mainChart');
+  if(!cv || cv.dataset.wired) return;
+  cv.dataset.wired = '1';
+  const v = STATE.vy;
+  let drar = false, strackning = false, senastX = 0, pinch = 0;
+  const iTidsaxeln = e => {
+    const r = cv.getBoundingClientRect();
+    return (e.clientY - r.top) > r.height - 26 || (e.clientX - r.left) > r.width - 62;
   };
-}
 
-function applyChartMode(){
-  const tv = STATE.chartMode === 'tv';
-  $('#ownBox').style.display = tv ? 'none' : 'block';
-  $('#ownLegend').style.display = tv ? 'none' : 'flex';
-  $('#tvBox').classList.toggle('on', tv);
-  if(tv) mountTV(); else renderMainChart();
-  renderTvLevels();
+  const antalStaplar = () => { const c = STATE.ctx[STATE.chartSym]; return c ? c.bars.length : 400; };
+  const nypBredd = t => Math.abs(t[0].clientX - t[1].clientX);
+  const putsa = () => {
+    const max = antalStaplar();
+    v.n = clamp(Math.round(v.n), 24, Math.max(24, max));
+    v.off = clamp(Math.round(v.off), 0, Math.max(0, max - v.n));
+    renderMainChart();
+  };
+
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    v.n = v.n * (e.deltaY > 0 ? 1.18 : 0.85);
+    putsa();
+  }, { passive:false });
+
+  cv.addEventListener('mousedown', e => {
+    drar = true; strackning = iTidsaxeln(e); senastX = e.clientX;
+    cv.style.cursor = strackning ? 'ew-resize' : 'grabbing';
+  });
+  cv.addEventListener('mousemove', e => {
+    if(!drar) cv.style.cursor = iTidsaxeln(e) ? 'ew-resize' : 'grab';
+  });
+  window.addEventListener('mousemove', e => {
+    if(!drar) return;
+    const dx = e.clientX - senastX;
+    if(strackning){                                   // dra åt höger = sträck ut staplarna
+      if(Math.abs(dx) < 2) return;
+      v.n = v.n * (1 - dx/420);
+      senastX = e.clientX; putsa();
+      return;
+    }
+    const perStapel = (cv.clientWidth - 68)/v.n;
+    const steg = Math.round(dx/perStapel);
+    if(steg){ v.off += steg; senastX = e.clientX; putsa(); }
+  });
+  window.addEventListener('mouseup', () => { drar = false; strackning = false; cv.style.cursor = 'grab'; });
+  cv.addEventListener('dblclick', () => { v.n = 96; v.off = 0; putsa(); });
+  cv.style.cursor = 'grab';
+
+  cv.addEventListener('touchstart', e => {
+    if(e.touches.length === 2){ pinch = nypBredd(e.touches); drar = false; strackning = false; }
+    else { drar = true; strackning = iTidsaxeln(e.touches[0]); senastX = e.touches[0].clientX; }
+  }, { passive:true });
+  cv.addEventListener('touchmove', e => {
+    if(e.touches.length === 2 && pinch){
+      e.preventDefault();
+      const ny = nypBredd(e.touches);
+      if(ny > 4){ v.n = v.n * (pinch/ny); pinch = ny; putsa(); }
+      return;
+    }
+    if(!drar) return;
+    const dx = e.touches[0].clientX - senastX;
+    if(strackning){
+      if(Math.abs(dx) < 2) return;
+      e.preventDefault();
+      v.n = v.n * (1 - dx/420);
+      senastX = e.touches[0].clientX; putsa();
+      return;
+    }
+    const perStapel = (cv.clientWidth - 68)/v.n;
+    const steg = Math.round(dx/perStapel);
+    if(steg){ e.preventDefault(); v.off += steg; senastX = e.touches[0].clientX; putsa(); }
+  }, { passive:false });
+  cv.addEventListener('touchend', () => { drar = false; strackning = false; pinch = 0; });
 }
 
 function renderMainChart(){
-  if(STATE.chartMode === 'tv'){ renderTvLevels(); return; }
   const c = STATE.ctx[STATE.chartSym]; if(!c) return;
-  const n = 96;
-  const bars = c.bars.slice(-n);
-  const off = c.bars.length - bars.length;
-  const cut = arr => arr.slice(off);
+  const v = STATE.vy;
+  const totalt = c.bars.length;
+  v.n = clamp(Math.round(v.n), 24, Math.max(24, totalt));
+  v.off = clamp(Math.round(v.off), 0, Math.max(0, totalt - v.n));
+  const slut = totalt - v.off;
+  const start = Math.max(0, slut - v.n);
+  const bars = c.bars.slice(start, slut);
+  if(bars.length < 2) return;
+  const off = start;
+  const cut = arr => arr.slice(off, slut);
   const act = fokusSignal(STATE.chartSym);
+  const sistaPris = bars[bars.length - 1].c;
+  // Nivåerna räknas på 15-minutersstaplar: det synliga fönstret plus lite historik
+  // bakåt, så att zonerna hinner få träffar även när man zoomat in hårt.
+  const bakgrund = c.bars.slice(Math.max(0, start - 180), slut);
+  const bars15 = till15m(bakgrund);
+  const zoner = stodOchMotstand(bars15.length >= 14 ? bars15 : bars, sistaPris, c.atr);
   const levels = [];
+  zoner.forEach(z => levels.push({
+    p: z.niva,
+    color: z.roll === 'motstånd' ? '#FFB020' : '#2BD6C4',
+    label: z.namn, dash:[3,4], w: 1 + Math.min(1, z.traff*0.25)
+  }));
   if(act){
     levels.push({p:act.entry, color:'#4FD3FF', label:'ENTRY', dash:[6,3], w:1.4});
     levels.push({p:act.sl,    color:'#FF3355', label:'SL',    dash:[4,3], w:1.4});
@@ -2586,7 +2667,14 @@ function renderMainChart(){
                   {a:act.entry, b:act.tp, color:'rgba(0,229,140,.05)'}] : []
   });
   const q = STATE.quotes[STATE.chartSym]||{};
-  $('#chartMeta').innerHTML = `${c.inst.label} · ${fmt(c.px,c.inst.dec)} <span class="${nz(q.chgPct)?(q.chgPct>0?'pos':'neg'):'dim'}">${pct(q.chgPct)}</span> · ATR ${fmt(c.atr,1)}${c.inst.unit}`;
+  const zonTxt = zoner.length
+    ? ' · ' + zoner.map(z => z.namn + ' ' + fmt(z.niva, c.inst.dec)).join(' ')
+    : '';
+  $('#chartMeta').innerHTML = `${c.inst.label} · ${fmt(c.px,c.inst.dec)} ` +
+    `<span class="${nz(q.chgPct)?(q.chgPct>0?'pos':'neg'):'dim'}">${pct(q.chgPct)}</span> · ` +
+    `ATR ${fmt(c.atr,1)}${c.inst.unit} · ${bars.length} staplar${v.off ? ' (' + v.off + ' bak)' : ''}` +
+    `<span class="dim"> · nivåer från 15m</span>` +
+    `<span class="dim">${zonTxt}</span>`;
 }
 
 /* ==========================================================================
@@ -2606,6 +2694,102 @@ const CORE = {
   pings:[], waves:[], arrows:[], count:0, last:'–', busy:0, spin:0, frame:0, log:[],
   cv:null, g:null, w:0, h:296, state:'startar…'
 };
+
+/* Liten nod: står still, ingen rotation, ingen puls. */
+function ritaNod(g, x, y, r, bokstav, hot, rgba){
+  const glod = g.createRadialGradient(x, y, r*0.3, x, y, r*2.0);
+  glod.addColorStop(0, rgba(hot, 0.26));
+  glod.addColorStop(1, 'rgba(3,6,14,0)');
+  g.beginPath(); g.arc(x, y, r*2.0, 0, Math.PI*2); g.fillStyle = glod; g.fill();
+
+  const yta = g.createRadialGradient(x - r*0.35, y - r*0.4, r*0.1, x, y, r);
+  yta.addColorStop(0, 'rgba(255,255,255,.92)');
+  yta.addColorStop(0.4, rgba(hot, 0.8));
+  yta.addColorStop(1, 'rgba(5,11,22,1)');
+  g.beginPath(); g.arc(x, y, r, 0, Math.PI*2); g.fillStyle = yta; g.fill();
+  g.strokeStyle = rgba(hot, 0.8); g.lineWidth = Math.max(1, r*0.09); g.stroke();
+
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '800 ' + Math.round(r*1.15) + 'px Inter, system-ui, sans-serif';
+  g.fillStyle = 'rgba(3,6,14,.5)'; g.fillText(bokstav, x + 1, y + 1);
+  g.fillStyle = '#fff'; g.fillText(bokstav, x, y);
+}
+
+/* Kärnan: HUD i stället för jordglob. Allt som rör sig gör det här inne —
+   segmentringar åt olika håll, skalstreck, en svepande linje och ett raster. */
+function ritaKarna(g, cx, cy, r, bokstav, hot, rgba, F, spin, busy){
+  const glod = g.createRadialGradient(cx, cy, r*0.2, cx, cy, r*2.3);
+  glod.addColorStop(0, rgba(hot, 0.30 + busy*0.15));
+  glod.addColorStop(1, 'rgba(3,6,14,0)');
+  g.beginPath(); g.arc(cx, cy, r*2.3, 0, Math.PI*2); g.fillStyle = glod; g.fill();
+
+  // segmentringar
+  const ringar = [
+    { rad: r*1.00, seg: 3, lucka: 0.55, fart:  0.9, bredd: 2.2, alfa: 0.85 },
+    { rad: r*0.86, seg: 5, lucka: 0.30, fart: -1.4, bredd: 1.4, alfa: 0.55 },
+    { rad: r*0.72, seg: 2, lucka: 0.9,  fart:  2.1, bredd: 1.0, alfa: 0.40 }
+  ];
+  ringar.forEach(ri => {
+    const steg = Math.PI*2/ri.seg;
+    for(let i = 0; i < ri.seg; i++){
+      const a0 = spin*ri.fart + i*steg;
+      g.beginPath(); g.arc(cx, cy, ri.rad, a0, a0 + steg - ri.lucka);
+      g.strokeStyle = rgba(hot, ri.alfa); g.lineWidth = ri.bredd; g.lineCap = 'round'; g.stroke();
+    }
+  });
+
+  // skalstreck runt kanten
+  const antal = 60;
+  for(let i = 0; i < antal; i++){
+    const a = (i/antal)*Math.PI*2 + spin*0.25;
+    const lang = (i % 5 === 0) ? r*0.13 : r*0.07;
+    const alfa = (i % 5 === 0) ? 0.55 : 0.22;
+    g.beginPath();
+    g.moveTo(cx + Math.cos(a)*(r*1.10), cy + Math.sin(a)*(r*1.10));
+    g.lineTo(cx + Math.cos(a)*(r*1.10 + lang), cy + Math.sin(a)*(r*1.10 + lang));
+    g.strokeStyle = rgba(hot, alfa); g.lineWidth = 1; g.stroke();
+  }
+
+  // inre skiva med raster och svepande linje
+  const ri = r*0.66;
+  g.beginPath(); g.arc(cx, cy, ri, 0, Math.PI*2);
+  g.fillStyle = 'rgba(4,9,18,.86)'; g.fill();
+  g.save(); g.beginPath(); g.arc(cx, cy, ri, 0, Math.PI*2); g.clip();
+  g.strokeStyle = rgba(hot, 0.13); g.lineWidth = 1;
+  for(let y = cy - ri; y < cy + ri; y += 5){
+    g.beginPath(); g.moveTo(cx - ri, y); g.lineTo(cx + ri, y); g.stroke();
+  }
+  const sy = cy - ri + ((F*0.9) % (ri*2));
+  const sg = g.createLinearGradient(0, sy - 7, 0, sy + 7);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, rgba(hot, 0.35));
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = sg; g.fillRect(cx - ri, sy - 7, ri*2, 14);
+  const va = spin*1.6;                                    // roterande visare
+  g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(va)*ri, cy + Math.sin(va)*ri);
+  g.strokeStyle = rgba(hot, 0.30); g.lineWidth = 1.2; g.stroke();
+  g.restore();
+  g.beginPath(); g.arc(cx, cy, ri, 0, Math.PI*2);
+  g.strokeStyle = rgba(hot, 0.75); g.lineWidth = 1.4; g.stroke();
+
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '800 ' + Math.round(r*1.05) + 'px Inter, system-ui, sans-serif';
+  g.fillStyle = 'rgba(3,6,14,.6)'; g.fillText(bokstav, cx + 1.5, cy + 1.5);
+  g.fillStyle = '#fff'; g.fillText(bokstav, cx, cy);
+}
+
+/* Stillastående pil mellan två punkter. */
+function ritaPil(g, x1, y1, x2, y2, hot, rgba){
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+  if(len < 8) return;
+  const ux = dx/len, uy = dy/len;
+  g.strokeStyle = rgba(hot, 0.55); g.lineWidth = 1.5; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2 - ux*5, y2 - uy*5); g.stroke();
+  g.save(); g.translate(x2, y2); g.rotate(Math.atan2(dy, dx));
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(-6, -4.2); g.lineTo(-6, 4.2); g.closePath();
+  g.fillStyle = rgba(hot, 0.85); g.fill();
+  g.restore();
+}
 
 function coreState(txt){ CORE.state = txt; const el = $('#coreState'); if(el) el.textContent = txt; }
 
@@ -2636,7 +2820,7 @@ function coreFrame(){
 
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || 640;
-  const h = CORE.h = w < 620 ? 226 : 296;              // lägre ruta på telefon
+  const h = CORE.h = w < 620 ? 250 : 296;              // lägre ruta på telefon
   if(w !== CORE.w || !CORE.g){
     cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
     cv.style.height = h + 'px';
@@ -2798,31 +2982,27 @@ function coreFrame(){
     g.lineWidth = 1.7 - i*0.4; g.stroke();
   }
   const puls = Math.sin(F/20)*1.8 + CORE.busy*5;
-  const cg = g.createRadialGradient(cx, cy, 2, cx, cy, R + puls);
-  cg.addColorStop(0, 'rgba(255,255,255,.95)');
-  cg.addColorStop(0.32, rgba(hot, 0.8));
-  cg.addColorStop(1, rgba(hot, 0.04));
-  g.beginPath(); g.arc(cx, cy, R + puls, 0, Math.PI*2); g.fillStyle = cg; g.fill();
+  const stor = R + puls;                            // bara kärnan andas
+  // Noderna placeras efter ett fast mått, annars skulle de guppa med pulsen.
+  const bas = 31;
+  const liten = Math.max(9, bas*0.34);
+  const avstand = bas + liten + (smal ? 12 : 18);
+  const sidled = liten*1.5;
 
-  g.beginPath();                                    // roterande hexagon
-  for(let i = 0; i < 6; i++){
-    const a2 = -CORE.spin*0.8 + i*Math.PI/3, rr = R*0.80;
-    const hx = cx + Math.cos(a2)*rr, hy = cy + Math.sin(a2)*rr;
-    i ? g.lineTo(hx, hy) : g.moveTo(hx, hy);
-  }
-  g.closePath(); g.strokeStyle = rgba(hot, 0.55); g.lineWidth = 1; g.stroke();
+  const matare = [                                  // två som matar in, en som tar emot resultatet
+    { x: cx - sidled, y: cy - avstand, b:'M' },
+    { x: cx + sidled, y: cy - avstand, b:'M' }
+  ];
+  matare.forEach(m => {                             // pilarna sitter också still
+    const dx = cx - m.x, dy = cy - m.y, l = Math.hypot(dx, dy);
+    ritaPil(g, m.x + dx/l*(liten + 3), m.y + dy/l*(liten + 3),
+               cx - dx/l*(bas + 6),    cy - dy/l*(bas + 6), hot, rgba);
+  });
+  ritaPil(g, cx, cy + bas + 6, cx, cy + avstand - liten - 4, hot, rgba);
 
-  g.beginPath(); g.arc(cx, cy, R*0.60, 0, Math.PI*2);
-  g.fillStyle = 'rgba(3,6,14,.85)'; g.fill();
-  g.strokeStyle = rgba(hot, 0.7); g.lineWidth = 1; g.stroke();
-
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillStyle = '#DEEAF8';
-  g.font = '600 16px ui-monospace, Menlo, Consolas, monospace';
-  g.fillText(String(STATE.signals.length), cx, cy - 5);
-  g.fillStyle = 'rgba(159,187,218,.75)';
-  g.font = '600 7px Inter, system-ui, sans-serif';
-  g.fillText('SETUPS', cx, cy + 9);
+  matare.forEach(m => ritaNod(g, m.x, m.y, liten, m.b, hot, rgba));
+  ritaNod(g, cx, cy + avstand, liten, 'E', hot, rgba);
+  ritaKarna(g, cx, cy, stor, 'P', hot, rgba, F, CORE.spin, CORE.busy);
 
   /* --- noderna med värmestapel --- */
   CORE.nodes.forEach(nd => {
@@ -2889,149 +3069,179 @@ function coreFrame(){
 }
 
 /* ==========================================================================
-   9c. BACKTEST — samma regler körda på historiken, konto 50 000 USD
+   9c. DEMOKONTO — pappershandel i realtid på de setups som går aktiva
    ========================================================================== */
-const BT = { start:50000, riskPct:0.01, trades:[], pool:[], filter:'all', running:false, stamp:0, bars:0, note:'' };
+const KONTO_NYCKEL = 'riptide.demo.v2';
+const MARGINAL_PER_KONTRAKT = 100;   // dagmarginal per MNQ hos en typisk mäklare
+const KONTO = {
+  start: 50000,          // startkapital i dollar
+  kontrakt: 5,           // antal MNQ-kontrakt per affär
+  kapital: 50000,
+  startad: null,
+  oppna: {},             // id -> position
+  affarer: []            // avslutade affärer, äldst först
+};
 
-/* En affär: vänta in entryn, följ sedan stapel för stapel till stopp, mål eller tidsstopp. */
-function btSimTrade(bars, ix, s, inst, horizon){
-  const dir  = s.side === 'long' ? 1 : -1;
-  const risk = Math.abs(s.entry - s.sl);
-  if(!(risk > 0)) return null;
-  const lastIx = Math.min(bars.length - 1, ix + horizon);
+const demoPunktVarde = inst => (INSTR[inst] && INSTR[inst].ptValue) || 2;
 
-  let inIx = -1;
-  for(let j = ix + 1; j <= lastIx; j++){
-    const b = bars[j];
-    const hit = s.trigger === 'stop'
-      ? (dir > 0 ? b.h >= s.entry : b.l <= s.entry)
-      : (dir > 0 ? b.l <= s.entry : b.h >= s.entry);
-    if(hit){ inIx = j; break; }
+function demoLadda(){
+  let d = null;
+  try{ d = JSON.parse(localStorage.getItem(KONTO_NYCKEL) || 'null'); }catch(e){ d = null; }
+  if(d && typeof d === 'object'){
+    KONTO.kapital  = isFinite(d.kapital) ? d.kapital : KONTO.start;
+    KONTO.startad  = d.startad || Date.now();
+    KONTO.oppna    = (d.oppna && typeof d.oppna === 'object') ? d.oppna : {};
+    KONTO.affarer  = Array.isArray(d.affarer) ? d.affarer : [];
+    if(isFinite(d.start)) KONTO.start = d.start;
+    if(isFinite(d.kontrakt)) KONTO.kontrakt = d.kontrakt;
+  }else{
+    KONTO.startad = Date.now();
+    demoSpara();
   }
-  if(inIx < 0) return null;                                  // entryn nåddes aldrig
-
-  const cost = 2*(inst.tick || 0)/risk;                      // en tick in och en ut
-  const mk = (px, j, hur) => ({
-    inst: inst.key, grade: s.grade, side: s.side, conf: s.conf, name: s.name, hur,
-    tIn: bars[inIx].t, tOut: bars[j].t, exitIx: j,
-    R: dir*(px - s.entry)/risk - cost
-  });
-
-  for(let j = inIx; j <= lastIx; j++){
-    const b = bars[j];
-    if(dir > 0 ? b.l <= s.sl : b.h >= s.sl) return mk(s.sl, j, 'stopp');   // stoppen först om båda nås
-    if(dir > 0 ? b.h >= s.tp : b.l <= s.tp) return mk(s.tp, j, 'mål');
-  }
-  return mk(bars[lastIx].c, lastIx, 'tidsstopp');
 }
 
-async function btRunInstrument(inst, bars){
-  const taken = [], pool = [], seen = new Set();
-  const WARM = 300, STEP = 3, HORIZON = 78;                  // 78 staplar = drygt sex timmar
-  let i = WARM, guard = 0;
-  while(i < bars.length - 3 && guard < 6000){
-    if(++guard % 25 === 0) await new Promise(r => setTimeout(r, 0));   // släpp fram gränssnittet
-    let list = [];
-    try{
-      const ctx = buildContext(inst, bars.slice(Math.max(0, i - 320), i + 1));
-      list = generateSignals(ctx)
-        .filter(x => !x.invalid && x.rr >= 1.1)
-        .sort((a,b)=> (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf));
-    }catch(e){ list = []; }
-
-    // statistiken: varje ny setup följs upp för sig, oavsett om kontot hinner ta den
-    list.forEach(x => {
-      if(x.conf < 48 || seen.has(x.id)) return;
-      seen.add(x.id);
-      const t = btSimTrade(bars, i, x, inst, HORIZON);
-      if(t) pool.push(t);
-    });
-
-    const sig = list[0];
-    if(!sig || sig.conf < 48){ i += STEP; continue; }
-    const tr = btSimTrade(bars, i, sig, inst, HORIZON);      // kontot: en position i taget
-    if(tr){ taken.push(tr); i = tr.exitIx + 2; }
-    else i += STEP;
-  }
-  return { taken, pool };
-}
-
-async function runBacktest(){
-  if(BT.running) return;
-  BT.running = true;
-  const stamp = $('#btStamp'); if(stamp) stamp.textContent = 'räknar…';
+function demoSpara(){
+  // skrivs direkt — det händer sällan och får inte gå förlorat om fliken stängs
   try{
-    const trades = [], pool = [];
-    let barsUsed = 0, kallor = 0;
-    for(const k of SYMS){
-      const inst = INSTR[k];
-      let bars = null;
-      try{ bars = (await fetchBars(inst.yahoo, '5m', '1mo')).bars; }
-      catch(e){ bars = STATE.ctx[k] ? STATE.ctx[k].bars : null; }
-      if(!bars || bars.length < 400) continue;
-      bars = bars.slice(-3000);
-      barsUsed += bars.length; kallor++;
-      const res = await btRunInstrument(inst, bars);
-      trades.push.apply(trades, res.taken);
-      pool.push.apply(pool, res.pool);
-    }
-    trades.sort((a,b)=> a.tIn - b.tIn);
-    BT.trades = trades;
-    BT.pool   = pool;
-    BT.bars   = barsUsed;
-    BT.stamp  = Date.now();
-    BT.note   = kallor ? '' : 'Ingen historik gick att hämta — testa igen eller byt proxy under Inställningar.';
-  }catch(e){
-    BT.note = 'Backtestet kunde inte köras: ' + (e.message || e);
-  }finally{
-    BT.running = false;
-    renderBacktest();
-  }
+    localStorage.setItem(KONTO_NYCKEL, JSON.stringify({
+      start:KONTO.start, kontrakt:KONTO.kontrakt, kapital:KONTO.kapital,
+      startad:KONTO.startad, oppna:KONTO.oppna, affarer:KONTO.affarer.slice(-500)
+    }));
+  }catch(e){ /* full lagring — kör vidare */ }
 }
 
-function btPick(){
-  const f = BT.filter;
-  return BT.trades.filter(t => f === 'all' ? true : f === 'A' ? t.grade === 'A' : t.grade !== 'C');
+function demoNollstall(){
+  KONTO.kapital = KONTO.start;
+  KONTO.oppna = {};
+  KONTO.affarer = [];
+  KONTO.startad = Date.now();
+  demoSpara();
+  renderDemo();
 }
 
-function btStats(trades){
-  let eq = BT.start, peak = eq, dd = 0, wins = 0, sumR = 0, gross = 0, loss = 0;
-  const curve = [{ t: trades.length ? trades[0].tIn : Date.now(), eq }];
-  trades.forEach(t => {
-    eq += eq*BT.riskPct*t.R;
-    curve.push({ t: t.tOut, eq });
-    peak = Math.max(peak, eq);
-    dd = Math.max(dd, (peak - eq)/peak);
-    sumR += t.R;
-    if(t.R > 0){ wins++; gross += t.R; } else loss += -t.R;
+/* Öppnar en position när en setup går aktiv, och stänger den när priset
+   nått stoppen eller målet. Stapelns högsta och lägsta används så att en
+   träff mellan två uppdateringar inte missas; nås båda i samma stapel
+   räknas stoppen. */
+function demoTick(){
+  let andrat = false;
+
+  STATE.signals.forEach(sig => {
+    if(sig.status !== 'ACTIVE') return;
+    if(sig.grade !== 'A' && sig.grade !== 'B') return;     // C handlas inte
+    if(KONTO.oppna[sig.id]) return;
+    if(KONTO.affarer.some(a => a.id === sig.id)) return;    // redan avslutad
+    // Hela braketten läggs på en gång: fyllning, stopp och mål (OCO).
+    KONTO.oppna[sig.id] = {
+      id: sig.id, inst: sig.inst, side: sig.side, grade: sig.grade,
+      namn: sig.name, entry: sig.entryFyllt || sig.entry, sl: sig.sl, tp: sig.tp,
+      kontrakt: KONTO.kontrakt, oppnad: sig.oppnad || Date.now(), risk: sig.risk,
+      // stapeln som pågick när vi fylldes; först nästa stapel får avgöra på högsta/lägsta
+      kollad: (STATE.ctx[sig.inst] && STATE.ctx[sig.inst].bars.length)
+                ? STATE.ctx[sig.inst].bars[STATE.ctx[sig.inst].bars.length - 1].t
+                : Date.now(),
+      marginal: KONTO.kontrakt*MARGINAL_PER_KONTRAKT
+    };
+    andrat = true;
+    coreRead('demokonto: ' + (sig.side === 'long' ? 'KÖPT' : 'SÅLT') + ' ' + KONTO.kontrakt +
+             ' MNQ @ ' + fmt(sig.entryFyllt || sig.entry, sig.dec) +
+             ' · stopp ' + fmt(sig.sl, sig.dec) + ' · mål ' + fmt(sig.tp, sig.dec));
   });
-  return { curve, eq, n:trades.length, wins, sumR, dd,
-           pf: loss > 0 ? gross/loss : (gross > 0 ? Infinity : 0),
-           avgR: trades.length ? sumR/trades.length : 0,
-           winPct: trades.length ? wins/trades.length*100 : 0 };
+
+  Object.keys(KONTO.oppna).forEach(id => {
+    const pos = KONTO.oppna[id];
+    const c = STATE.ctx[pos.inst];
+    if(!c || !c.bars.length) return;
+    const dir = pos.side === 'long' ? 1 : -1;
+    // Alla staplar som passerat sedan senaste kollen gås igenom, så att en position
+    // som legat öppen medan sidan var stängd får rätt utfall och rätt tidpunkt.
+    const sedan = pos.kollad || (pos.oppnad - 1);   // stapeltid, inte klockslag
+    const nya = c.bars.filter(b => b.t > sedan);
+    const sista = c.bars[c.bars.length - 1];
+    pos.kollad = sista ? sista.t : sedan;
+
+    let exit = null, hur = null, nar = Date.now();
+    for(const b of nya){
+      const hogst = b.h, lagst = b.l;
+      if(dir > 0 ? lagst <= pos.sl : hogst >= pos.sl){ exit = pos.sl; hur = 'stopp'; nar = b.t; break; }
+      if(dir > 0 ? hogst >= pos.tp : lagst <= pos.tp){ exit = pos.tp; hur = 'mål';   nar = b.t; break; }
+    }
+    if(exit === null){                                   // sista priset räknas också
+      const px = c.px;
+      if(dir > 0 ? px <= pos.sl : px >= pos.sl){ exit = pos.sl; hur = 'stopp'; }
+      else if(dir > 0 ? px >= pos.tp : px <= pos.tp){ exit = pos.tp; hur = 'mål'; }
+    }
+    if(exit === null) return;
+
+    const punkter = dir*(exit - pos.entry);
+    const dollar = punkter*pos.kontrakt*demoPunktVarde(pos.inst);
+    KONTO.kapital += dollar;
+    KONTO.affarer.push({
+      id: pos.id, inst: pos.inst, side: pos.side, grade: pos.grade, namn: pos.namn,
+      entry: pos.entry, exit, hur, punkter, dollar, kontrakt: pos.kontrakt,
+      oppnad: pos.oppnad, stangd: nar,
+      R: pos.risk ? punkter/pos.risk : null,
+      kapitalEfter: KONTO.kapital
+    });
+    delete KONTO.oppna[id];
+    andrat = true;
+    coreRead('demokonto: ' + hur + ' · ' + fmtSigned(dollar, 0) + ' $ · kapital ' + fmt(KONTO.kapital, 0) + ' $');
+  });
+
+  if(andrat){ demoSpara(); renderDemo(); }
 }
 
-function drawEquity(cv, curve){
+function demoOrealiserat(){
+  let sum = 0;
+  Object.keys(KONTO.oppna).forEach(id => {
+    const pos = KONTO.oppna[id];
+    const c = STATE.ctx[pos.inst];
+    if(!c) return;
+    const dir = pos.side === 'long' ? 1 : -1;
+    sum += dir*(c.px - pos.entry)*pos.kontrakt*demoPunktVarde(pos.inst);
+  });
+  return sum;
+}
+
+function demoStatistik(affarer){
+  const n = affarer.length;
+  const vinster = affarer.filter(a => a.dollar > 0);
+  const brutto = vinster.reduce((s2,a) => s2 + a.dollar, 0);
+  const forlust = affarer.filter(a => a.dollar <= 0).reduce((s2,a) => s2 - a.dollar, 0);
+  let topp = KONTO.start, dd = 0;
+  affarer.forEach(a => { topp = Math.max(topp, a.kapitalEfter); dd = Math.max(dd, (topp - a.kapitalEfter)/topp); });
+  return {
+    n, vinster: vinster.length,
+    traff: n ? vinster.length/n*100 : 0,
+    summa: affarer.reduce((s2,a) => s2 + a.dollar, 0),
+    snitt: n ? affarer.reduce((s2,a) => s2 + a.dollar, 0)/n : 0,
+    basta: n ? Math.max.apply(null, affarer.map(a => a.dollar)) : 0,
+    samsta: n ? Math.min.apply(null, affarer.map(a => a.dollar)) : 0,
+    dd, pf: forlust > 0 ? brutto/forlust : (brutto > 0 ? Infinity : 0)
+  };
+}
+
+function drawEquity(cv, kurva){
   const h = window.innerWidth < 680 ? 155 : 190;
   const setup = setupCanvas(cv, h);
   const g = setup.g, w = setup.w;
-  const padL = 56, padR = 12, padT = 12, padB = 20;
+  const padL = 60, padR = 12, padT = 12, padB = 20;
   const cw = w - padL - padR, ch = h - padT - padB;
-  if(curve.length < 2){
+  if(kurva.length < 2){
     g.fillStyle = 'rgba(159,187,218,.55)';
     g.font = '11px Inter, system-ui, sans-serif';
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText('Ingen affär i urvalet.', w/2, h/2);
+    g.fillText('Kurvan ritas när första affären är avslutad.', w/2, h/2);
     return;
   }
-  const vals = curve.map(p => p.eq).concat([BT.start]);
+  const vals = kurva.concat([KONTO.start]);
   let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-  const pad = (hi - lo)*0.12 || BT.start*0.01;
+  const pad = (hi - lo)*0.12 || KONTO.start*0.01;
   lo -= pad; hi += pad;
-  const X = i => padL + (i/(curve.length - 1))*cw;
+  const X = i => padL + (i/(kurva.length - 1))*cw;
   const Y = v => padT + (1 - (v - lo)/(hi - lo))*ch;
 
-  for(let i = 0; i <= 4; i++){                        // rutnät och skala
+  for(let i = 0; i <= 4; i++){
     const y = padT + (i/4)*ch;
     g.beginPath(); g.moveTo(padL, y); g.lineTo(w - padR, y);
     g.strokeStyle = 'rgba(18,38,62,.9)'; g.lineWidth = 1; g.stroke();
@@ -3040,85 +3250,129 @@ function drawEquity(cv, curve){
     g.textAlign = 'right'; g.textBaseline = 'middle';
     g.fillText(Math.round(hi - (i/4)*(hi - lo)).toLocaleString('sv-SE'), padL - 7, y);
   }
-
-  const y0 = Y(BT.start);                             // startkapitalet
+  const y0 = Y(KONTO.start);
   g.beginPath(); g.moveTo(padL, y0); g.lineTo(w - padR, y0);
   g.strokeStyle = 'rgba(159,187,218,.45)'; g.setLineDash([4,4]); g.stroke(); g.setLineDash([]);
 
-  const end = curve[curve.length - 1].eq;
-  const up  = end >= BT.start;
-  const col = up ? '#00E58C' : '#FF3355';
+  const slut = kurva[kurva.length - 1];
+  const upp = slut >= KONTO.start;
+  const col = upp ? '#00E58C' : '#FF3355';
 
-  g.beginPath();                                      // ytan under kurvan
-  g.moveTo(X(0), Y(curve[0].eq));
-  curve.forEach((p,i) => g.lineTo(X(i), Y(p.eq)));
-  g.lineTo(X(curve.length - 1), padT + ch); g.lineTo(X(0), padT + ch); g.closePath();
+  g.beginPath();
+  g.moveTo(X(0), Y(kurva[0]));
+  kurva.forEach((v,i) => g.lineTo(X(i), Y(v)));
+  g.lineTo(X(kurva.length - 1), padT + ch); g.lineTo(X(0), padT + ch); g.closePath();
   const grd = g.createLinearGradient(0, padT, 0, padT + ch);
-  grd.addColorStop(0, up ? 'rgba(0,229,140,.26)' : 'rgba(255,51,85,.24)');
+  grd.addColorStop(0, upp ? 'rgba(0,229,140,.26)' : 'rgba(255,51,85,.24)');
   grd.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = grd; g.fill();
 
-  g.beginPath();                                      // kurvan
-  curve.forEach((p,i) => i ? g.lineTo(X(i), Y(p.eq)) : g.moveTo(X(i), Y(p.eq)));
+  g.beginPath();
+  kurva.forEach((v,i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
   g.strokeStyle = col; g.lineWidth = 1.8; g.lineJoin = 'round'; g.stroke();
-
-  g.beginPath(); g.arc(X(curve.length - 1), Y(end), 3.2, 0, Math.PI*2);
+  g.beginPath(); g.arc(X(kurva.length - 1), Y(slut), 3.2, 0, Math.PI*2);
   g.fillStyle = col; g.fill();
-  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
-  g.fillStyle = 'rgba(93,126,165,.9)';
-  g.font = '9px Inter, system-ui, sans-serif';
-  g.fillText((curve.length - 1) + ' affärer', padL, h - 6);
 }
 
-function renderBacktest(){
-  if(!$('#btStats')) return;
-  const trades = btPick();
-  const st = btStats(trades);
-  const pctChg = (st.eq - BT.start)/BT.start*100;
-  const tile = (label, val, cls) =>
-    '<div class="btstat"><i>' + label + '</i><b class="' + (cls||'') + '">' + val + '</b></div>';
+function renderDemo(){
+  if(!$('#demoStats')) return;
+  const st = demoStatistik(KONTO.affarer);
+  const orealiserat = demoOrealiserat();
+  const eget = KONTO.kapital + orealiserat;
+  const pct1 = (eget - KONTO.start)/KONTO.start*100;
+  const oppnaIdn = Object.keys(KONTO.oppna);
+  const marginal = oppnaIdn.reduce((sum, id) => sum + (KONTO.oppna[id].marginal || KONTO.oppna[id].kontrakt*MARGINAL_PER_KONTRAKT), 0);
+  const exponering = oppnaIdn.reduce((sum, id) => {
+    const pos = KONTO.oppna[id], c = STATE.ctx[pos.inst];
+    return sum + (c ? c.px : pos.entry)*pos.kontrakt*demoPunktVarde(pos.inst);
+  }, 0);
+  const tile = (etikett, varde, cls) =>
+    '<div class="btstat"><i>' + etikett + '</i><b class="' + (cls||'') + '">' + varde + '</b></div>';
 
-  $('#btStats').innerHTML =
-    tile('Slutkapital', fmt(st.eq, 0) + ' $', st.eq >= BT.start ? 'pos' : 'neg') +
-    tile('Avkastning', pct(pctChg, 1), pctChg >= 0 ? 'pos' : 'neg') +
-    tile('Affärer', st.n) +
-    tile('Träffsäkerhet', st.n ? st.winPct.toFixed(0) + ' %' : '–') +
-    tile('Snitt per affär', st.n ? fmtSigned(st.avgR, 2) + ' R' : '–', st.avgR >= 0 ? 'pos' : 'neg') +
-    tile('Största nedgång', st.n ? '−' + (st.dd*100).toFixed(1) + ' %' : '–', st.dd > 0.15 ? 'neg' : '') +
-    tile('Vinstfaktor', st.n ? (isFinite(st.pf) ? st.pf.toFixed(2) : '∞') : '–', st.pf >= 1 ? 'pos' : 'neg');
+  $('#demoStats').innerHTML =
+    tile('Kapital', fmt(eget, 0) + ' $', eget >= KONTO.start ? 'pos' : 'neg') +
+    tile('Resultat', fmtSigned(eget - KONTO.start, 0) + ' $', eget >= KONTO.start ? 'pos' : 'neg') +
+    tile('Avkastning', pct(pct1, 1), pct1 >= 0 ? 'pos' : 'neg') +
+    tile('Realiserat', fmtSigned(KONTO.kapital - KONTO.start, 0) + ' $', KONTO.kapital >= KONTO.start ? 'pos' : 'neg') +
+    tile('Öppen P/L', oppnaIdn.length ? fmtSigned(orealiserat, 0) + ' $' : '–', orealiserat >= 0 ? 'pos' : 'neg') +
+    tile('Marginal', marginal ? fmt(marginal, 0) + ' $' : '–') +
+    tile('Fri marginal', fmt(eget - marginal, 0) + ' $') +
+    tile('Exponering', exponering ? fmt(exponering, 0) + ' $' : '–') +
+    tile('Hävstång', exponering ? (exponering/eget).toFixed(1) + '×' : '–') +
+    tile('Affärer', String(st.n)) +
+    tile('Träffsäkerhet', st.n ? Math.round(st.traff) + ' %' : '–') +
+    tile('Snitt per affär', st.n ? fmtSigned(st.snitt, 0) + ' $' : '–', st.snitt >= 0 ? 'pos' : 'neg') +
+    tile('Bästa / sämsta', st.n ? fmtSigned(st.basta, 0) + ' / ' + fmtSigned(st.samsta, 0) : '–') +
+    tile('Största nedgång', st.n ? '−' + (st.dd*100).toFixed(1) + ' %' : '–', st.dd > 0.15 ? 'neg' : '');
 
-  drawEquity($('#btChart'), st.curve);
+  $('#demoOppna').innerHTML = oppnaIdn.map(id => {
+    const pos = KONTO.oppna[id];
+    const c = STATE.ctx[pos.inst];
+    const dir = pos.side === 'long' ? 1 : -1;
+    const px = c ? c.px : pos.entry;
+    const dollar = dir*(px - pos.entry)*pos.kontrakt*demoPunktVarde(pos.inst);
+    const dec = c ? c.inst.dec : 2;
+    return '<div class="oppen"><span class="tag">' + pos.grade + '</span>' +
+      '<b class="' + (pos.side === 'long' ? 'pos' : 'neg') + '">' + (pos.side === 'long' ? 'LONG' : 'SHORT') + '</b>' +
+      '<span>' + pos.kontrakt + ' MNQ · fylld <b>' + fmt(pos.entry, dec) + '</b></span>' +
+      '<span class="tag">BRACKET</span>' +
+      '<span class="dim">stopp ' + fmt(pos.sl, dec) + ' · mål ' + fmt(pos.tp, dec) +
+      ' · marginal ' + fmt(pos.marginal || pos.kontrakt*MARGINAL_PER_KONTRAKT, 0) + ' $</span>' +
+      '<b class="' + (dollar >= 0 ? 'pos' : 'neg') + '" style="margin-left:auto">' + fmtSigned(dollar, 0) + ' $</b></div>';
+  }).join('');
 
-  $('#btGrades').innerHTML = ['A','B','C'].map(gr => {
-    const t = (BT.pool.length ? BT.pool : BT.trades).filter(x => x.grade === gr);
-    const w = t.filter(x => x.R > 0).length;
-    const sum = t.reduce((a,b)=> a + b.R, 0);
+  let kap = KONTO.start;
+  const kurva = [kap];
+  KONTO.affarer.forEach(a => { kap = a.kapitalEfter; kurva.push(kap); });
+  drawEquity($('#demoChart'), kurva);
+
+  $('#demoGrades').innerHTML = ['A','B'].map(gr => {
+    const t = KONTO.affarer.filter(x => x.grade === gr);
+    const v = t.filter(x => x.dollar > 0).length;
+    const sum = t.reduce((a,b) => a + b.dollar, 0);
     const cls = sum >= 0 ? 'pos' : 'neg';
     return '<div class="btgrade">' +
       '<div class="hd"><span class="strat ' + gr + '" style="width:17px;height:17px;font-size:9px">' + gr + '</span>' +
       '<b>' + gr + '-setups</b><span style="margin-left:auto">' + t.length + ' st</span></div>' +
-      '<div class="row"><span>Andel av alla</span><b>' +
-        (BT.pool.length ? Math.round(t.length/BT.pool.length*100) + ' %' : '–') + '</b></div>' +
-      '<div class="row"><span>Träffsäkerhet</span><b>' + (t.length ? Math.round(w/t.length*100) + ' %' : '–') + '</b></div>' +
-      '<div class="row"><span>Snitt per affär</span><b class="' + cls + '">' + (t.length ? fmtSigned(sum/t.length, 2) + ' R' : '–') + '</b></div>' +
-      '<div class="row"><span>Summa</span><b class="' + cls + '">' + (t.length ? fmtSigned(sum, 1) + ' R' : '–') + '</b></div>' +
+      '<div class="row"><span>Träffsäkerhet</span><b>' + (t.length ? Math.round(v/t.length*100) + ' %' : '–') + '</b></div>' +
+      '<div class="row"><span>Snitt per affär</span><b class="' + cls + '">' + (t.length ? fmtSigned(sum/t.length, 0) + ' $' : '–') + '</b></div>' +
+      '<div class="row"><span>Summa</span><b class="' + cls + '">' + (t.length ? fmtSigned(sum, 0) + ' $' : '–') + '</b></div>' +
     '</div>';
   }).join('');
 
-  const dagar = BT.bars ? Math.max(1, Math.round(BT.bars/SYMS.length/78)) : 0;
-  $('#btStamp').textContent = BT.stamp
-    ? 'kl ' + new Date(BT.stamp).toLocaleTimeString('sv-SE', {hour:'2-digit', minute:'2-digit'})
+  const senaste = KONTO.affarer.slice(-8).reverse();
+  $('#demoLista').innerHTML = senaste.length
+    ? '<div class="dlista"><div class="rad hd"><span>Tid</span><span>Sida</span><span>Grad</span>' +
+      '<span class="namn">Setup</span><span>Utfall</span><span>Resultat</span></div>' +
+      senaste.map(a => '<div class="rad">' +
+        '<span>' + new Intl.DateTimeFormat('sv-SE',{hour:'2-digit',minute:'2-digit'}).format(new Date(a.stangd)) + '</span>' +
+        '<b class="' + (a.side === 'long' ? 'pos' : 'neg') + '">' + (a.side === 'long' ? 'LONG' : 'SHORT') + '</b>' +
+        '<span>' + a.grade + '</span>' +
+        '<span class="namn dim">' + esc(a.namn || '') + '</span>' +
+        '<span class="' + (a.hur === 'mål' ? 'pos' : 'neg') + '">' + a.hur + '</span>' +
+        '<b class="' + (a.dollar >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(a.dollar, 0) + ' $</b>' +
+      '</div>').join('') + '</div>'
+    : '';
+
+  const startTxt = KONTO.startad
+    ? new Intl.DateTimeFormat('sv-SE',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(KONTO.startad))
     : '–';
-  $('#btNote').innerHTML = (BT.note ? '<b style="color:var(--amber)">' + esc(BT.note) + '</b><br>' : '') +
-    'Samma regler som listan ovan, körda stapel för stapel på ' + BT.bars.toLocaleString('sv-SE') +
-    ' femminutersstaplar (~' + dagar + ' handelsdagar) för NQ. Kontot startar på ' + fmt(BT.start, 0) +
-    ' $ och riskerar 1 % av rådande kapital per affär, så vinsterna räknas på växande insats. Entry, stopp och mål ' +
-    'tas från signalen; nås både stopp och mål i samma stapel räknas stoppen. En tick slippage in och ut är avdragen, ' +
-    'och positionen stängs efter 78 staplar om varken stopp eller mål nåtts. Kurvan visar vad reglerna faktiskt gav — ' +
-    'den kan falla, och historiskt utfall är ingen garanti för framtiden.<br>' +
-    'Kurvan och nyckeltalen visar kontot med <b>en position i taget</b>. Korten per grad räknar i stället ' +
-    '<b>varje enskild setup</b> (' + BT.pool.length + ' st) var för sig — annars går graderna inte att jämföra, ' +
-    'eftersom kontot nästan alltid tar den högst graderade och de lägre aldrig får visa vad de gick för.';
+  $('#demoStamp').innerHTML = 'igång sedan ' + startTxt +
+    (orealiserat ? ' · <span class="' + (orealiserat >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(orealiserat, 0) + ' $ öppet</span>' : '');
+
+  $('#demoNote').innerHTML =
+    'Pappershandel i realtid, inga riktiga pengar. Kontot beter sig som ett terminskonto: startkapital ' +
+    fmt(KONTO.start, 0) + ' $ och <b>' + KONTO.kontrakt + ' MNQ-kontrakt</b> per affär till ' +
+    demoPunktVarde('NQ') + ' $ per punkt, samma storlek varje gång. När en setup går aktiv läggs hela braketten ' +
+    'automatiskt — fyllning, stopp och mål — och positionen hålls tills ett av dem nås. Bara <b>A och B</b> handlas; ' +
+    'C-setups är för svaga och tas inte. Marginalen räknas som ' + MARGINAL_PER_KONTRAKT + ' $ per kontrakt, vilket ' +
+    'är ungefär vad en mäklare tar i dagmarginal för mikroterminen — den siffran är ett antagande, inte hämtad ' +
+    'någonstans ifrån. Exponeringen är kontraktens fulla värde, alltså pris × ' + demoPunktVarde('NQ') + ' × antal.<br>' +
+    'Utfallet avgörs på 5-minutersstaplarnas högsta och lägsta, och alla staplar som passerat sedan förra kollen ' +
+    'gås igenom — en position som stod öppen medan sidan var stängd får därför rätt utfall när du kommer tillbaka. ' +
+    'Nås både stopp och mål inom samma stapel räknas stoppen. Inga avgifter eller slippage är avdragna. ' +
+    'Kontot sparas i den här webbläsaren och räknar vidare varje gång du öppnar sidan — <i>Nollställ</i> börjar ' +
+    'om från ' + fmt(KONTO.start, 0) + ' $.';
 }
 
 /* ==========================================================================
@@ -3313,9 +3567,10 @@ async function refresh(){
     await loadMarket();
     coreState('analyserar');
     paint();                       // priser och grafer ritas direkt — de väntar inte på nyhetsflödena
-    if(!BT.running && Date.now() - BT.stamp > 900000) runBacktest();   // backtestet får ta sin tid i bakgrunden
+    demoTick();                    // demokontot öppnar och stänger sina positioner
     await Promise.all([side, news]);
     paint();                       // nyheter, nyhetsbias och sidopriser fylls på när de landat
+    renderDemo();
     coreState('vaktar marknaden');
     $('#bnErr').classList.remove('show');
   }catch(e){
@@ -3382,19 +3637,22 @@ function wire(){
   $$('[data-sym]').forEach(b=> b.onclick = ()=>{
     $$('[data-sym]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
     STATE.chartSym = b.dataset.sym;
-    if(STATE.chartMode==='tv') mountTV(); else renderMainChart();
-    renderTvLevels(); renderTech(); renderLevels();
+    renderMainChart(); renderTech(); renderLevels();
   });
-  $$('[data-cm]').forEach(b=> b.onclick = ()=>{
-    $$('[data-cm]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-    STATE.chartMode = b.dataset.cm; applyChartMode();
+  $$('[data-zoom]').forEach(b => b.onclick = () => {
+    const v = STATE.vy, k = b.dataset.zoom;
+    if(k === 'in')  v.n = Math.max(24, Math.round(v.n*0.75));
+    if(k === 'ut')  v.n = Math.min(1200, Math.round(v.n*1.35));
+    if(k === 'reset'){ v.n = 96; v.off = 0; }
+    renderMainChart();
   });
-  $$('[data-bt]').forEach(b=> b.onclick = ()=>{
-    $$('[data-bt]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-    BT.filter = b.dataset.bt; renderBacktest();
-  });
+  grafInteraktion();
+  $('#btnDemoReset').onclick = ()=>{
+    if(window.confirm('Nollställa demokontot? Alla ' + KONTO.affarer.length + ' affärer och resultatet försvinner.'))
+      demoNollstall();
+  };
   let rz; window.addEventListener('resize', ()=>{ clearTimeout(rz);
-    rz = setTimeout(()=>{ renderMainChart(); renderSignals(); renderBacktest(); }, 200); });
+    rz = setTimeout(()=>{ renderMainChart(); renderSignals(); renderDemo(); }, 200); });
 }
 
 let timer = null;
@@ -3406,7 +3664,8 @@ function restartTimer(){
 loadCfg();
 useLocalProxy();
 wire();
-renderBacktest();
+demoLadda();
+renderDemo();
 requestAnimationFrame(coreFrame);
 tick(); setInterval(tick, 1000);
 refresh();
