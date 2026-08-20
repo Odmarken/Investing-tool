@@ -1,5 +1,5 @@
 /**
- * Signaldesk feed — Cloudflare Worker
+ * Riptide feed — Cloudflare Worker
  * Tar emot 5-minutersstaplar från TradingView-alerts och serverar dem till dashboarden.
  *
  *  POST /ingest   {"k":"HEMLIG","s":"NQ","t":1755700200000,"o":..,"h":..,"l":..,"c":..,"v":..}
@@ -81,6 +81,6 @@ export default {
       return json(out);
     }
 
-    return json({ tjanst: 'signaldesk-feed', endpoints: ['/ingest (POST)', '/bars?s=NQ', '/status'] });
+    return json({ tjanst: 'riptide-feed', endpoints: ['/ingest (POST)', '/bars?s=NQ', '/status'] });
   }
 };

@@ -1,0 +1,11 @@
+# Nycklar för den lokala servern. Kopiera filen till .dev.vars och fyll i.
+# .dev.vars är gitignorerad — den checkas aldrig in.
+
+# Direktvägen till Claude (console.anthropic.com):
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Valfritt: alla modeller via OpenRouter (openrouter.ai/keys):
+OPENROUTER_API_KEY=sk-or-...
+
+# Valfritt: hemligheten TradingView-alertet signerar med (standard "dev"):
+# FEED_KEY=nagot-langt-losenord

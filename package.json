@@ -1,9 +1,9 @@
 {
-  "name": "signaldesk",
+  "name": "riptide-investments-panel",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Signaldesk NQ/Guld — dashboard, TradingView-feed via Cloudflare Worker och lokal utvecklingsserver",
+  "description": "Riptide Investments Panel — NQ-dashboard, signalmotor, TradingView-feed och lokal utvecklingsserver",
   "scripts": {
     "start": "node dev-server.js",
     "demo": "node dev-server.js --demo",
@@ -11,5 +11,10 @@
     "worker:deploy": "npx wrangler deploy",
     "worker:secret": "npx wrangler secret put FEED_KEY"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0"
+  }
 }

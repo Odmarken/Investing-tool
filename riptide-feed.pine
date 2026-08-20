@@ -1,7 +1,7 @@
 //@version=6
-// Signaldesk feed — lägg på NQ1! och GC1! i 5-minutersgrafen.
+// Riptide feed — lägg på NQ1! i 5-minutersgrafen.
 // Skapa sedan ett alert med villkoret "Any alert() function call" och din Worker-URL som webhook.
-indicator("Signaldesk feed", overlay = true)
+indicator("Riptide feed", overlay = true)
 
 nyckel    = input.string("BYT-UT-MIG", "Hemlig nyckel", tooltip = "Samma värde som FEED_KEY i din Cloudflare Worker (lokalt: 'dev' om du inte satt något).")
 symbolkod = input.string("NQ", "Symbolkod", options = ["NQ", "GC"], tooltip = "NQ för Nasdaq-terminen, GC för guldterminen. Måste vara en av symbolerna i worker.js.")

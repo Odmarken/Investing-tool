@@ -1,4 +1,6 @@
-name = "signaldesk-feed"
+# Har du redan rullat ut under det gamla namnet: behåll "signaldesk-feed" här,
+# annars skapas en ny worker på en ny adress.
+name = "riptide-feed"
 main = "worker.js"
 compatibility_date = "2026-08-01"
 

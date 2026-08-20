@@ -1,30 +1,35 @@
-# Signaldesk — NQ & Guld
+# Riptide Investments Panel
 
-En signaldesk för Nasdaq-terminen och guld som körs helt i webbläsaren, plus en
+En handelspanel för Nasdaq-terminen som körs helt i webbläsaren, plus en
 TradingView-feed som gör att signalmotorn räknar på dina realtidsstaplar i stället
 för Yahoos fördröjda data.
 
+> **Guld är pausat.** Dashboarden kör bara NQ. Workern och Pine-skriptet klarar
+> fortfarande `GC`, så för att ta tillbaka guld räcker det att avkommentera
+> `GC`-raden i `INSTR` i html-filen — resten av sidan följer med av sig själv.
+
 | Fil | Vad den gör |
 |---|---|
-| `nq-guld-signaldesk_4.html` | Hela dashboarden — grafer, signalmotor, nyhetsflöden |
+| `index.html` | Hela dashboarden — grafer, signalmotor, nyhetsflöden |
 | `dev-server.js` | Lokal server: serverar sidan, en CORS-proxy och en kopia av workern |
 | `worker.js` | Cloudflare Worker som tar emot TradingView-alerts och serverar staplarna |
 | `wrangler.toml` | Inställningar för utrullning av workern |
-| `signaldesk-feed.pine` | Pine-skriptet som skickar staplarna från TradingView |
-| `package.json` | Startkommandon (`npm start`, `npm run demo`, …) |
+| `riptide-feed.pine` | Pine-skriptet som skickar staplarna från TradingView |
+| `package.json` | Startkommandon och beroenden (`npm start`, `npm run demo`, …) |
+| `.dev.vars.example` | Mall för API-nycklarna — kopiera till `.dev.vars` |
 
 ---
 
 ## 1. Kör lokalt
 
 ```bash
+npm install     # en gång — hämtar Anthropic-SDK:t som chatten använder
 npm start
 ```
 
-Öppna sedan **http://localhost:8080/**. Ingen installation behövs — servern använder
-bara Node (18 eller senare).
+Öppna sedan **http://localhost:8080/**. Servern kräver Node 18 eller senare.
 
-Servern ger dig tre saker:
+Servern ger dig fyra saker:
 
 * **Sidan** på `/`.
 * **En CORS-proxy** på `/proxy?url=…`. Yahoo och de flesta RSS-flöden blockerar
@@ -34,6 +39,8 @@ Servern ger dig tre saker:
 * **Workern** på `/feed` — samma `worker.js` som körs i Cloudflare, men med
   staplarna i `.dev-bars.json` i stället för KV. Alltså `/feed/ingest`,
   `/feed/bars?s=NQ` och `/feed/status`.
+* **Miguel** på `/ai` — chatten mitt på sidan, som skickar frågan vidare till
+  Claude tillsammans med ett färskt dataunderlag. Se avsnittet nedan.
 
 Inställningarna du gör i ⚙-rutan sparas i webbläsaren och gäller nästa gång också.
 
@@ -71,7 +78,7 @@ wrangler secret put FEED_KEY
 wrangler deploy
 ```
 
-Du får en URL av typen `https://signaldesk-feed.dittnamn.workers.dev`.
+Du får en URL av typen `https://riptide-feed.dittnamn.workers.dev`.
 Testa den: `https://.../status` ska svara med `{"NQ":{"bars":0,...}}`.
 
 ## 3. Lägg in URL:en i dashboarden
@@ -82,7 +89,7 @@ Testa den: `https://.../status` ska svara med `{"NQ":{"bars":0,...}}`.
 ## 4. Lägg Pine-skriptet på grafen
 
 Öppna `CME_MINI:NQ1!` i **5-minutersintervall** på TradingView.
-Pine Editor → klistra in `signaldesk-feed.pine` → *Add to chart*.
+Pine Editor → klistra in `riptide-feed.pine` → *Add to chart*.
 Sätt **Hemlig nyckel** till samma värde som `FEED_KEY`, och **Symbolkod** till `NQ`.
 
 ## 5. Skapa alertet
@@ -91,13 +98,13 @@ Högerklicka i grafen → *Add alert*.
 
 | Fält | Värde |
 |---|---|
-| Condition | Signaldesk feed |
+| Condition | Riptide feed |
 | — | **Any alert() function call** |
 | Trigger | Once per bar close |
 | Expiration | så långt fram som ditt abonnemang tillåter |
 | Notifications → Webhook URL | `https://.../ingest` |
 
-Skapa alertet. Upprepa steg 4–5 för `COMEX:GC1!` med symbolkoden `GC`.
+Ett alert per instrument. Guld är pausat i dashboarden, så `NQ` räcker.
 
 ## 6. Kontrollera
 
@@ -108,6 +115,153 @@ Fottexten byter till *"TradingView realtid via egen webhook"*.
 Säger brickan **TV-feed nås inte** stämmer inte URL:en, och **TV-feed tyst** betyder
 att workern svarar men att ingen ny stapel kommit på ett tag — då är det alertet
 som slutat skicka.
+
+---
+
+## Så graderas setuperna
+
+Motorn kör fyra strategifamiljer parallellt och väger ihop dem till en grad per setup.
+Graden säger hur mycket av marknaden som talar för riktningen just nu:
+
+| Familj | Röstar för riktningen när … |
+|---|---|
+| **Trendfortsättning** | EMA-stacken pekar åt hållet (trendpoäng över ±12) och priset ligger på rätt sida VWAP |
+| **Likviditetssvep** | en tidigare extrempunkt har svepts de senaste 16 staplarna och priset tagit tillbaka nivån |
+| **Range-brott** | en konsolidering på 0,8–2,6 ATR har brutits med minst 0,25 ATR, färskt och med volym bakom |
+| **ICT-modell** | ett svep av stopparna följs av en market structure shift åt andra hållet |
+
+| Grad | Betyder |
+|---|---|
+| **A** | minst tre av fyra familjer pekar åt samma håll — mest potential |
+| **B** | två av fyra |
+| **C** | en eller ingen — lägst potential |
+
+**ICT-familjen** letar hela kedjan: priset tar ut en tidigare swingnivå och stänger
+tillbaka innanför (stopparna är inhämtade), bryter sedan strukturen åt andra hållet
+(*market structure shift*). Rörelsen som bryter strukturen lämnar oftast en obalans
+efter sig — ett *fair value gap* — och entryn läggs mitt i det gapet. Finns inget gap
+kvar används 70,5 %-retracementet av benet (*OTE*). Stoppen ligger bortom svepet och
+målet vid nästa likviditetsklump. Setupen väger tyngre om nivån ligger i rätt halva
+av benet (*discount* för köp, *premium* för sälj) och om den formades i en killzone
+(London 02–05, New York AM 08:30–11:00, New York PM 13:30–16:00, New York-tid).
+
+Rangen som ett brott mäts mot letas fram genom att växa bakåt från flera startpunkter
+så länge boxen håller sig under 2,2 ATR. Ett trendben faller därmed bort av sig självt,
+och ett svep som spikar ur boxen förstör inte mätningen.
+
+Graden styr både ordningen i listan och konfidensen (A ger +15, B +7, och varje familj
+som pekar åt *motsatt* håll drar av 4). Två setups som vill in på samma nivå åt samma
+håll slås ihop till ett kort, med båda motiveringarna kvar.
+
+Överst i signallistan står strategiläget — pilarna visar vad varje familj röstar på
+just nu, så det syns direkt varför ingen A-setup finns. Knapparna **A** och **B** i
+panelhuvudet filtrerar listan.
+
+---
+
+## Miguel — strategigranskaren
+
+Mellan sammanfattningen och grafen sitter en chatt. Miguel är en granskare, inte en
+hejaklack: hans systemprompt säger åt honom att leta svagheter i reglerna, ifrågasätta
+statistiken och säga ifrån när underlaget är för tunt.
+
+Med varje fråga skickas ett färskt underlag från sidan — pris, ATR, RSI, VWAP, EMA-nivåer,
+dagens och gårdagens range, öppningsrangen, hur de fyra familjerna röstar, ICT-läget
+(svep, MSS, FVG, killzone), nyhetsbias, alla setups i listan med entry/stopp/mål och
+backtestets siffror per grad. Dessutom en beskrivning av reglerna i motorn, så han har
+något att granska. Han är instruerad att bara använda siffror ur underlaget.
+
+### Nycklar
+
+Chatten går via `/ai` i `dev-server.js`, så nycklarna stannar på servern och hamnar aldrig
+i webbläsaren. Lägg dem i en fil som heter `.dev.vars` bredvid `dev-server.js`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...        # direktvägen till Claude
+OPENROUTER_API_KEY=sk-or-...        # valfritt: alla modeller via OpenRouter
+```
+
+Det finns en färdig mall: kopiera `.dev.vars.example` till `.dev.vars` och fyll i.
+Filen är gitignorerad; alternativet är miljövariabler. Servern läser om `.dev.vars`
+när den ändras, så du behöver **inte** starta om — skicka bara frågan igen. Räcker det
+med en nyckel? Ja: har du bara
+OpenRouter-nyckeln går allt den vägen, har du bara Anthropic-nyckeln finns bara
+direktvalet. Utan nycklar fungerar resten av sidan som vanligt och chatten svarar med
+hur du sätter dem.
+
+### Modellväljare (OpenRouter)
+
+Uppe till höger i chattpanelen väljer du vilken modell Miguel svarar med:
+
+* **`claude-opus-5 · direkt`** — går rakt till Anthropic med officiella SDK:t, adaptivt
+  tänkande och server-side fallback (avböjer modellen körs frågan om på en annan modell
+  inom samma anrop; saknas beta-flaggan på kontot görs anropet om utan den).
+* **Allt annat** går via OpenRouter. Listan hämtas live från `openrouter.ai/api/v1/models`
+  och grupperas per leverantör — anthropic, openai, google, x-ai, deepseek, meta-llama,
+  mistralai och qwen, de åtta senaste modellerna från var och en, med pris per miljon
+  tokens i etiketten. Listan cachas i tio minuter.
+
+Systemprompten och dataunderlaget är identiska oavsett modell, så det är samma Miguel —
+bara en annan hjärna. Svarsbubblan visar vilken modell som svarade, vilket gör det enkelt
+att ställa samma fråga till två modeller och jämföra. Valet sparas i webbläsaren.
+Varje fråga kostar pengar hos den leverantör du valt — utom modeller märkta **(gratis)**,
+som alltid finns med i listan oavsett hur nya de är.
+
+Räcker inte krediten till hela svaret säger OpenRouter ifrån i stället för att korta av.
+Servern läser då ut hur många tokens saldot räcker till och kör om med det taket, och
+statusraden säger *"Saldot räcker till N tokens — kortar svaret"*.
+
+### Minnet
+
+Samtalet sparas i webbläsaren och ligger kvar när du laddar om sidan — rutan säger
+*"Samtalet nedan är sparat sedan tidigare — han minns det"* och räknaren uppe till höger
+visar hur många inlägg som finns i minnet. Varje svar minns också vilken modell som gav det.
+
+* **120 inlägg** sparas lokalt (`riptide.miguel.chat.v1` i localStorage).
+* **60 000 tecken** av historiken följer med varje fråga. Ryms inte allt läggs det äldsta
+  ihop till ett kort referat som skickas först, så tråden aldrig bryts helt.
+* **Rensa** tömmer både rutan och minnet.
+
+Ingenting av detta lämnar din dator utom det som skickas med frågan till modellen.
+
+---
+
+## Signalkärnan och backtestet
+
+Längst ned på sidan sitter två sektioner.
+
+**Signalkärnan** sitter överst i mittenkolumnen och är en levande bild av vad motorn
+matas med. Varje gång något faktiskt händer — Yahoo svarar, TradingView-feeden levererar
+en stapel, ett RSS-flöde landar, indikatorerna räknas om, nyhetsbiasen vägs, setuperna
+byggs — skickas ett datapaket in mot kärnan, med tecken som flimrar på vägen, och en
+chockvåg går ut när det landar. Radarsvepet och aktivitetsmätaren går fortare ju mer som
+strömmar in. Längst ned i rutan skriver kärnan ut vad den just läste, rad för rad och
+tecken för tecken: staplar från Yahoo, EMA/ATR/RSI/VWAP-värden, rubriker, nyhetsbias,
+hur de fyra familjerna röstar, ICT-kedjan (svep → MSS → FVG) och vilken setup som är bäst
+just nu. Kärnan lyser grönt när det samlade läget är positivt och rött när det är negativt,
+och siffran i mitten är antalet setups. Animationen pausar när fliken inte syns.
+
+Varje signalkort visar dessutom vilken familj setupen kommer från — **TREND**, **SVEP**,
+**BROTT** eller **ICT** — bredvid gradbrickan. Är två familjer sammanslagna till ett kort
+står den andra som `+ SVEP` efter.
+
+**Backtestet** kör exakt samma regler stapel för stapel på ungefär en månads
+femminutershistorik för NQ:
+
+* Kontot startar på **50 000 USD** och riskerar **1 % av rådande kapital** per affär,
+  så vinsterna räknas på växande insats.
+* Entry, stopp och mål tas från signalen. Nås både stopp och mål inom samma stapel
+  räknas stoppen — det är den försiktiga tolkningen.
+* En tick slippage in och en ut är avdragen.
+* Positionen stängs efter 78 staplar om varken stopp eller mål nåtts.
+* Kontot håller **en position i taget** och tar alltid den högst graderade setupen.
+
+Korten per grad räknar i stället **varje enskild setup** var för sig. Annars går
+graderna inte att jämföra, eftersom kontot nästan alltid tar A eller B och de lägre
+graderna aldrig får visa vad de gick för.
+
+Backtestet körs om var femtonde minut i bakgrunden, med pauser så att sidan inte
+hakar upp sig. Kurvan visar vad reglerna faktiskt gav — den kan falla.
 
 ---
 
@@ -129,6 +283,7 @@ som slutat skicka.
   och då är hela kedjan ingen förbättring mot Yahoo.
 * **Nya symboler** läggs till på tre ställen som måste stämma överens:
   `SYMBOLS` i `worker.js`, `options` i Pine-skriptet och `INSTR` i html-filen.
+  `SYMS` i html-filen härleds ur `INSTR`, så resten av sidan följer med.
 * **Utan lokal server** fungerar sidan fortfarande — då används de publika
   proxyerna i proxylistan, men de är trögare och faller ofta bort. Går ingen
   fram visas simulerad data med en tydlig varningsbanner.
