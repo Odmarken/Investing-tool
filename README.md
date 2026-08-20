@@ -1,3 +1,5 @@
+https://odmarken.github.io/Investing-tool/
+
 # Riptide Investments Panel
 
 En handelspanel för Nasdaq-terminen som körs helt i webbläsaren, plus en
