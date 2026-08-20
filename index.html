@@ -44,9 +44,10 @@
 }
 
 *{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
 html,body{height:100%}
 body{
-  margin:0; background:var(--bg); color:var(--text);
+  margin:0; background:var(--bg); color:var(--text); overflow-x:hidden;
   font-family:var(--sans); font-size:13px; line-height:1.45;
   -webkit-font-smoothing:antialiased;
   background-image:
@@ -145,10 +146,11 @@ header.topbar{
 /* ---------- GRID ---------- */
 .wrap{display:grid;grid-template-columns:320px minmax(0,1fr) 330px;gap:12px;padding:12px;align-items:start}
 @media (max-width:1500px){.wrap{grid-template-columns:290px minmax(0,1fr) 300px}}
-@media (max-width:1240px){.wrap{grid-template-columns:1fr;}
+@media (max-width:1240px){.wrap{grid-template-columns:minmax(0,1fr);}
   .col-side{order:3}
 }
 .col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.panel, .pb, .ph{min-width:0}
 
 /* ---------- PANEL ---------- */
 .panel{
@@ -296,7 +298,23 @@ header.topbar{
 .news .src{font-size:9px;font-weight:800;letter-spacing:1px;color:var(--muted);text-transform:uppercase}
 .news .ago{font-family:var(--mono);font-size:9px;color:var(--muted-2);margin-left:auto}
 .news h4{margin:0 0 4px;font-size:11.5px;font-weight:600;line-height:1.35;color:var(--text)}
+.news{cursor:pointer}
 .news .sv{font-size:10.5px;color:var(--text-2);line-height:1.4}
+.news .pil{float:right;margin-left:8px;color:var(--muted-2);font-size:9px;transition:transform .25s}
+.news.open .pil{transform:rotate(180deg);color:var(--lblue)}
+.news.open{background:rgba(30,90,255,.07)}
+.news .mer{max-height:0;overflow:hidden;opacity:0;transition:max-height .3s ease,opacity .22s ease,margin .3s}
+.news.open .mer{max-height:600px;opacity:1;margin-top:9px}
+.news .mer-in{border-top:1px solid var(--line);padding-top:9px;font-size:10.5px;line-height:1.55;color:var(--text-2)}
+.news .mer h5{margin:0 0 5px;font-size:9px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:800}
+.news .mer p{margin:0 0 9px}
+.news .mer ul{margin:0 0 9px;padding-left:16px}
+.news .mer li{margin-bottom:4px}
+.news .mer .rad{display:flex;flex-wrap:wrap;gap:5px 14px;font-size:9.5px;color:var(--muted);margin-bottom:9px}
+.news .mer .rad b{color:var(--text-2);font-weight:600}
+.news .mer .kalla{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:var(--lblue);
+  border:1px solid rgba(79,211,255,.35);border-radius:6px;padding:4px 9px;text-decoration:none}
+.news .mer .kalla:hover{background:rgba(79,211,255,.10)}
 .news .sv b{color:var(--lblue)}
 .news.hot{background:linear-gradient(90deg,rgba(255,46,76,.09),transparent 70%);border-left:2px solid var(--scarlet)}
 
@@ -386,6 +404,94 @@ header.topbar{
 @keyframes sp{to{transform:rotate(360deg)}}
 footer{padding:14px 18px 26px;text-align:center;color:var(--muted-2);font-size:10px;line-height:1.7}
 footer b{color:var(--muted)}
+
+/* ==========================================================================
+   MOBIL — allt ovanför gäller skrivbordet, allt här nedanför tar över på små skärmar
+   ========================================================================== */
+
+/* Surfplatta på höjden och nedåt: en kolumn, och nyhetsflödet efter signalerna. */
+@media (max-width:1000px){
+  .wrap{padding:9px;gap:9px}
+  .col{gap:9px}
+  .panel{border-radius:9px}
+  .scrolly{max-height:min(var(--h,520px), 62vh)}
+}
+
+/* Telefon. */
+@media (max-width:680px){
+  .tb-row{flex-wrap:wrap;gap:8px 10px;padding:8px 11px;min-width:0}
+  .brand h1{overflow-wrap:anywhere}
+  .brand{flex:1 1 100%}
+  .brand .mark{width:26px;height:26px;font-size:11px}
+  .brand h1{font-size:12.5px}
+  .brand .sub{font-size:8.5px;letter-spacing:1px}
+  .tb-spacer{display:none}
+  .clock{gap:10px;margin-left:auto}
+  .clock .c b{font-size:12px}
+  .sesspill{font-size:9px;padding:3px 8px}
+  header.topbar .btn{flex:1 1 auto;padding:9px 10px;font-size:11px}
+  .tape .tk{padding:6px 11px}
+
+  .wrap{padding:7px;gap:8px}
+  .ph{flex-wrap:wrap;gap:7px;padding:9px 11px}
+  .ph h2{font-size:10.5px;white-space:normal}
+  .ph .right{margin-left:auto;font-size:9px;white-space:normal}
+  .chart-tabs{margin-left:0;flex-wrap:wrap;width:100%;gap:5px}
+  .pb{padding:10px}
+
+  /* fingerstora knappar */
+  .ct{padding:7px 11px;font-size:10.5px}
+  .btn{padding:8px 12px}
+
+  /* signalkorten */
+  .sig{padding:10px 11px}
+  .sig-top{gap:6px}
+  .sig-inst{font-size:11.5px}
+  .sig-name{font-size:10.5px}
+  .leg i{width:62px;font-size:8px}
+  .leg b{font-size:13px}
+  .sig-mini{height:88px}
+  .metrics{gap:8px}
+  .conf{flex:1 1 100%;margin-left:0}
+  .rationale{font-size:10px}
+
+  /* kärnan och graferna */
+  #coreCanvas{border-radius:0}
+  .corefoot{gap:8px 12px;font-size:9px;padding:7px 10px}
+  .votes{gap:10px;font-size:9.5px}
+  .btstats{grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px}
+  .btstat{padding:7px 8px}
+  .btstat b{font-size:13.5px}
+  .btgrades{grid-template-columns:1fr}
+  .btnote{font-size:9.5px}
+
+  /* listor */
+  .news{padding:10px 11px}
+  .news h4{font-size:12px}
+  .se-grid{grid-template-columns:1fr}
+  .legendline{font-size:9px;gap:8px}
+
+  /* inställningar */
+  .modal{padding:0;place-items:stretch}
+  .modal .box{width:100%;max-height:100vh;border-radius:0;border:none}
+}
+
+/* Riktigt smala telefoner. */
+@media (max-width:400px){
+  .brand .sub{display:none}
+  .clock{gap:8px}
+  .leg i{width:54px}
+  .sig-mini{height:78px}
+}
+
+/* Pekskärm: större träffytor och inga hover-effekter som fastnar. */
+@media (pointer:coarse){
+  .ct{padding:8px 12px}
+  .btn{padding:9px 13px}
+  .news{padding:12px}
+  .modal input, .modal select, .modal textarea{font-size:16px}   /* annars zoomar iOS in */
+  .btn:hover, .ct:hover, .news:hover{box-shadow:none}
+}
 
 /* Inställningar */
 .modal{position:fixed;inset:0;background:rgba(2,5,12,.82);backdrop-filter:blur(5px);z-index:200;display:none;place-items:center;padding:20px}
@@ -1272,7 +1378,8 @@ function gradeFor(ctx, side){
     backers, against, n: backers.length
   };
 }
-const LIVE = new Map();   // id -> {triggered, hitTp, hitSl, entryTime}
+const LIVE = new Map();   // id -> {triggered, hitTp, hitSl, at, entryPx, sig}
+const SEDD = new Map();   // id -> låg priset före entryn förra gången vi tittade?
 
 function moveBounds(ctx){
   if(ctx.inst.key === 'NQ') return { min: CFG.minPts, max: CFG.maxPts };
@@ -1619,6 +1726,8 @@ function combine(list, A){
 }
 
 /* ---- status: en ACTIVE, resten väntar ---- */
+/* ACTIVE betyder att affären är påbörjad. Den ligger kvar som ACTIVE tills
+   målet eller stoppen nås — inte bara medan priset råkar stå i entryzonen. */
 function assignStatus(sigs, pxByInst){
   sigs.forEach(s=>{
     const px = pxByInst[s.inst];
@@ -1627,42 +1736,57 @@ function assignStatus(sigs, pxByInst){
     let st = LIVE.get(s.id);
 
     const inZone = Math.abs(px - s.entry) <= zone;
-    const past   = s.reachSign*(px - s.entry) > zone;
+    const traff  = Math.abs(px - s.entry) <= s.atr*0.05;  // priset står i praktiken på nivån
+    const fylld  = s.reachSign*(px - s.entry) >= 0;       // priset ligger på fyllningssidan
+    const foreDetta = SEDD.get(s.id);
 
-    if(!st && inZone) st = {triggered:true, at:Date.now(), entryPx:s.entry};
+    // Eftersom en fylld affär låses som ACTIVE tills mål eller stopp krävs en riktig
+    // träff: priset står på nivån, eller har gått igenom den medan vi tittade.
+    // Att bara ligga nära räcker inte, och en omladdning fyller inte gamla nivåer.
+    if(!st && (traff || (fylld && foreDetta === false))){
+      st = { triggered:true, at:Date.now(), entryPx:s.entry, sig:Object.assign({}, s) };
+    }
+    if(!st) SEDD.set(s.id, fylld);
     if(st){
       LIVE.set(s.id, st);
-      if(dir*(px - s.tp) >= 0) st.hitTp = true;
-      if(dir*(px - s.sl) <= 0) st.hitSl = true;
+      if(!st.hitTp && !st.hitSl){
+        if(dir*(px - s.tp) >= 0){ st.hitTp = true; st.slutAt = Date.now(); }
+        else if(dir*(px - s.sl) <= 0){ st.hitSl = true; st.slutAt = Date.now(); }
+      }
     }
 
     if(st && st.hitTp)       { s.status='TP'; s.statusTxt='MÅL NÅTT'; }
     else if(st && st.hitSl)  { s.status='SL'; s.statusTxt='STOPP UT'; }
-    else if(inZone)          { s.status='ACTIVE'; s.statusTxt='ACTIVE'; }
-    else if(st && past)      { s.status='LÖPANDE'; s.statusTxt='LÖPANDE'; }
+    else if(st)              { s.status='ACTIVE'; s.statusTxt='ACTIVE'; }   // ligger kvar tills mål eller stopp
     else if(Math.abs(px - s.entry) <= s.atr*1.0) { s.status='NÄRA'; s.statusTxt='NÄRA'; }
     else                     { s.status='VÄNTAR'; s.statusTxt='VÄNTAR'; }
+
     s.needTxt = s.trigger==='stop'
       ? (s.side==='long' ? 'bryter upp genom' : 'bryter ned genom')
       : (s.side==='long' ? 'faller tillbaka till' : 'stiger tillbaka till');
 
-    s.openPnl = (st && (s.status==='LÖPANDE' || s.status==='ACTIVE')) ? dir*(px - s.entry) : null;
+    s.oppnad     = st ? st.at : null;
+    s.entryFyllt = st ? st.entryPx : null;
+    s.openPnl    = (st && s.status === 'ACTIVE') ? dir*(px - s.entry) : null;
+    s.kvarMal    = Math.abs(s.tp - px);
+    s.kvarStopp  = Math.abs(px - s.sl);
+    s.restRR     = s.kvarStopp > 0 ? s.kvarMal/s.kvarStopp : null;
   });
-
-  // exakt en ACTIVE — högst konfidens vinner, övriga blir NÄRA
-  const act = sigs.filter(s=>s.status==='ACTIVE')
-                  .sort((a,b)=> (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf));
-  act.slice(1).forEach(s=>{ s.status='NÄRA'; s.statusTxt='NÄRA'; });
-
-  // om ingen är i zonen: lyft fram den närmaste med högst konfidens som ACTIVE-kandidat
-  if(act.length === 0){
-    const cand = sigs.filter(s=>s.status==='VÄNTAR'||s.status==='NÄRA')
-                     .sort((a,b)=> (a.dist/a.atr - b.dist/b.atr)
-                                 - (a.conf-b.conf)/220
-                                 + (GRADE_RANK[a.grade]-GRADE_RANK[b.grade])*0.18 )[0];
-    if(cand && cand.dist <= cand.atr*1.25){ cand.status='ACTIVE'; cand.statusTxt='ACTIVE'; }
-  }
   return sigs;
+}
+
+/* Den setup som graf och sammanfattning ska peka på: en pågående affär först,
+   annars den närmaste kandidaten. */
+function fokusSignal(inst){
+  const urval = STATE.signals.filter(s => !inst || s.inst === inst);
+  const aktiv = urval.filter(s => s.status === 'ACTIVE')
+                     .sort((a,b)=> (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf))[0];
+  if(aktiv) return aktiv;
+  const nara = urval.filter(s => s.status === 'NÄRA' || s.status === 'VÄNTAR')
+                    .sort((a,b)=> (a.dist/a.atr - b.dist/b.atr)
+                                - (a.conf-b.conf)/220
+                                + (GRADE_RANK[a.grade]-GRADE_RANK[b.grade])*0.18)[0];
+  return nara || urval[0] || null;
 }
 
 /* ==========================================================================
@@ -1670,24 +1794,24 @@ function assignStatus(sigs, pxByInst){
    ========================================================================== */
 const RULES = [
   // --- Inflation ---
-  {k:/\b(cpi|inflation)\b.*\b(hotter|higher|beats|above|rises|jump|accelerat)/i, nq:-3, gc:-1, c:'macro', sv:'Hetare inflation än väntat → högre räntebana, press på tillväxtaktier. Guld dras mellan inflationsskydd och starkare dollar.'},
-  {k:/\b(cpi|inflation)\b.*\b(cool|softer|lower|below|eases|slow|miss)/i, nq:3, gc:2, c:'macro', sv:'Svalare inflation → marknaden prisar in mjukare Fed. Positivt för Nasdaq och stödjande för guld via lägre realräntor.'},
-  {k:/\b(cpi|ppi|pce|core inflation)\b/i, nq:0, gc:0, c:'macro', sv:'Inflationsdata i fokus — direkt input till Fed-banan och därmed till både NQ och guld.'},
+  {k:/\b(cpi|inflation)\b.*\b(hotter|higher|beats|above|rises|jump|accelerat)/i, nq:-3, gc:-1, c:'macro', sv:'Hetare inflation än väntat → högre räntebana och press på tillväxtaktier. Tyngst i de längsta techcaseen.'},
+  {k:/\b(cpi|inflation)\b.*\b(cool|softer|lower|below|eases|slow|miss)/i, nq:3, gc:2, c:'macro', sv:'Svalare inflation → marknaden prisar in mjukare Fed. Lägre realräntor lyfter värderingen på tillväxtbolag, alltså medvind för NQ.'},
+  {k:/\b(cpi|ppi|pce|core inflation)\b/i, nq:0, gc:0, c:'macro', sv:'Inflationsdata i fokus — direkt input till Fed-banan och därmed till hela värderingen av NQ.'},
   // --- Fed / räntor ---
-  {k:/\b(rate cut|cuts rates|dovish|easing cycle|lower rates)\b/i, nq:3, gc:3, c:'macro', sv:'Duvaktig Fed-signal → lägre realräntor. Historiskt bränsle för både Nasdaq och guld.'},
-  {k:/\b(rate hike|hawkish|higher for longer|tighten)/i, nq:-3, gc:-2, c:'macro', sv:'Hökaktig ton → högre diskonteringsränta. Negativt för Nasdaq, motvind för guld via starkare dollar.'},
-  {k:/\b(fomc|federal reserve|the fed)\b/i, nq:0, gc:0, c:'macro', sv:'Fed-relaterat — den enskilt viktigaste drivkraften för både index och guld just nu.'},
+  {k:/\b(rate cut|cuts rates|dovish|easing cycle|lower rates)\b/i, nq:3, gc:3, c:'macro', sv:'Duvaktig Fed-signal → lägre realräntor. Historiskt bränsle för Nasdaq, ofta med snabb reaktion i 5m-grafen.'},
+  {k:/\b(rate hike|hawkish|higher for longer|tighten)/i, nq:-3, gc:-2, c:'macro', sv:'Hökaktig ton → högre diskonteringsränta. Negativt för Nasdaq, och dollarn brukar stärkas samtidigt.'},
+  {k:/\b(fomc|federal reserve|the fed)\b/i, nq:0, gc:0, c:'macro', sv:'Fed-relaterat — den enskilt viktigaste drivkraften för indexet just nu.'},
   {k:/\bpowell\b/i, nq:0, gc:0, c:'macro', sv:'Powell-uttalande. Tonläget flyttar räntekurvan direkt; vänta ut första reaktionen innan entry.'},
-  {k:/\b(yields?)\b.*\b(rise|surge|jump|higher|climb)/i, nq:-2, gc:-2, c:'macro', sv:'Stigande obligationsräntor → tryck på högt värderade techbolag och på guld (ingen kupong).'},
-  {k:/\b(yields?)\b.*\b(fall|drop|slide|lower|decline)/i, nq:2, gc:2, c:'macro', sv:'Fallande räntor → lättnad för Nasdaq-värderingar och lägre alternativkostnad för guld.'},
+  {k:/\b(yields?)\b.*\b(rise|surge|jump|higher|climb)/i, nq:-2, gc:-2, c:'macro', sv:'Stigande obligationsräntor → tryck på högt värderade techbolag, som diskonteras hårdare.'},
+  {k:/\b(yields?)\b.*\b(fall|drop|slide|lower|decline)/i, nq:2, gc:2, c:'macro', sv:'Fallande räntor → lättnad för Nasdaq-värderingar, särskilt i de längsta tillväxtcaseen.'},
   // --- Dollar ---
-  {k:/\b(dollar|dxy|greenback)\b.*\b(surge|strength|stronger|rally|higher)/i, nq:-1, gc:-3, c:'macro', sv:'Starkare dollar är direkt motvind för guld, som prissätts i USD. Mild press även på NQ via globala vinster.'},
-  {k:/\b(dollar|dxy|greenback)\b.*\b(weak|falls|slide|lower|drops)/i, nq:1, gc:3, c:'macro', sv:'Svagare dollar → klassisk medvind för guld och stödjande för amerikanska storbolagsvinster.'},
+  {k:/\b(dollar|dxy|greenback)\b.*\b(surge|strength|stronger|rally|higher)/i, nq:-1, gc:-3, c:'macro', sv:'Starkare dollar pressar amerikanska bolags utlandsvinster — mild motvind för NQ, och en riskaversionssignal.'},
+  {k:/\b(dollar|dxy|greenback)\b.*\b(weak|falls|slide|lower|drops)/i, nq:1, gc:3, c:'macro', sv:'Svagare dollar → stödjande för amerikanska storbolagsvinster och brukar följas av riskaptit.'},
   // --- Arbetsmarknad ---
   {k:/\b(nonfarm|nfp|payrolls|jobs report)\b/i, nq:0, gc:0, c:'macro', sv:'Arbetsmarknadsdata — hög volatilitet i 5m-grafen kring släppet. Undvik entries de första staplarna.'},
-  {k:/\b(jobless claims|unemployment)\b.*\b(rise|higher|surge|increase)/i, nq:-1, gc:2, c:'macro', sv:'Svagare arbetsmarknad → recessionsoro men också ökad chans till räntesänkning. Guld gynnas mest.'},
-  {k:/\b(recession|hard landing|slowdown|contraction)\b/i, nq:-3, gc:2, c:'macro', sv:'Recessionsoro → riskaversion. Nasdaq säljs, guld söks som skydd.'},
-  {k:/\b(soft landing|resilient economy|robust growth)\b/i, nq:2, gc:-1, c:'macro', sv:'Mjuklandningsnarrativ → riskaptit upp, defensivt guld tappar relativt.'},
+  {k:/\b(jobless claims|unemployment)\b.*\b(rise|higher|surge|increase)/i, nq:-1, gc:2, c:'macro', sv:'Svagare arbetsmarknad → recessionsoro, men också ökad chans till räntesänkning. Dragkamp i indexet.'},
+  {k:/\b(recession|hard landing|slowdown|contraction)\b/i, nq:-3, gc:2, c:'macro', sv:'Recessionsoro → riskaversion. Nasdaq säljs först och hårdast av riskbarometrarna.'},
+  {k:/\b(soft landing|resilient economy|robust growth)\b/i, nq:2, gc:-1, c:'macro', sv:'Mjuklandningsnarrativ → riskaptit upp, gynnsamt för indexet.'},
   // --- Tech / Nasdaq ---
   {k:/\b(nvidia|nvda)\b/i, nq:2, gc:0, c:'nq', sv:'Nvidia är den tyngsta enskilda drivaren i Nasdaq-100 — rörelser här slår igenom direkt i NQ.'},
   {k:/\b(apple|microsoft|amazon|alphabet|google|meta|tesla|broadcom|aapl|msft|amzn|googl|tsla|avgo)\b/i, nq:1, gc:0, c:'nq', sv:'Megacap-nyhet. Dessa bolag väger tungt i indexet — kolla om rörelsen är bolagsspecifik eller bred.'},
@@ -1698,22 +1822,22 @@ const RULES = [
   {k:/\b(nasdaq|ndx|qqq|tech stocks)\b.*\b(slide|fall|drop|selloff|tumble|lower)/i, nq:-2, gc:0, c:'nq', sv:'Nasdaq under press — prioritera short-setups tills strukturen vänder.'},
   {k:/\b(nasdaq|ndx|qqq|s&p|wall street|stock market|futures)\b/i, nq:0, gc:0, c:'nq', sv:'Direkt indexrelaterat — läs mot 5m-strukturen innan du agerar.'},
   // --- Guld ---
-  {k:/\bgold\b.*\b(record|all-time high|surge|rally|jump|climbs?|higher)/i, nq:0, gc:3, c:'gold', sv:'Guld i styrka — säger något om riskaptit och realräntor, men handlas inte här.'},
-  {k:/\bgold\b.*\b(falls?|slide|drop|tumble|lower|retreat|profit-taking)/i, nq:0, gc:-3, c:'gold', sv:'Guld under press — vinsthemtagning eller starkare dollar. Läs det som dollarsignal.'},
-  {k:/\b(central bank).*(gold|bullion)|gold.*(central bank buying|reserves)/i, nq:0, gc:3, c:'gold', sv:'Centralbanksköp av guld är strukturell efterfrågan — stödjer golvet på längre sikt.'},
-  {k:/\b(etf).*(gold|bullion|inflow|outflow)/i, nq:0, gc:2, c:'gold', sv:'ETF-flöden i guld visar hur institutionellt kapital positionerar sig.'},
-  {k:/\b(gold|xau|bullion|silver|precious metal)/i, nq:0, gc:1, c:'gold', sv:'Guldrelaterat — väg in mot dollarn och realräntorna.'},
+  {k:/\bgold\b.*\b(record|all-time high|surge|rally|jump|climbs?|higher)/i, nq:0, gc:3, c:'gold', sv:'Guld i styrka — läs det som en signal om realräntor och riskaptit. Guld handlas inte i den här panelen.'},
+  {k:/\bgold\b.*\b(falls?|slide|drop|tumble|lower|retreat|profit-taking)/i, nq:0, gc:-3, c:'gold', sv:'Guld under press — oftast starkare dollar eller stigande realräntor. Läs det som dollarsignal, inte som en affär.'},
+  {k:/\b(central bank).*(gold|bullion)|gold.*(central bank buying|reserves)/i, nq:0, gc:3, c:'gold', sv:'Centralbanksköp av guld — strukturell efterfrågan och en fingervisning om synen på dollarn.'},
+  {k:/\b(etf).*(gold|bullion|inflow|outflow)/i, nq:0, gc:2, c:'gold', sv:'ETF-flöden i guld visar hur institutionellt kapital positionerar sig mellan risk och skydd.'},
+  {k:/\b(gold|xau|bullion|silver|precious metal)/i, nq:0, gc:1, c:'gold', sv:'Guldrelaterat — mest intressant som avläsning av dollarn och realräntorna.'},
   // --- Geopolitik / risk ---
-  {k:/\b(war|attack|strike|missile|invasion|conflict|escalat)/i, nq:-2, gc:3, c:'macro', sv:'Geopolitisk eskalering → flykt till säkerhet. Guld upp, index ned. Rörelserna är snabba och ofta kortlivade.'},
-  {k:/\b(ceasefire|peace deal|de-escalat|truce)\b/i, nq:2, gc:-2, c:'macro', sv:'Nedtrappning → riskpremien i guld faller tillbaka, risktillgångar lyfter.'},
-  {k:/\b(tariff|trade war|sanction|export control)/i, nq:-2, gc:2, c:'macro', sv:'Handelspolitisk friktion → osäkerhet kring marginaler i tech, stödjande för guld.'},
-  {k:/\b(shutdown|debt ceiling|default)\b/i, nq:-2, gc:2, c:'macro', sv:'Politisk osäkerhet i USA → riskpremie upp, guld gynnas.'},
+  {k:/\b(war|attack|strike|missile|invasion|conflict|escalat)/i, nq:-2, gc:3, c:'macro', sv:'Geopolitisk eskalering → flykt till säkerhet, index ned. Rörelserna är snabba och ofta kortlivade.'},
+  {k:/\b(ceasefire|peace deal|de-escalat|truce)\b/i, nq:2, gc:-2, c:'macro', sv:'Nedtrappning → riskpremien faller tillbaka och risktillgångar lyfter.'},
+  {k:/\b(tariff|trade war|sanction|export control)/i, nq:-2, gc:2, c:'macro', sv:'Handelspolitisk friktion → osäkerhet kring marginaler och leveranskedjor i tech.'},
+  {k:/\b(shutdown|debt ceiling|default)\b/i, nq:-2, gc:2, c:'macro', sv:'Politisk osäkerhet i USA → riskpremie upp och tunnare likviditet i indexet.'},
   // --- Övrigt makro ---
   {k:/\b(pmi|ism)\b/i, nq:0, gc:0, c:'macro', sv:'Konjunkturbarometer — påverkar tillväxtförväntningarna och därmed indexriktningen.'},
   {k:/\b(gdp)\b/i, nq:0, gc:0, c:'macro', sv:'BNP-data. Starkt = riskaptit men högre räntor; svagt = tvärtom.'},
-  {k:/\b(oil|crude|wti|brent|opec)\b/i, nq:-1, gc:1, c:'macro', sv:'Oljepriset styr inflationsförväntningarna — högre olja pressar tech och stödjer guld.'},
-  {k:/\b(china|beijing|pboc)\b/i, nq:0, gc:1, c:'macro', sv:'Kina-nyhet — påverkar global tillväxt, guldefterfrågan och halvledarkedjan.'},
-  {k:/\b(ecb|boj|bank of japan|bank of england)\b/i, nq:0, gc:1, c:'macro', sv:'Annan centralbank i rörelse — slår mot dollarn och därmed indirekt mot guld.'},
+  {k:/\b(oil|crude|wti|brent|opec)\b/i, nq:-1, gc:1, c:'macro', sv:'Oljepriset styr inflationsförväntningarna — högre olja pressar tech via räntebanan.'},
+  {k:/\b(china|beijing|pboc)\b/i, nq:0, gc:1, c:'macro', sv:'Kina-nyhet — påverkar global tillväxt och halvledarkedjan, alltså tungt i Nasdaq-100.'},
+  {k:/\b(ecb|boj|bank of japan|bank of england)\b/i, nq:0, gc:1, c:'macro', sv:'Annan centralbank i rörelse — slår mot dollarn och därmed indirekt mot amerikanska tillgångar.'},
   {k:/\b(bitcoin|crypto)\b/i, nq:1, gc:0, c:'macro', sv:'Krypto rör sig ofta i takt med Nasdaq som riskbarometer.'},
   {k:/\b(vix|volatility)\b.*\b(spike|surge|jump)/i, nq:-2, gc:1, c:'macro', sv:'Volatilitetsspik → minska storlek, bredda stopp. Rörelserna på 5m blir betydligt större.'}
 ];
@@ -1742,7 +1866,7 @@ function analyseHeadline(title, summary){
     }
   }
   nq = clamp(nq,-6,6); gc = clamp(gc,-6,6);
-  if(!svs.length) svs.push('Allmän marknadsnyhet utan tydlig riktningseffekt på NQ eller guld.');
+  if(!svs.length) svs.push('Allmän marknadsnyhet utan tydlig riktningseffekt på NQ.');
   return { nq, gc, cats:[...cats], sv:svs, hot: Math.abs(nq)>=3 || Math.abs(gc)>=3 };
 }
 
@@ -1969,7 +2093,7 @@ const STATE = {
   ctx:{}, signals:[], news:[], seNews:[], quotes:{}, se:{},
   bias:{nq:0, gc:0}, newsBias:{nq:0, gc:0},
   chartSym:'NQ', chartMode:'own', feed:{}, newsFilter:'all', sigFilter:'all',
-  lastPx:{}, stamp:0, loading:false
+  lastPx:{}, stamp:0, loading:false, newsOpen:null
 };
 
 function computeNewsBias(items){
@@ -2026,8 +2150,19 @@ function makeSummary(){
     : 'Inga nyhetsflöden kunde läsas in just nu — analysen bygger enbart på pris och struktur.';
 
   const plan = (()=>{
-    const act = STATE.signals.find(s=>s.status==='ACTIVE');
-    if(act) return `Aktiv setup: <b>${act.instLabel.split(' · ')[0]} ${act.side==='long'?'LONG':'SHORT'}</b> (${act.grade}-setup, ${act.backN}/${FAM_N} strategier) med entry ${fmt(act.entry,act.dec)}, stopp ${fmt(act.sl,act.dec)} och mål ${fmt(act.tp,act.dec)} (${Math.round(act.ptsTp)} ${act.unit}, R:R ${act.rr.toFixed(2)}). Målet är satt på ${act.tpBasis.toLowerCase()}.`;
+    const igang = STATE.signals.filter(x => x.status === 'ACTIVE');
+    if(igang.length){
+      const a2 = igang[0];
+      const R = nz(a2.openPnl) && a2.risk ? a2.openPnl/a2.risk : 0;
+      return `Pågående affär: <b>${a2.instLabel.split(' · ')[0]} ${a2.side==='long'?'LONG':'SHORT'}</b> ` +
+        `(${a2.grade}-setup, ${a2.backN}/${FAM_N} strategier) fylld på ${fmt(a2.entryFyllt||a2.entry,a2.dec)}, ` +
+        `nu ${fmtSigned(R,2)} R. Stopp ${fmt(a2.sl,a2.dec)}, mål ${fmt(a2.tp,a2.dec)} — den ligger kvar tills ett av dem nås` +
+        (igang.length > 1 ? `. Ytterligare ${igang.length-1} affär${igang.length>2?'er':''} är igång.` : '.');
+    }
+    const nasta = fokusSignal();
+    if(nasta) return `Ingen affär är igång. Närmast är <b>${nasta.instLabel.split(' · ')[0]} ${nasta.side==='long'?'LONG':'SHORT'}</b> ` +
+      `(${nasta.grade}-setup) som utlöses när priset ${nasta.needTxt||'når'} ${fmt(nasta.entry,nasta.dec)} — ` +
+      `${(nasta.dist/nasta.atr).toFixed(1)} ATR bort. Nivåerna är villkorade och ska inte förköpas.`;
     return 'Ingen setup är i entryzonen just nu — de listade nivåerna är villkorade och ska inte förköpas.';
   })();
 
@@ -2066,17 +2201,62 @@ function renderTape(){
   }).join('');
 }
 
+const KAT_NAMN = { nq:'Nasdaq/teknik', macro:'Makro och räntor', gold:'Råvaror', '':'Övrigt' };
+
+/* Kortet i listan. Klick fäller ut resten av analysen — hela texten ligger redan här,
+   så utfällningen kostar inget nätverksanrop. */
 function newsHTML(it, sv=false){
   const a = it.an || analyseHeadline(it.title, it.desc);
   it.an = a;
   const chips = [];
   if(a.nq) chips.push(`<span class="impact ${a.nq>0?'up':'dn'}">NQ ${a.nq>0?'▲':'▼'}${Math.abs(a.nq)}</span>`);
   if(!chips.length) chips.push('<span class="impact nu">NEUTRAL</span>');
-  return `<a class="news ${a.hot?'hot':''}" href="${esc(it.link)}" target="_blank" rel="noopener">
+
+  const styrka = Math.abs(a.nq) >= 3 ? 'stark' : Math.abs(a.nq) === 2 ? 'tydlig' : Math.abs(a.nq) === 1 ? 'svag' : 'ingen';
+  const riktning = a.nq > 0 ? 'positiv' : a.nq < 0 ? 'negativ' : 'neutral';
+  const kats = (a.cats && a.cats.length ? a.cats : ['']).map(k => KAT_NAMN[k] || k).join(', ');
+  const tid = new Intl.DateTimeFormat('sv-SE', {hour:'2-digit', minute:'2-digit', day:'numeric', month:'short'}).format(new Date(it.ts));
+  const ur = (it.desc || '').replace(/\s+/g, ' ').trim();
+
+  const punkter = a.sv.length > 1
+    ? '<ul>' + a.sv.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>'
+    : '<p>' + esc(a.sv[0] || '') + '</p>';
+
+  return `<div class="news ${a.hot?'hot':''}" data-nid="${esc(it.link || it.title)}">
     <div class="nt"><span class="src">${esc(it.src)}</span>${chips.join('')}<span class="ago">${agoTxt(it.ts)}</span></div>
-    <h4>${esc(it.title)}</h4>
+    <h4>${esc(it.title)}<span class="pil">▼</span></h4>
     <div class="sv">🇸🇪 ${esc(a.sv[0])}</div>
-  </a>`;
+    <div class="mer"><div class="mer-in">
+      <div class="rad">
+        <span>Källa <b>${esc(it.src)}</b></span>
+        <span>Publicerad <b>${tid}</b> (${agoTxt(it.ts)} sedan)</span>
+        <span>Kategori <b>${esc(kats)}</b></span>
+        <span>Effekt på NQ <b>${styrka} ${riktning}</b>${a.nq ? ' (' + (a.nq>0?'+':'') + a.nq + ' av ±6)' : ''}</span>
+        ${a.hot ? '<span><b style="color:var(--scarlet-2)">Högt läge</b></span>' : ''}
+      </div>
+      <h5>Vad det betyder</h5>
+      ${punkter}
+      ${ur ? '<h5>Ur flödet</h5><p>' + esc(ur.slice(0, 420)) + (ur.length > 420 ? '…' : '') + '</p>' : ''}
+      ${it.link && it.link !== '#' ? '<a class="kalla" href="' + esc(it.link) + '" target="_blank" rel="noopener">Läs hos källan ↗</a>' : ''}
+    </div></div>
+  </div>`;
+}
+
+/* Dragspel: ett kort i taget öppet, och valet överlever att listan ritas om. */
+function nyhetKlick(e){
+  const kort = e.target.closest('.news');
+  if(!kort || e.target.closest('a')) return;          // låt länkar vara länkar
+  const id = kort.dataset.nid;
+  const oppen = kort.classList.contains('open');
+  kort.parentNode.querySelectorAll('.news.open').forEach(x => x.classList.remove('open'));
+  if(!oppen){ kort.classList.add('open'); STATE.newsOpen = id; }
+  else STATE.newsOpen = null;
+}
+
+function nyhetAterstall(el){
+  if(!STATE.newsOpen) return;
+  const kort = el.querySelector('.news[data-nid="' + (window.CSS && CSS.escape ? CSS.escape(STATE.newsOpen) : STATE.newsOpen) + '"]');
+  if(kort) kort.classList.add('open');
 }
 
 function renderNews(){
@@ -2090,16 +2270,26 @@ function renderNews(){
   $('#newsAge').textContent = STATE.news.length ? agoTxt(STATE.news[0].ts)+' sedan senaste' : '–';
   el.innerHTML = list.length ? list.slice(0,45).map(x=>newsHTML(x)).join('')
     : '<div class="empty">Inga rubriker matchar filtret.<br><span class="dim">Om listan är tom helt: byt CORS-proxy under Inställningar.</span></div>';
+  nyhetAterstall(el);
 }
 
 function renderSeNews(){
   const el = $('#seNews');
-  el.innerHTML = STATE.seNews.length ? STATE.seNews.slice(0,25).map(it=>`
-    <a class="news" href="${esc(it.link)}" target="_blank" rel="noopener">
+  el.innerHTML = STATE.seNews.length ? STATE.seNews.slice(0,25).map(it=>{
+    const ur = (it.desc || '').replace(/\s+/g, ' ').trim();
+    const tid = new Intl.DateTimeFormat('sv-SE', {hour:'2-digit', minute:'2-digit', day:'numeric', month:'short'}).format(new Date(it.ts));
+    return `<div class="news" data-nid="${esc(it.link || it.title)}">
       <div class="nt"><span class="src">${esc(it.src)}</span><span class="ago">${agoTxt(it.ts)}</span></div>
-      <h4>${esc(it.title)}</h4>
-    </a>`).join('')
+      <h4>${esc(it.title)}<span class="pil">▼</span></h4>
+      <div class="mer"><div class="mer-in">
+        <div class="rad"><span>Källa <b>${esc(it.src)}</b></span><span>Publicerad <b>${tid}</b></span></div>
+        ${ur ? '<p>' + esc(ur.slice(0, 420)) + (ur.length > 420 ? '…' : '') + '</p>' : '<p class="dim">Flödet skickar ingen text utöver rubriken.</p>'}
+        ${it.link && it.link !== '#' ? '<a class="kalla" href="' + esc(it.link) + '" target="_blank" rel="noopener">Läs hos källan ↗</a>' : ''}
+      </div></div>
+    </div>`;
+  }).join('')
     : '<div class="empty">Kunde inte hämta svenska flöden.</div>';
+  nyhetAterstall(el);
 }
 
 function renderSe(){
@@ -2174,6 +2364,38 @@ function renderBias(){
     n ? `Teknik ${(n.trend>0?'+':'')+Math.round(n.trend)} · nyheter ${(STATE.newsBias.nq>0?'+':'')+Math.round(STATE.newsBias.nq)} · RSI ${Math.round(n.rsi)}. ${n.px>n.vwap?'Över':'Under'} VWAP.` : '–');
 }
 
+/* Innan affären är igång: villkoret. När den är igång: varför den lever och
+   vad som gäller härifrån. */
+function rationaleHTML(s){
+  const gradRad = `<b>${s.grade}-setup:</b> ${s.backN} av ${FAM_N} strategier bakom ${s.side==='long'?'uppgång':'nedgång'}` +
+    (s.backN ? ' — ' + esc(s.backers.map(k=>FAM[k]).join(', ').toLowerCase())
+             : ' — ingen av familjerna bekräftar riktningen ännu') +
+    (s.against.length ? '. Emot: ' + esc(s.against.map(k=>FAM[k]).join(', ').toLowerCase()) : '') + '.' +
+    (s.also && s.also.length ? ' <span class="dim">Sammanslagen med ' + esc(s.also.join(' + ').toLowerCase()) + ' på samma nivå.</span>' : '');
+
+  if(s.status === 'ACTIVE'){
+    const R = nz(s.openPnl) && s.risk ? s.openPnl/s.risk : 0;
+    const klocka = s.oppnad ? new Intl.DateTimeFormat('sv-SE',{hour:'2-digit',minute:'2-digit'}).format(new Date(s.oppnad)) : '–';
+    const lage = R > 0.05 ? 'i vinst' : R < -0.05 ? 'i förlust' : 'på noll';
+    return gradRad + '<br>' +
+      `<b>Aktiv sedan ${klocka}:</b> fylld på <span class="mono">${fmt(s.entryFyllt || s.entry, s.dec)}</span>, ligger nu ` +
+      `<b class="${R>=0?'pos':'neg'}">${fmtSigned(R,2)} R</b> (${fmtSigned(s.openPnl||0, 1)} ${s.unit}) — ${lage}. ` +
+      `Positionen står kvar som aktiv tills målet eller stoppen nås.<br>` +
+      `<b>Härifrån:</b> ${fmt(s.kvarMal,1)} ${s.unit} (${(s.kvarMal/s.atr).toFixed(1)} ATR) upp till målet ` +
+      `<span class="mono">${fmt(s.tp,s.dec)}</span> och ${fmt(s.kvarStopp,1)} ${s.unit} ned till stoppen ` +
+      `<span class="mono">${fmt(s.sl,s.dec)}</span>` +
+      (nz(s.restRR) ? ` — ${s.restRR.toFixed(2)} kvar att hämta per enhet risk härifrån.` : '.') + '<br>' +
+      `<b>Varför den är bra:</b> ${esc(s.why[0]||'')} Målet ligger på ${esc((s.tpBasis||'').toLowerCase())}.` +
+      `<span class="why">${esc(s.why.slice(1).join(' '))} ${esc(s.tpMacro||'')}</span>`;
+  }
+
+  return gradRad + '<br>' +
+    `<b>Utlöses när:</b> priset ${esc(s.needTxt||'når')} <span class="mono">${fmt(s.entry,s.dec)}</span>.<br>` +
+    `<b>Mål:</b> ${esc(s.tpBasis)} — ${(Math.abs(s.tp-s.entry)/s.atr).toFixed(1)} ATR från entry. <span class="dim">${esc(s.tpMacro)}</span><br>` +
+    `<b>Varför:</b> ${esc(s.why[0]||'')}` +
+    `<span class="why">${esc(s.why.slice(1).join(' '))}</span>`;
+}
+
 function renderSignals(){
   const el = $('#sigList');
   let list = STATE.signals.slice();
@@ -2190,8 +2412,10 @@ function renderSignals(){
     return;
   }
 
-  const order = {ACTIVE:0, 'LÖPANDE':1, 'NÄRA':2, 'VÄNTAR':3, TP:4, SL:5};
-  list.sort((a,b)=> (GRADE_RANK[a.grade]-GRADE_RANK[b.grade])
+  const order = {ACTIVE:0, 'NÄRA':2, 'VÄNTAR':3, TP:4, SL:5, 'LÖPANDE':1};
+  const rang = x => x.status === 'ACTIVE' ? 0 : (x.status === 'TP' || x.status === 'SL') ? 1 : 2;
+  list.sort((a,b)=> (rang(a)-rang(b))                       // pågående och avslutade affärer först
+                 || (GRADE_RANK[a.grade]-GRADE_RANK[b.grade])
                  || (order[a.status]-order[b.status])
                  || (b.conf-a.conf));
 
@@ -2236,14 +2460,7 @@ function renderSignals(){
           <div class="confbar ${cCls}"><i style="width:${s.conf}%"></i></div>
           <b class="mono" style="font-size:11px">${s.conf}%</b></div>
       </div>
-      <div class="rationale">
-        <b>${s.grade}-setup:</b> ${s.backN} av ${FAM_N} strategier bakom ${s.side==='long'?'uppgång':'nedgång'}${s.backN ? ' — ' + esc(s.backers.map(k=>FAM[k]).join(', ').toLowerCase()) : ' — ingen av familjerna bekräftar riktningen ännu'}${s.against.length ? '. Emot: ' + esc(s.against.map(k=>FAM[k]).join(', ').toLowerCase()) : ''}.
-        ${s.also && s.also.length ? '<span class="dim">Sammanslagen med ' + esc(s.also.join(' + ').toLowerCase()) + ' på samma nivå.</span>' : ''}<br>
-        <b>Utlöses när:</b> priset ${esc(s.needTxt||'når')} <span class="mono">${fmt(s.entry,s.dec)}</span>.<br>
-        <b>Mål:</b> ${esc(s.tpBasis)} — ${(Math.abs(s.tp-s.entry)/s.atr).toFixed(1)} ATR från entry. <span class="dim">${esc(s.tpMacro)}</span><br>
-        <b>Varför:</b> ${esc(s.why[0]||'')}
-        <span class="why">${esc(s.why.slice(1).join(' '))}</span>
-      </div>
+      <div class="rationale">${rationaleHTML(s)}</div>
     </div>`;
   }).join('');
 
@@ -2311,8 +2528,7 @@ function renderTvLevels(){
   const box = $('#tvLevels');
   if(STATE.chartMode !== 'tv'){ box.style.display = 'none'; return; }
   box.style.display = 'flex';
-  const act = STATE.signals.find(s=>s.status==='ACTIVE' && s.inst===STATE.chartSym)
-           || STATE.signals.find(s=>s.inst===STATE.chartSym);
+  const act = fokusSignal(STATE.chartSym);
   if(!act){ box.innerHTML = '<span class="note">Ingen aktiv setup för det här instrumentet just nu.</span>'; return; }
   const d = act.dec;
   box.innerHTML = `
@@ -2347,8 +2563,7 @@ function renderMainChart(){
   const bars = c.bars.slice(-n);
   const off = c.bars.length - bars.length;
   const cut = arr => arr.slice(off);
-  const act = STATE.signals.find(s=>s.status==='ACTIVE' && s.inst===STATE.chartSym)
-           || STATE.signals.find(s=>s.inst===STATE.chartSym);
+  const act = fokusSignal(STATE.chartSym);
   const levels = [];
   if(act){
     levels.push({p:act.entry, color:'#4FD3FF', label:'ENTRY', dash:[6,3], w:1.4});
@@ -2359,7 +2574,7 @@ function renderMainChart(){
               levels.push({p:c.prev.l, color:'#5D7EA5', label:'PDL', dash:[2,4]}); }
 
   drawCandles($('#mainChart'), {
-    bars, height:330, dec:c.inst.dec,
+    bars, height: window.innerWidth < 680 ? 250 : 330, dec:c.inst.dec,
     lines:[
       {data:cut(c.e9a),   color:'#4FD3FF', w:1.2},
       {data:cut(c.e21a),  color:'#FF2E4C', w:1.2},
@@ -2379,14 +2594,14 @@ function renderMainChart(){
    ========================================================================== */
 const CORE = {
   nodes: [
-    {k:'yahoo',  n:'YAHOO 5M',     a:-2.90, heat:0, c:'#4FD3FF'},
-    {k:'feed',   n:'TV-FEED',      a:-2.10, heat:0, c:'#00E58C'},
-    {k:'quotes', n:'SIDOPRISER',   a:-1.30, heat:0, c:'#8CE6FF'},
-    {k:'ind',    n:'EMA·ATR·VWAP', a:-0.45, heat:0, c:'#4FD3FF'},
-    {k:'news',   n:'RSS VÄRLDEN',  a: 0.35, heat:0, c:'#FFB020'},
-    {k:'newsSe', n:'RSS SVERIGE',  a: 1.15, heat:0, c:'#FFB020'},
-    {k:'bias',   n:'NYHETSBIAS',   a: 1.95, heat:0, c:'#FF6A80'},
-    {k:'setups', n:'SETUPS',       a: 2.75, heat:0, c:'#FF2E4C'}
+    {k:'yahoo',  n:'YAHOO 5M',     kort:'YAHOO', a:-2.90, heat:0, c:'#4FD3FF'},
+    {k:'feed',   n:'TV-FEED',      kort:'TV',    a:-2.10, heat:0, c:'#00E58C'},
+    {k:'quotes', n:'SIDOPRISER',   kort:'PRIS',  a:-1.30, heat:0, c:'#8CE6FF'},
+    {k:'ind',    n:'EMA·ATR·VWAP', kort:'EMA',   a:-0.45, heat:0, c:'#4FD3FF'},
+    {k:'news',   n:'RSS VÄRLDEN',  kort:'RSS',   a: 0.35, heat:0, c:'#FFB020'},
+    {k:'newsSe', n:'RSS SVERIGE',  kort:'RSS SE',a: 1.15, heat:0, c:'#FFB020'},
+    {k:'bias',   n:'NYHETSBIAS',   kort:'BIAS',  a: 1.95, heat:0, c:'#FF6A80'},
+    {k:'setups', n:'SETUPS',       kort:'SETUP', a: 2.75, heat:0, c:'#FF2E4C'}
   ],
   pings:[], waves:[], arrows:[], count:0, last:'–', busy:0, spin:0, frame:0, log:[],
   cv:null, g:null, w:0, h:296, state:'startar…'
@@ -2420,7 +2635,8 @@ function coreFrame(){
   if(!cv || document.hidden) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth || 640, h = CORE.h;
+  const w = cv.clientWidth || 640;
+  const h = CORE.h = w < 620 ? 226 : 296;              // lägre ruta på telefon
   if(w !== CORE.w || !CORE.g){
     cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
     cv.style.height = h + 'px';
@@ -2436,8 +2652,9 @@ function coreFrame(){
   CORE.spin += 0.004 + CORE.busy*0.022;
   const F = CORE.frame;
 
+  const smal = w < 620;
   const cx = w*0.5, cy = h*0.44;
-  const rx = Math.min(w*0.38, 340), ry = Math.min(h*0.30, 86);
+  const rx = Math.min(w*(smal ? 0.30 : 0.38), 340), ry = Math.min(h*0.30, 86);
 
   const bias = clamp(STATE.bias.nq || 0, -100, 100);
   const hot  = bias >= 0 ? [0,229,140] : [255,51,85];
@@ -2621,10 +2838,10 @@ function coreFrame(){
     g.textAlign = mitten ? 'center' : (left ? 'right' : 'left');
     g.textBaseline = 'middle';
     g.fillStyle = 'rgba(159,187,218,' + (0.42 + nd.heat*0.55) + ')';
-    g.font = '600 8px Inter, system-ui, sans-serif';
-    const lx = p.x + (mitten ? 0 : (left ? -10 : 10));
+    g.font = '600 ' + (smal ? 6.5 : 8) + 'px Inter, system-ui, sans-serif';
+    const lx = p.x + (mitten ? 0 : (left ? -8 : 8));
     const ly = p.y + (mitten ? (p.y < cy ? -12 : 12) : 0);
-    g.fillText(nd.n, lx, ly);
+    g.fillText(smal ? (nd.kort || nd.n) : nd.n, lx, ly);
     if(nd.heat > 0.02){                             // liten stapel som brinner ned
       const bw = 22*nd.heat;
       g.fillStyle = nd.c; g.globalAlpha = 0.5;
@@ -2651,12 +2868,14 @@ function coreFrame(){
 
   g.font = '9px ui-monospace, Menlo, Consolas, monospace';
   const rader = CORE.log;
+  const maxTecken = Math.max(18, Math.floor((w - 30)/5.42));    // så raden aldrig skärs av kanten
   rader.forEach((L, i) => {
+    const hel = L.txt.length > maxTecken ? L.txt.slice(0, maxTecken - 1) + '…' : L.txt;
     const sist = i === rader.length - 1;
-    const visa = sist ? Math.min(L.txt.length, Math.floor((F - L.born)*0.9)) : L.txt.length;
+    const visa = sist ? Math.min(hel.length, Math.floor((F - L.born)*0.9)) : hel.length;
     const y = h - 12 - (rader.length - 1 - i)*11;
     g.fillStyle = 'rgba(159,187,218,' + (0.20 + 0.55*(i + 1)/rader.length) + ')';
-    g.fillText('› ' + L.txt.slice(0, visa) + (sist && (visa < L.txt.length || F % 30 < 15) ? '▌' : ''), 13, y);
+    g.fillText('› ' + hel.slice(0, visa) + (sist && (visa < hel.length || F % 30 < 15) ? '▌' : ''), 13, y);
   });
 
   if(F % 20 === 0){
@@ -2793,7 +3012,7 @@ function btStats(trades){
 }
 
 function drawEquity(cv, curve){
-  const h = 190;
+  const h = window.innerWidth < 680 ? 155 : 190;
   const setup = setupCanvas(cv, h);
   const g = setup.g, w = setup.w;
   const padL = 56, padR = 12, padT = 12, padB = 20;
@@ -3035,6 +3254,17 @@ function buildAllSignals(){
   const byGrade = (a,b) => (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf);
   const nqAll = nq ? generateSignals(nq).sort(byGrade) : [];
   const sig = nqAll.slice(0, 6);
+  // en påbörjad affär ska synas tills den är avslutad, även om motorn slutat föreslå den
+  const idn = new Set(sig.map(x => x.id));
+  LIVE.forEach((st, id) => {
+    if(!st.sig || idn.has(id)) return;
+    if(st.slutAt && Date.now() - st.slutAt > 1800000){ LIVE.delete(id); return; }   // släpp efter 30 min
+    const ctx = STATE.ctx[st.sig.inst];
+    if(!ctx) return;
+    sig.push(Object.assign({}, st.sig, { bars: ctx.bars, ctxPx: ctx.px, atr: ctx.atr || st.sig.atr }));
+    idn.add(id);
+  });
+
   const pxBy = {}; SYMS.forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
   STATE.signals = assignStatus(sig, pxBy);
   corePing('setups', 2);
@@ -3139,6 +3369,8 @@ function wire(){
     $('#modal').classList.remove('show');
     restartTimer(); refresh();
   };
+  $('#newsList').addEventListener('click', nyhetKlick);
+  $('#seNews').addEventListener('click', nyhetKlick);
   $$('[data-nf]').forEach(b=> b.onclick = ()=>{
     $$('[data-nf]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
     STATE.newsFilter = b.dataset.nf; renderNews();

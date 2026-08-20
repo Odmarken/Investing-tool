@@ -216,6 +216,26 @@ hakar upp sig. Kurvan visar vad reglerna faktiskt gav — den kan falla.
 * **Nya symboler** läggs till på tre ställen som måste stämma överens:
   `SYMBOLS` i `worker.js`, `options` i Pine-skriptet och `INSTR` i html-filen.
   `SYMS` i html-filen härleds ur `INSTR`, så resten av sidan följer med.
+* **Telefonvänlig.** Under 1240 px lägger sig kolumnerna på rad, under 680 px byter
+  toppbaren till två rader, knapparna blir fingerstora, korten smalnar av och graferna
+  blir lägre. Signalkärnan ritar kortare nodetiketter och en lägre ruta på smal skärm,
+  och avläsningsloggen kapas efter kanten. Inställningsrutan blir helskärm, och fälten
+  får 16 px text på pekskärm så att iOS inte zoomar in när du klickar i dem. Mätt i
+  webbläsaren vid 390 px: sidans bredd är 382 px, alltså inget vågrätt skrollande —
+  utom tickerbandet, som ska skrollas.
+* **ACTIVE betyder att affären är igång.** En setup blir aktiv först när priset
+  faktiskt träffar entrynivån — att ligga nära räcker inte, och en omladdning fyller
+  inte gamla nivåer. Därefter står den kvar som aktiv tills målet eller stoppen nås,
+  även om motorn slutar föreslå den och även om priset går långt ifrån entryn.
+  Pågående affärer ligger överst i listan, och kortets motivering byter innehåll:
+  i stället för villkoret visas när den fylldes, hur den ligger i R, hur långt det är
+  kvar till mål och stopp, och varför setupen är bra. Avslutade affärer ligger kvar
+  i en halvtimme så att du ser utfallet.
+* **Klicka på en rubrik** i nyhetsflödet så fälls en flik ned med hela analysen:
+  källa, publiceringstid, kategori, hur hårt nyheten väger på NQ (skala ±6), alla
+  slutsatser regelmotorn drog, flödets egen text och en länk till källan. Ett kort
+  i taget är öppet, och det förblir öppet när listan uppdateras. Samma sak i den
+  svenska panelen, fast med flödestexten i stället för analysen.
 * **Utan lokal server** fungerar sidan fortfarande — då används de publika
   proxyerna i proxylistan, men de är trögare och faller ofta bort. Går ingen
   fram visas simulerad data med en tydlig varningsbanner.
