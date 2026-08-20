@@ -15,21 +15,20 @@ för Yahoos fördröjda data.
 | `worker.js` | Cloudflare Worker som tar emot TradingView-alerts och serverar staplarna |
 | `wrangler.toml` | Inställningar för utrullning av workern |
 | `riptide-feed.pine` | Pine-skriptet som skickar staplarna från TradingView |
-| `package.json` | Startkommandon och beroenden (`npm start`, `npm run demo`, …) |
-| `.dev.vars.example` | Mall för API-nycklarna — kopiera till `.dev.vars` |
+| `package.json` | Startkommandon (`npm start`, `npm run demo`, …) |
 
 ---
 
 ## 1. Kör lokalt
 
 ```bash
-npm install     # en gång — hämtar Anthropic-SDK:t som chatten använder
 npm start
 ```
 
-Öppna sedan **http://localhost:8080/**. Servern kräver Node 18 eller senare.
+Öppna sedan **http://localhost:8080/**. Ingen installation behövs — servern använder
+bara Node (18 eller senare) utan ett enda beroende.
 
-Servern ger dig fyra saker:
+Servern ger dig tre saker:
 
 * **Sidan** på `/`.
 * **En CORS-proxy** på `/proxy?url=…`. Yahoo och de flesta RSS-flöden blockerar
@@ -39,8 +38,6 @@ Servern ger dig fyra saker:
 * **Workern** på `/feed` — samma `worker.js` som körs i Cloudflare, men med
   staplarna i `.dev-bars.json` i stället för KV. Alltså `/feed/ingest`,
   `/feed/bars?s=NQ` och `/feed/status`.
-* **Miguel** på `/ai` — chatten mitt på sidan, som skickar frågan vidare till
-  Claude tillsammans med ett färskt dataunderlag. Se avsnittet nedan.
 
 Inställningarna du gör i ⚙-rutan sparas i webbläsaren och gäller nästa gång också.
 
@@ -156,73 +153,6 @@ håll slås ihop till ett kort, med båda motiveringarna kvar.
 Överst i signallistan står strategiläget — pilarna visar vad varje familj röstar på
 just nu, så det syns direkt varför ingen A-setup finns. Knapparna **A** och **B** i
 panelhuvudet filtrerar listan.
-
----
-
-## Miguel — strategigranskaren
-
-Mellan sammanfattningen och grafen sitter en chatt. Miguel är en granskare, inte en
-hejaklack: hans systemprompt säger åt honom att leta svagheter i reglerna, ifrågasätta
-statistiken och säga ifrån när underlaget är för tunt.
-
-Med varje fråga skickas ett färskt underlag från sidan — pris, ATR, RSI, VWAP, EMA-nivåer,
-dagens och gårdagens range, öppningsrangen, hur de fyra familjerna röstar, ICT-läget
-(svep, MSS, FVG, killzone), nyhetsbias, alla setups i listan med entry/stopp/mål och
-backtestets siffror per grad. Dessutom en beskrivning av reglerna i motorn, så han har
-något att granska. Han är instruerad att bara använda siffror ur underlaget.
-
-### Nycklar
-
-Chatten går via `/ai` i `dev-server.js`, så nycklarna stannar på servern och hamnar aldrig
-i webbläsaren. Lägg dem i en fil som heter `.dev.vars` bredvid `dev-server.js`:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...        # direktvägen till Claude
-OPENROUTER_API_KEY=sk-or-...        # valfritt: alla modeller via OpenRouter
-```
-
-Det finns en färdig mall: kopiera `.dev.vars.example` till `.dev.vars` och fyll i.
-Filen är gitignorerad; alternativet är miljövariabler. Servern läser om `.dev.vars`
-när den ändras, så du behöver **inte** starta om — skicka bara frågan igen. Räcker det
-med en nyckel? Ja: har du bara
-OpenRouter-nyckeln går allt den vägen, har du bara Anthropic-nyckeln finns bara
-direktvalet. Utan nycklar fungerar resten av sidan som vanligt och chatten svarar med
-hur du sätter dem.
-
-### Modellväljare (OpenRouter)
-
-Uppe till höger i chattpanelen väljer du vilken modell Miguel svarar med:
-
-* **`claude-opus-5 · direkt`** — går rakt till Anthropic med officiella SDK:t, adaptivt
-  tänkande och server-side fallback (avböjer modellen körs frågan om på en annan modell
-  inom samma anrop; saknas beta-flaggan på kontot görs anropet om utan den).
-* **Allt annat** går via OpenRouter. Listan hämtas live från `openrouter.ai/api/v1/models`
-  och grupperas per leverantör — anthropic, openai, google, x-ai, deepseek, meta-llama,
-  mistralai och qwen, de åtta senaste modellerna från var och en, med pris per miljon
-  tokens i etiketten. Listan cachas i tio minuter.
-
-Systemprompten och dataunderlaget är identiska oavsett modell, så det är samma Miguel —
-bara en annan hjärna. Svarsbubblan visar vilken modell som svarade, vilket gör det enkelt
-att ställa samma fråga till två modeller och jämföra. Valet sparas i webbläsaren.
-Varje fråga kostar pengar hos den leverantör du valt — utom modeller märkta **(gratis)**,
-som alltid finns med i listan oavsett hur nya de är.
-
-Räcker inte krediten till hela svaret säger OpenRouter ifrån i stället för att korta av.
-Servern läser då ut hur många tokens saldot räcker till och kör om med det taket, och
-statusraden säger *"Saldot räcker till N tokens — kortar svaret"*.
-
-### Minnet
-
-Samtalet sparas i webbläsaren och ligger kvar när du laddar om sidan — rutan säger
-*"Samtalet nedan är sparat sedan tidigare — han minns det"* och räknaren uppe till höger
-visar hur många inlägg som finns i minnet. Varje svar minns också vilken modell som gav det.
-
-* **120 inlägg** sparas lokalt (`riptide.miguel.chat.v1` i localStorage).
-* **60 000 tecken** av historiken följer med varje fråga. Ryms inte allt läggs det äldsta
-  ihop till ett kort referat som skickas först, så tråden aldrig bryts helt.
-* **Rensa** tömmer både rutan och minnet.
-
-Ingenting av detta lämnar din dator utom det som skickas med frågan till modellen.
 
 ---
 
