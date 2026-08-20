@@ -1,0 +1,5 @@
+node_modules/
+.dev-bars.json
+.dev-bars.demo.json
+.wrangler/
+.dev.vars

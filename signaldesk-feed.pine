@@ -1,0 +1,25 @@
+//@version=6
+// Signaldesk feed — lägg på NQ1! och GC1! i 5-minutersgrafen.
+// Skapa sedan ett alert med villkoret "Any alert() function call" och din Worker-URL som webhook.
+indicator("Signaldesk feed", overlay = true)
+
+nyckel    = input.string("BYT-UT-MIG", "Hemlig nyckel", tooltip = "Samma värde som FEED_KEY i din Cloudflare Worker (lokalt: 'dev' om du inte satt något).")
+symbolkod = input.string("NQ", "Symbolkod", options = ["NQ", "GC"], tooltip = "NQ för Nasdaq-terminen, GC för guldterminen. Måste vara en av symbolerna i worker.js.")
+
+f(x) => str.tostring(x, format.mintick)
+
+meddelande =
+      '{"k":"' + nyckel + '"' +
+      ',"s":"' + symbolkod + '"' +
+      ',"t":'  + str.tostring(time) +
+      ',"o":'  + f(open) +
+      ',"h":'  + f(high) +
+      ',"l":'  + f(low) +
+      ',"c":'  + f(close) +
+      ',"v":'  + str.tostring(nz(volume)) + '}'
+
+if barstate.isconfirmed
+    alert(meddelande, alert.freq_once_per_bar_close)
+
+// Liten indikator på att skriptet lever
+plotchar(barstate.isconfirmed, "skickad", "", location.bottom, color.new(color.teal, 0), size = size.tiny)

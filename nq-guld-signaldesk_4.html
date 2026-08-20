@@ -560,11 +560,13 @@ footer b{color:var(--muted)}
 
       <label>Egen proxy-URL (Cloudflare Worker e.d.)</label>
       <input id="setCustom" type="text" placeholder="https://nq-proxy.ditt-konto.workers.dev/?url=">
-      <div class="hint">Marknadsdata hämtas från Yahoo Finance chart-API. Webbläsare blockerar det direkt (CORS), därför krävs oftast en proxy. Om allt fallerar visas simulerad data med varning.</div>
+      <div class="hint">Marknadsdata hämtas från Yahoo Finance chart-API. Webbläsare blockerar det direkt (CORS), därför krävs oftast en proxy. Om allt fallerar visas simulerad data med varning.
+      Kör du sidan via <code>npm start</code> fylls fältet automatiskt med den lokala proxyn <code>http://localhost:8080/proxy?url=</code>, som hämtar från din egen uppkoppling — den fungerar när de publika proxyerna strular.</div>
 
       <label>TradingView-feed — Cloudflare Worker-URL</label>
       <input id="setFeed" type="text" placeholder="https://signaldesk-feed.dittnamn.workers.dev">
-      <div class="hint">Lämna tomt för att bara köra Yahoo. Ifylld används realtidsstaplarna från dina TradingView-alerts, med Yahoo som historik så att EMA och ATR blir uppvärmda.</div>
+      <div class="hint">Lämna tomt för att bara köra Yahoo. Ifylld används realtidsstaplarna från dina TradingView-alerts, med Yahoo som historik så att EMA och ATR blir uppvärmda.
+      Kör du sidan via <code>npm start</code> ligger en lokal kopia av workern på <code>http://localhost:8080/feed</code>. Inställningarna sparas i webbläsaren.</div>
 
       <label>Uppdateringsintervall (sekunder)</label>
       <input id="setInterval" type="number" min="15" max="900" value="60">
@@ -602,6 +604,7 @@ footer b{color:var(--muted)}
 const CFG = {
   proxy: 'auto',
   customProxy: '',        // t.ex. https://min-proxy.workers.dev/?url=
+  feedUrl: '',            // t.ex. https://signaldesk-feed.dittnamn.workers.dev
   refreshSec: 60,
   minPts: 50,
   maxPts: 400,
@@ -612,7 +615,7 @@ const CFG = {
     'https://www.investing.com/rss/commodities.rss',
     'https://www.investing.com/rss/stock_Indices.rss',
     'https://www.financialjuice.com/feed.ashx?xy=rss',
-    'https://www.kitco.com/rss/KitcoNews.xml',
+    'https://news.google.com/rss/search?q=gold+price+OR+XAUUSD+OR+%22gold+futures%22+when:1d&hl=en-US&gl=US&ceid=US:en',
     'https://www.fxstreet.com/rss/news',
     'https://www.cnbc.com/id/20910258/device/rss/rss.html',
     'https://feeds.content.dowjones.io/public/rss/mw_topstories',
@@ -625,6 +628,44 @@ const CFG = {
     'https://news.google.com/rss/search?q=(b%C3%B6rsen+OR+OMXS30+OR+Riksbanken+OR+kronan)+when:1d&hl=sv&gl=SE&ceid=SE:sv'
   ]
 };
+
+/* --------- inställningar sparas i webbläsaren --------- */
+const CFG_KEY = 'signaldesk.cfg.v1';
+const cleanUrl = u => {
+  const v = String(u == null ? '' : u).trim().replace(/\/+$/, '');
+  return (v === 'undefined' || v === 'null') ? '' : v;
+};
+function loadCfg(){
+  let saved;
+  try{ saved = JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); }
+  catch(e){ saved = null; }
+  if(!saved || typeof saved !== 'object') return;
+  ['proxy','risk'].forEach(k => { if(typeof saved[k] === 'string') CFG[k] = saved[k]; });
+  ['customProxy','feedUrl'].forEach(k => { if(typeof saved[k] === 'string') CFG[k] = cleanUrl(saved[k]); });
+  ['refreshSec','minPts','maxPts'].forEach(k => { if(isFinite(+saved[k]) && +saved[k] > 0) CFG[k] = +saved[k]; });
+  ['feeds','feedsSe'].forEach(k => {
+    if(Array.isArray(saved[k])){
+      const list = saved[k].filter(x => typeof x === 'string' && x.trim());
+      if(list.length) CFG[k] = list;
+    }
+  });
+}
+/* Serveras sidan av dev-server.js finns en proxy på samma adress — använd den. */
+function useLocalProxy(){
+  const local = ['localhost', '127.0.0.1', '[::1]'];
+  if(!CFG.customProxy && local.indexOf(location.hostname) >= 0){
+    CFG.customProxy = location.origin + '/proxy?url=';
+  }
+}
+function saveCfg(){
+  try{
+    localStorage.setItem(CFG_KEY, JSON.stringify({
+      proxy:CFG.proxy, customProxy:CFG.customProxy, feedUrl:CFG.feedUrl,
+      refreshSec:CFG.refreshSec, minPts:CFG.minPts, maxPts:CFG.maxPts,
+      risk:CFG.risk, feeds:CFG.feeds, feedsSe:CFG.feedsSe
+    }));
+  }catch(e){ /* privat läge eller full lagring — kör vidare utan att spara */ }
+}
 
 const INSTR = {
   NQ: { key:'NQ', yahoo:'NQ=F', alt:['^NDX','QQQ'], label:'NQ · Nasdaq-100', unit:'p',
@@ -723,13 +764,19 @@ async function grab(url, {timeout=7000, json=false} = {}){
     try{
       const r = await fetch(p.f(url), {signal:ctl.signal, cache:'no-store', mode:'cors'});
       clearTimeout(t);
+      if(r.status === 404 || r.status === 410){       // adressen finns inte — fler proxies hjälper inte
+        throw Object.assign(new Error('HTTP '+r.status+' — adressen finns inte'), {dead:true});
+      }
       if(!r.ok) throw new Error('HTTP '+r.status);
       const txt = await r.text();
       if(!txt || txt.length < 20) throw new Error('tom svar');
       goodProxy = PROXIES.indexOf(p);
       netFail = 0;
       return json ? JSON.parse(txt) : txt;
-    }catch(e){ clearTimeout(t); lastErr = e; }
+    }catch(e){
+      clearTimeout(t); lastErr = e;
+      if(e && e.dead) throw e;                        // nätet är uppe, det är adressen som är fel
+    }
   }
   netFail++;
   if(netFail >= 3) netDeadUntil = Date.now() + 40000;   // sluta hamra döda proxies
@@ -770,6 +817,7 @@ async function fetchQuote(ySym){
 }
 
 /* --------- TradingView-feed via egen Cloudflare Worker --------- */
+let feedErr = null;                       // senaste felet mot Worker-URL:en
 async function fetchFeedBars(key){
   if(!CFG.feedUrl) return null;
   const ctl = new AbortController();
@@ -779,8 +827,13 @@ async function fetchFeedBars(key){
     clearTimeout(t);
     if(!r.ok) throw new Error('HTTP '+r.status);
     const a = await r.json();
-    return Array.isArray(a) ? a : null;
-  }catch(e){ clearTimeout(t); return null; }
+    if(!Array.isArray(a)) throw new Error('oväntat svar');
+    return a;
+  }catch(e){
+    clearTimeout(t);
+    feedErr = (e && e.name === 'AbortError') ? 'timeout' : (e && e.message) || 'okänt fel';
+    return null;
+  }
 }
 
 function mergeBars(base, feed){
@@ -1987,6 +2040,7 @@ let cycle = 0;
 
 async function loadMarket(){
   const demoK = {}; let liveOk = 0;
+  feedErr = null;
   for(const k of ['NQ','GC']){
     const inst = INSTR[k];
     let d = null;
@@ -2030,7 +2084,8 @@ async function loadMarket(){
     }else{
       const any = ['NQ','GC'].map(k=>f[k]).find(Boolean);
       pill.className = 'sesspill pre';
-      $('#feedTxt').textContent = any ? ('TV-feed tyst ' + Math.round(any.ageMin) + ' min') : 'TV-feed tom';
+      $('#feedTxt').textContent = any ? ('TV-feed tyst ' + Math.round(any.ageMin) + ' min')
+                                 : (feedErr ? ('TV-feed nås inte · ' + feedErr) : 'TV-feed tom');
     }
   }
   return liveOk;
@@ -2102,32 +2157,36 @@ function buildAllSignals(){
   STATE.signals = assignStatus(sig, pxBy);
 }
 
+function paint(){
+  STATE.bias.nq = buildBias('NQ');
+  STATE.bias.gc = buildBias('GC');
+  buildAllSignals();
+
+  renderTape(); renderNews(); renderSeNews(); renderSe(); renderRisk();
+  renderBias(); renderTech(); renderLevels(); renderSignals(); renderMainChart();
+  $('#summaryTxt').innerHTML = makeSummary();
+  STATE.stamp = Date.now();
+  const ts = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  $('#sumStamp').textContent = 'kl ' + ts + (DEMO ? ' · SIMULERAD' : ' · live');
+  $('#footStamp').textContent = 'Senast uppdaterad ' + ts + ' · datakälla: ' +
+    (DEMO ? 'simulerad (ingen anslutning)'
+          : (['NQ','GC'].some(k=>STATE.feed[k] && STATE.feed[k].live)
+              ? 'TradingView realtid via egen webhook (Yahoo som historik)'
+              : ('Yahoo Finance via ' + (goodProxy!=null?PROXIES[goodProxy].n:'direkt'))));
+}
+
 async function refresh(){
   if(STATE.loading) return;
   STATE.loading = true;
   resetNet();
   $('#btnRefresh').innerHTML = '<span class="spin"></span> Hämtar…';
   try{
-    await Promise.all([
-      loadMarket(),
-      (cycle % 3 === 0) ? loadSideQuotes() : Promise.resolve(),
-      (cycle % 2 === 0 || !STATE.news.length) ? loadNews() : Promise.resolve()
-    ]);
-    STATE.bias.nq = buildBias('NQ');
-    STATE.bias.gc = buildBias('GC');
-    buildAllSignals();
-
-    renderTape(); renderNews(); renderSeNews(); renderSe(); renderRisk();
-    renderBias(); renderTech(); renderLevels(); renderSignals(); renderMainChart();
-    $('#summaryTxt').innerHTML = makeSummary();
-    STATE.stamp = Date.now();
-    const ts = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    $('#sumStamp').textContent = 'kl ' + ts + (DEMO ? ' · SIMULERAD' : ' · live');
-    $('#footStamp').textContent = 'Senast uppdaterad ' + ts + ' · datakälla: ' +
-      (DEMO ? 'simulerad (ingen anslutning)'
-            : (['NQ','GC'].some(k=>STATE.feed[k] && STATE.feed[k].live)
-                ? 'TradingView realtid via egen webhook (Yahoo som historik)'
-                : ('Yahoo Finance via ' + (goodProxy!=null?PROXIES[goodProxy].n:'direkt'))));
+    const side = (cycle % 3 === 0) ? loadSideQuotes() : Promise.resolve();
+    const news = (cycle % 2 === 0 || !STATE.news.length) ? loadNews() : Promise.resolve();
+    await loadMarket();
+    paint();                       // priser och grafer ritas direkt — de väntar inte på nyhetsflödena
+    await Promise.all([side, news]);
+    paint();                       // nyheter, nyhetsbias och sidopriser fylls på när de landat
     $('#bnErr').classList.remove('show');
   }catch(e){
     $('#bnErrTxt').innerHTML = '<b>Fel vid uppdatering:</b> ' + esc(e.message||String(e)) + ' — försök byta proxy under Inställningar.';
@@ -2153,7 +2212,7 @@ function wire(){
   $('#btnRefresh').onclick = refresh;
   $('#btnSettings').onclick = ()=>{
     $('#setProxy').value = CFG.proxy;
-    $('#setFeed').value = CFG.feedUrl;
+    $('#setFeed').value = CFG.feedUrl || '';
     $('#setCustom').value = CFG.customProxy;
     $('#setInterval').value = CFG.refreshSec;
     $('#setFeeds').value = CFG.feeds.join('\n');
@@ -2165,15 +2224,16 @@ function wire(){
   $('#btnClose').onclick = ()=> $('#modal').classList.remove('show');
   $('#modal').onclick = e => { if(e.target.id==='modal') $('#modal').classList.remove('show'); };
   $('#btnSave').onclick = ()=>{
-    CFG.customProxy = $('#setCustom').value.trim();
+    CFG.customProxy = cleanUrl($('#setCustom').value);
     CFG.proxy = $('#setProxy').value;
-    CFG.feedUrl = $('#setFeed').value.trim().replace(/\/+$/,'');
+    CFG.feedUrl = cleanUrl($('#setFeed').value);
     CFG.refreshSec = clamp(+$('#setInterval').value||60, 15, 900);
     CFG.feeds   = $('#setFeeds').value.split('\n').map(s=>s.trim()).filter(Boolean);
     CFG.feedsSe = $('#setFeedsSe').value.split('\n').map(s=>s.trim()).filter(Boolean);
     CFG.minPts  = clamp(+$('#setMinP').value||50, 10, 1000);
     CFG.maxPts  = clamp(+$('#setMaxP').value||400, CFG.minPts+10, 3000);
     CFG.risk    = $('#setRisk').value;
+    saveCfg();
     goodProxy = null;
     $('#modal').classList.remove('show');
     restartTimer(); refresh();
@@ -2205,6 +2265,8 @@ function restartTimer(){
   timer = setInterval(refresh, CFG.refreshSec*1000);
 }
 
+loadCfg();
+useLocalProxy();
 wire();
 tick(); setInterval(tick, 1000);
 refresh();

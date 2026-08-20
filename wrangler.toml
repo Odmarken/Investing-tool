@@ -1,0 +1,15 @@
+name = "signaldesk-feed"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# Skapas med:  npx wrangler kv namespace create BARS
+# Klistra in id:t som wrangler skriver ut här nedanför.
+[[kv_namespaces]]
+binding = "BARS"
+id = "KLISTRA_IN_DITT_KV_ID"
+
+# Hemligheten sätts separat, inte i den här filen:
+#   npx wrangler secret put FEED_KEY
+#
+# Vill du bara prova lokalt behöver du varken KV-id eller deploy:
+#   npm start   kör samma worker.js på http://localhost:8080/feed
