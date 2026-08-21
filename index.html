@@ -644,8 +644,6 @@ footer b{color:var(--muted)}
         <span><em style="background:#FF2E4C"></em>EMA 21</span>
         <span><em style="background:#FFB020"></em>EMA 50</span>
         <span><em style="background:#8CE6FF;opacity:.8"></em>VWAP</span>
-        <span><em style="background:#00E58C"></em>Mål</span>
-        <span><em style="background:#FF3355"></em>SL</span>
         <span><em style="background:#FFB020"></em>Motstånd 15m</span>
         <span><em style="background:#2BD6C4"></em>Stöd 15m</span>
         <span class="dim">dra = panorera · tidsaxeln = sträck staplarna · prisaxeln = sträck priset · scrolla = zoom</span>
@@ -2007,7 +2005,6 @@ function renderMainChart(){
   if(bars.length < 2) return;
   const off = start;
   const cut = arr => arr.slice(off, slut);
-  const act = fokusSignal(STATE.chartSym);
   const sistaPris = bars[bars.length - 1].c;
   // Nivåerna räknas på 15-minutersstaplar: det synliga fönstret plus lite historik
   // bakåt, så att zonerna hinner få träffar även när man zoomat in hårt.
@@ -2020,11 +2017,8 @@ function renderMainChart(){
     color: z.roll === 'motstånd' ? '#FFB020' : '#2BD6C4',
     label: z.namn, dash:[3,4], w: 1 + Math.min(1, z.traff*0.25)
   }));
-  if(act){
-    levels.push({p:act.entry, color:'#4FD3FF', label:'ENTRY', dash:[6,3], w:1.4});
-    levels.push({p:act.sl,    color:'#FF3355', label:'SL',    dash:[4,3], w:1.4});
-    levels.push({p:act.tp,    color:'#00E58C', label:'MÅL',   dash:[4,3], w:1.6});
-  }
+  // Entry, stopp och mål ritas inte här — de hör hemma på signalkortens minigrafer.
+  // Stora grafen visar bara strukturen: stöd, motstånd och gårdagens ytterlägen.
   if(c.prev){ levels.push({p:c.prev.h, color:'#5D7EA5', label:'PDH', dash:[2,4]});
               levels.push({p:c.prev.l, color:'#5D7EA5', label:'PDL', dash:[2,4]}); }
 
@@ -2037,8 +2031,7 @@ function renderMainChart(){
       {data:cut(c.vwapArr), color:'rgba(140,230,255,.75)', w:1.6, dash:[6,4]}
     ],
     levels,
-    zones: act ? [{a:act.entry, b:act.sl, color: act.side==='long'?'rgba(255,51,85,.06)':'rgba(255,51,85,.06)'},
-                  {a:act.entry, b:act.tp, color:'rgba(0,229,140,.05)'}] : []
+    zones: []
   });
   const q = STATE.quotes[STATE.chartSym]||{};
   const zonTxt = zoner.length
