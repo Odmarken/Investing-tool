@@ -363,6 +363,14 @@ och sedan var femte minut, så du kan prova hela kedjan innan du rullar ut.
   priset ritas som **R1/R2** i gult och de två under som **S1/S2** i turkost, och de
   räknas om varje gång du zoomar, drar eller får ny data.
   TradingView-widgeten är borttagen — grafen är helt egen.
+* **Kommande händelser** ligger överst i nyhetsflödet: nästa fem inplanerade
+  makrosläpp med klockslag, nedräkning, prognos och föregående värde, hämtade från
+  TradingViews publika kalender. Tunga släpp markeras rött, och är ett sådant inom
+  45 minuter skriver sammanfattningen ut en varning om att vänta ut de första
+  staplarna. Nedräkningen tickar varje halvminut, listan hämtas om var tjugonde varv.
+* **Dra i prisaxeln** till höger för att sträcka priset i höjdled, som i TradingView —
+  uppåt gör staplarna högre, nedåt plattar ut dem. Dubbelklick eller *Återställ* ger
+  normal skala igen.
 * **Klicka på en rubrik** i nyhetsflödet så fälls en flik ned med hela analysen:
   källa, publiceringstid, kategori, hur hårt nyheten väger på NQ (skala ±6), alla
   slutsatser regelmotorn drog, flödets egen text och en länk till källan. Ett kort

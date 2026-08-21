@@ -41,8 +41,18 @@ const PROXY_VARDAR = [
   'finance.yahoo.com', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com',
   'news.google.com', 'investing.com', 'financialjuice.com', 'fxstreet.com',
   'cnbc.com', 'dowjones.io', 'marketwatch.com', 'reuters.com', 'kitco.com',
-  'di.se', 'dn.se', 'svt.se', 'omni.se', 'placera.se'
+  'di.se', 'dn.se', 'svt.se', 'omni.se', 'placera.se',
+  'economic-calendar.tradingview.com'
 ];
+
+/* Några källor kräver att anropet ser ut att komma från deras egen sida. */
+const EXTRA_HUVUDEN = {
+  'economic-calendar.tradingview.com': {
+    origin: 'https://www.tradingview.com',
+    referer: 'https://www.tradingview.com/economic-calendar/'
+  }
+};
+
 const proxyOK = host => PROXY_VARDAR.some(v => host === v || host.endsWith('.' + v));
 
 export function tomtKonto(){
@@ -225,7 +235,8 @@ export const api = onRequest(
       if(!proxyOK(u.hostname)){ res.status(403).json({ error: 'värden är inte tillåten här', host: u.hostname }); return; }
       try{
         const r = await fetch(u, { redirect: 'follow',
-          headers: { 'user-agent': UA, accept: '*/*', 'accept-language': 'en-US,en;q=0.9,sv;q=0.8' } });
+          headers: Object.assign({ 'user-agent': UA, accept: '*/*', 'accept-language': 'en-US,en;q=0.9,sv;q=0.8' },
+                                 EXTRA_HUVUDEN[u.hostname] || {}) });
         const txt = await r.text();
         res.status(r.status);
         res.set('Content-Type', r.headers.get('content-type') || 'text/plain; charset=utf-8');

@@ -291,6 +291,22 @@ header.topbar{
 .rationale .why{display:block;margin-top:4px;color:var(--muted);font-size:10.5px}
 
 /* ---------- NYHETER ---------- */
+.kalender{border-bottom:1px solid var(--line);background:rgba(3,6,14,.45)}
+.kalender .kh{display:flex;align-items:center;gap:7px;padding:7px 12px 5px;font-size:9px;letter-spacing:.9px;
+  text-transform:uppercase;color:var(--muted);font-weight:800}
+.kalender .kh .snart{margin-left:auto;font-size:9.5px;letter-spacing:0;text-transform:none;font-weight:600}
+.krad{display:grid;grid-template-columns:52px 10px minmax(0,1fr) auto;gap:8px;align-items:center;
+  padding:5px 12px;font-size:10.5px;border-top:1px solid rgba(18,38,62,.6)}
+.krad:first-of-type{border-top:none}
+.krad .tid{font-family:var(--mono);font-size:10px;color:var(--text-2)}
+.krad .vikt{width:7px;height:7px;border-radius:50%;background:var(--muted-2)}
+.krad .vikt.hog{background:var(--scarlet);box-shadow:0 0 8px rgba(255,46,76,.6)}
+.krad .vikt.mellan{background:var(--amber)}
+.krad .namn{color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.krad .kvar{font-family:var(--mono);font-size:9.5px;color:var(--muted);white-space:nowrap}
+.krad.strax{background:rgba(255,46,76,.08)}
+.krad.strax .kvar{color:var(--scarlet-2);font-weight:700}
+.krad .siffror{grid-column:3/5;font-size:9.5px;color:var(--muted);margin-top:-2px}
 .news{border-bottom:1px solid var(--line);padding:9px 12px;transition:.15s;display:block}
 .news:hover{background:rgba(30,90,255,.06)}
 .news:last-child{border-bottom:none}
@@ -559,6 +575,7 @@ footer b{color:var(--muted)}
           <button class="ct" data-nf="hot">Högt läge</button>
         </div>
       </div>
+      <div class="kalender" id="kalender"></div>
       <div class="pb tight scrolly" style="--h:640px" id="newsList">
         <div class="empty"><span class="spin"></span> Hämtar flöden…</div>
       </div>
@@ -618,7 +635,7 @@ footer b{color:var(--muted)}
         <div class="chart-tabs" style="margin-left:auto;gap:5px">
           <button class="ct" data-zoom="ut" title="Zooma ut">−</button>
           <button class="ct" data-zoom="in" title="Zooma in">+</button>
-          <button class="ct" data-zoom="reset" title="Tillbaka till senaste staplarna">Återställ</button>
+          <button class="ct" data-zoom="reset" title="Tillbaka till senaste staplarna och normal prisskala">Återställ</button>
         </div>
       </div>
       <div class="chartbox" id="ownBox"><canvas id="mainChart" height="330"></canvas></div>
@@ -631,7 +648,7 @@ footer b{color:var(--muted)}
         <span><em style="background:#FF3355"></em>SL</span>
         <span><em style="background:#FFB020"></em>Motstånd 15m</span>
         <span><em style="background:#2BD6C4"></em>Stöd 15m</span>
-        <span class="dim">dra = panorera · dra i tidsaxeln = sträck staplarna · scrolla = zoom</span>
+        <span class="dim">dra = panorera · tidsaxeln = sträck staplarna · prisaxeln = sträck priset · scrolla = zoom</span>
         <span style="margin-left:auto" id="chartMeta" class="mono"></span>
       </div>
     </div>
@@ -1167,6 +1184,83 @@ async function fetchFeeds(list){
   return out.slice(0, 90);
 }
 
+/* --------------------------------------------------------------------------
+   Kommande händelser — makrokalendern framåt i tiden, inte bara det som hänt.
+   Hämtas från TradingViews publika kalender genom samma proxykedja som allt
+   annat, och läggs överst i nyhetsflödet med nedräkning.
+   -------------------------------------------------------------------------- */
+const KALENDER_URL = 'https://economic-calendar.tradingview.com/events';
+
+async function hamtaKalender(){
+  const fran = new Date(Date.now() - 3600000).toISOString();
+  const till = new Date(Date.now() + 6*86400000).toISOString();
+  try{
+    const svar = await grab(KALENDER_URL + '?from=' + fran + '&to=' + till + '&countries=US',
+                            { json:true, timeout:12000, budget:18000 });
+    const lista = (svar && svar.result) || [];
+    STATE.kalender = lista
+      .map(x => ({
+        t: new Date(x.date).getTime(),
+        namn: x.title || x.indicator || '',
+        vikt: typeof x.importance === 'number' ? x.importance : -1,
+        prognos: x.forecast, forra: x.previous, enhet: x.unit || '',
+        period: x.period || ''
+      }))
+      .filter(x => isFinite(x.t) && x.namn)
+      .sort((a,b) => a.t - b.t);
+    corePing('news', 1);
+    coreRead('kalender: ' + STATE.kalender.filter(x => x.t > Date.now()).length + ' kommande händelser');
+  }catch(e){ /* kalendern är en bonus — sidan fungerar utan den */ }
+}
+
+/* Nästa tunga händelse, om den är nära nog att påverka en affär. */
+function nastaTunga(minuter = 60){
+  const nu = Date.now();
+  return (STATE.kalender || []).find(x => x.vikt >= 1 && x.t > nu && x.t - nu < minuter*60000) || null;
+}
+
+function renderKalender(){
+  const el = $('#kalender');
+  if(!el) return;
+  const nu = Date.now();
+  const kommande = (STATE.kalender || []).filter(x => x.t > nu - 300000);
+  if(!kommande.length){ el.innerHTML = ''; return; }
+
+  const viktigast = kommande.filter(x => x.vikt >= 1).slice(0, 3);
+  const ovriga = kommande.filter(x => x.vikt < 1);
+  const visa = viktigast.concat(ovriga).sort((a,b) => a.t - b.t).slice(0, 5);
+
+  const tung = nastaTunga(60);
+  const kvarTxt = ms => {
+    const m = Math.round(ms/60000);
+    if(m < 0) return 'pågår';
+    if(m < 60) return 'om ' + m + ' min';
+    const h = Math.floor(m/60);
+    return 'om ' + h + ' h' + (m%60 ? ' ' + (m%60) + ' min' : '');
+  };
+
+  el.innerHTML =
+    '<div class="kh"><span>Kommande</span>' +
+    (tung ? '<span class="snart" style="color:var(--scarlet-2)">⚠ ' + esc(tung.namn) + ' ' + kvarTxt(tung.t - nu) + '</span>'
+          : '<span class="snart dim">' + kommande.length + ' inplanerade</span>') +
+    '</div>' +
+    visa.map(x => {
+      const strax = x.vikt >= 1 && x.t - nu < 45*60000 && x.t > nu;
+      const viktKl = x.vikt >= 1 ? 'hog' : x.vikt === 0 ? 'mellan' : '';
+      const siffror = [
+        x.prognos != null && x.prognos !== '' ? 'prognos ' + esc(String(x.prognos)) + esc(x.enhet) : '',
+        x.forra != null && x.forra !== '' ? 'förra ' + esc(String(x.forra)) + esc(x.enhet) : ''
+      ].filter(Boolean).join(' · ');
+      return '<div class="krad' + (strax ? ' strax' : '') + '">' +
+        '<span class="tid">' + new Intl.DateTimeFormat('sv-SE',{weekday:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(x.t)) + '</span>' +
+        '<span class="vikt ' + viktKl + '"></span>' +
+        '<span class="namn" title="' + esc(x.namn) + '">' + esc(x.namn) + '</span>' +
+        '<span class="kvar">' + kvarTxt(x.t - nu) + '</span>' +
+        (siffror ? '<span class="siffror">' + siffror + '</span>' : '') +
+      '</div>';
+    }).join('');
+}
+
 /* ==========================================================================
    7. GRAFER (canvas)
    ========================================================================== */
@@ -1260,6 +1354,10 @@ function drawCandles(cv, opts){
   (opts.levels||[]).forEach(L=>{ if(nz(L.p)){ hi=Math.max(hi,L.p); lo=Math.min(lo,L.p); }});
   (opts.lines||[]).forEach(ln=> ln.data.forEach(v=>{ if(nz(v)){ hi=Math.max(hi,v); lo=Math.min(lo,v); }}));
   const pad = (hi-lo)*0.08 || 1; hi+=pad; lo-=pad;
+  if(opts.prisSkala && opts.prisSkala !== 1){        // dragen prisaxel sträcker eller klämmer skalan
+    const mitt = (hi+lo)/2, halva = (hi-lo)/2*opts.prisSkala;
+    hi = mitt + halva; lo = mitt - halva;
+  }
   const Y = p => padT + (hi-p)/(hi-lo)*ch;
   const X = i => padL + (i+0.5)*(cw/bars.length);
   const bw = Math.max(1.2, Math.min(9, cw/bars.length*0.62));
@@ -1350,8 +1448,8 @@ const STATE = {
   ctx:{}, signals:[], news:[], seNews:[], quotes:{}, se:{},
   bias:{nq:0, gc:0}, newsBias:{nq:0, gc:0},
   chartSym:'NQ', feed:{}, newsFilter:'all', sigFilter:'all',
-  vy:{ n:96, off:0 },                       // grafens fönster: antal staplar och hur långt bak
-  lastPx:{}, stamp:0, loading:false, newsOpen:null
+  vy:{ n:96, off:0, pris:1 },               // grafens fönster: staplar, hur långt bak, prisskala
+  lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[]
 };
 
 function computeNewsBias(items){
@@ -1424,6 +1522,12 @@ function makeSummary(){
     return 'Ingen setup är i entryzonen just nu — de listade nivåerna är villkorade och ska inte förköpas.';
   })();
 
+  const tung = nastaTunga(45);
+  const kalWarn = tung
+    ? '<b style="color:var(--scarlet-2)">' + esc(tung.namn) + '</b> släpps om ' +
+      Math.max(1, Math.round((tung.t - Date.now())/60000)) + ' minuter — vänta ut de första staplarna efter siffran.'
+    : '';
+
   const warn = ss.k==='closed'
     ? '<b style="color:var(--amber)">Marknaden är stängd</b> — nivåerna gäller som förberedelse inför nästa session.'
     : (ss.k==='globex' ? 'Nattsessionen har tunn likviditet: räkna med falska brott och håll storleken nere.' : '');
@@ -1432,6 +1536,7 @@ function makeSummary(){
   if(hot.length){
     html += '<ul>' + hot.map(h=>`<li><b>${esc(h.title.slice(0,110))}</b><br><span class="dim">${esc(h.an.sv[0])}</span></li>`).join('') + '</ul>';
   }
+  if(kalWarn) html += '<br>' + kalWarn;
   if(warn) html += '<br>'+warn;
   return html;
 }
@@ -1802,10 +1907,12 @@ function grafInteraktion(){
   if(!cv || cv.dataset.wired) return;
   cv.dataset.wired = '1';
   const v = STATE.vy;
-  let drar = false, strackning = false, senastX = 0, pinch = 0;
-  const iTidsaxeln = e => {
+  let drar = false, strackning = 'graf', senastX = 0, senastY = 0, pinch = 0;
+  const zon = e => {
     const r = cv.getBoundingClientRect();
-    return (e.clientY - r.top) > r.height - 26 || (e.clientX - r.left) > r.width - 62;
+    if((e.clientX - r.left) > r.width - 62) return 'pris';   // prisaxeln till höger
+    if((e.clientY - r.top) > r.height - 26)  return 'tid';    // tidsaxeln längst ned
+    return 'graf';
   };
 
   const antalStaplar = () => { const c = STATE.ctx[STATE.chartSym]; return c ? c.bars.length : 400; };
@@ -1814,6 +1921,7 @@ function grafInteraktion(){
     const max = antalStaplar();
     v.n = clamp(Math.round(v.n), 24, Math.max(24, max));
     v.off = clamp(Math.round(v.off), 0, Math.max(0, max - v.n));
+    v.pris = clamp(v.pris || 1, 0.12, 6);
     renderMainChart();
   };
 
@@ -1823,17 +1931,23 @@ function grafInteraktion(){
     putsa();
   }, { passive:false });
 
+  const pekare = { pris:'ns-resize', tid:'ew-resize', graf:'grab' };
   cv.addEventListener('mousedown', e => {
-    drar = true; strackning = iTidsaxeln(e); senastX = e.clientX;
-    cv.style.cursor = strackning ? 'ew-resize' : 'grabbing';
+    drar = true; strackning = zon(e); senastX = e.clientX; senastY = e.clientY;
+    cv.style.cursor = strackning === 'graf' ? 'grabbing' : pekare[strackning];
   });
-  cv.addEventListener('mousemove', e => {
-    if(!drar) cv.style.cursor = iTidsaxeln(e) ? 'ew-resize' : 'grab';
-  });
+  cv.addEventListener('mousemove', e => { if(!drar) cv.style.cursor = pekare[zon(e)]; });
   window.addEventListener('mousemove', e => {
     if(!drar) return;
-    const dx = e.clientX - senastX;
-    if(strackning){                                   // dra åt höger = sträck ut staplarna
+    const dx = e.clientX - senastX, dy = e.clientY - senastY;
+
+    if(strackning === 'pris'){                        // dra uppåt = sträck ut priset
+      if(Math.abs(dy) < 2) return;
+      v.pris = clamp(v.pris * (1 + dy/300), 0.12, 6);
+      senastY = e.clientY; putsa();
+      return;
+    }
+    if(strackning === 'tid'){                         // dra åt höger = bredare staplar
       if(Math.abs(dx) < 2) return;
       v.n = v.n * (1 - dx/420);
       senastX = e.clientX; putsa();
@@ -1843,13 +1957,13 @@ function grafInteraktion(){
     const steg = Math.round(dx/perStapel);
     if(steg){ v.off += steg; senastX = e.clientX; putsa(); }
   });
-  window.addEventListener('mouseup', () => { drar = false; strackning = false; cv.style.cursor = 'grab'; });
-  cv.addEventListener('dblclick', () => { v.n = 96; v.off = 0; putsa(); });
+  window.addEventListener('mouseup', () => { drar = false; strackning = 'graf'; cv.style.cursor = 'grab'; });
+  cv.addEventListener('dblclick', () => { v.n = 96; v.off = 0; v.pris = 1; putsa(); });
   cv.style.cursor = 'grab';
 
   cv.addEventListener('touchstart', e => {
     if(e.touches.length === 2){ pinch = nypBredd(e.touches); drar = false; strackning = false; }
-    else { drar = true; strackning = iTidsaxeln(e.touches[0]); senastX = e.touches[0].clientX; }
+    else { drar = true; strackning = zon(e.touches[0]); senastX = e.touches[0].clientX; senastY = e.touches[0].clientY; }
   }, { passive:true });
   cv.addEventListener('touchmove', e => {
     if(e.touches.length === 2 && pinch){
@@ -1859,8 +1973,15 @@ function grafInteraktion(){
       return;
     }
     if(!drar) return;
-    const dx = e.touches[0].clientX - senastX;
-    if(strackning){
+    const dx = e.touches[0].clientX - senastX, dy = e.touches[0].clientY - senastY;
+    if(strackning === 'pris'){
+      if(Math.abs(dy) < 2) return;
+      e.preventDefault();
+      v.pris = clamp(v.pris * (1 + dy/300), 0.12, 6);
+      senastY = e.touches[0].clientY; putsa();
+      return;
+    }
+    if(strackning === 'tid'){
       if(Math.abs(dx) < 2) return;
       e.preventDefault();
       v.n = v.n * (1 - dx/420);
@@ -1871,7 +1992,7 @@ function grafInteraktion(){
     const steg = Math.round(dx/perStapel);
     if(steg){ e.preventDefault(); v.off += steg; senastX = e.touches[0].clientX; putsa(); }
   }, { passive:false });
-  cv.addEventListener('touchend', () => { drar = false; strackning = false; pinch = 0; });
+  cv.addEventListener('touchend', () => { drar = false; strackning = 'graf'; pinch = 0; });
 }
 
 function renderMainChart(){
@@ -1908,7 +2029,7 @@ function renderMainChart(){
               levels.push({p:c.prev.l, color:'#5D7EA5', label:'PDL', dash:[2,4]}); }
 
   drawCandles($('#mainChart'), {
-    bars, height: window.innerWidth < 680 ? 250 : 330, dec:c.inst.dec,
+    bars, height: window.innerWidth < 680 ? 250 : 330, dec:c.inst.dec, prisSkala: v.pris,
     lines:[
       {data:cut(c.e9a),   color:'#4FD3FF', w:1.2},
       {data:cut(c.e21a),  color:'#FF2E4C', w:1.2},
@@ -2899,7 +3020,7 @@ function paint(){
   STATE.bias.nq = buildBias('NQ');
   buildAllSignals();
 
-  renderTape(); renderNews(); renderSeNews(); renderSe(); renderRisk();
+  renderTape(); renderNews(); renderKalender(); renderSeNews(); renderSe(); renderRisk();
   renderBias(); renderTech(); renderLevels(); renderSignals(); renderMainChart();
   $('#summaryTxt').innerHTML = makeSummary();
   STATE.stamp = Date.now();
@@ -2921,12 +3042,13 @@ async function refresh(){
   try{
     const side = (cycle % 3 === 0) ? loadSideQuotes() : Promise.resolve();
     const news = (cycle % 2 === 0 || !STATE.news.length) ? loadNews() : Promise.resolve();
+    const kal  = (cycle % 20 === 0 || !STATE.kalender.length) ? hamtaKalender() : Promise.resolve();
     await loadMarket();
     coreState('analyserar');
     paint();                       // priser och grafer ritas direkt — de väntar inte på nyhetsflödena
     demoTick();                    // lokalt konto: öppnar och stänger sina positioner
     demoHamtaServer();             // serverkonto: hämtar läget om en Worker-URL är inlagd
-    await Promise.all([side, news]);
+    await Promise.all([side, news, kal]);
     paint();                       // nyheter, nyhetsbias och sidopriser fylls på när de landat
     renderDemo();
     coreState('vaktar marknaden');
@@ -2943,7 +3065,9 @@ async function refresh(){
 }
 
 /* ---------- klocka ---------- */
+let kalTick = 0;
 function tick(){
+  if(++kalTick % 30 === 0) renderKalender();          // nedräkningen uppdateras varje halvminut
   $('#clkSe').textContent = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   $('#clkNy').textContent = timeIn('America/New_York',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const s = sessionState();
@@ -3002,7 +3126,7 @@ function wire(){
     const v = STATE.vy, k = b.dataset.zoom;
     if(k === 'in')  v.n = Math.max(24, Math.round(v.n*0.75));
     if(k === 'ut')  v.n = Math.min(1200, Math.round(v.n*1.35));
-    if(k === 'reset'){ v.n = 96; v.off = 0; }
+    if(k === 'reset'){ v.n = 96; v.off = 0; v.pris = 1; }
     renderMainChart();
   });
   grafInteraktion();
