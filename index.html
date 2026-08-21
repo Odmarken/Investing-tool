@@ -734,7 +734,9 @@ footer b{color:var(--muted)}
 
       <label>TradingView-feed — Cloudflare Worker-URL</label>
       <input id="setFeed" type="text" placeholder="https://riptide-feed.dittnamn.workers.dev">
-      <div class="hint">Lämna tomt för att bara köra Yahoo. Ifylld används realtidsstaplarna från dina TradingView-alerts, med Yahoo som historik så att EMA och ATR blir uppvärmda.
+      <div class="hint">Ifylld gör tre saker: realtidsstaplarna från dina TradingView-alerts används,
+      demokontot flyttar till servern och räknas om var femte minut även när sidan är stängd, och sidan hämtar
+      marknadsdata genom workern — vilket är det som får den att fungera lika bra på en publik adress som hemma.
       Kör du sidan via <code>npm start</code> ligger en lokal kopia av workern på <code>http://localhost:8080/feed</code>. Inställningarna sparas i webbläsaren.</div>
 
       <label>Uppdateringsintervall (sekunder)</label>
@@ -829,12 +831,16 @@ function loadCfg(){
     }
   });
 }
-/* Serveras sidan av dev-server.js finns en proxy på samma adress — använd den. */
+/* Proxy att hämta marknadsdata genom, i tur och ordning:
+   1. den du själv skrivit in,
+   2. dev-serverns egen när sidan körs lokalt,
+   3. din Cloudflare-worker när dess adress är inlagd — det är den som gör att
+      sidan fungerar lika bra på GitHub Pages som hemma. */
 function useLocalProxy(){
+  if(CFG.customProxy) return;
   const local = ['localhost', '127.0.0.1', '[::1]'];
-  if(!CFG.customProxy && local.indexOf(location.hostname) >= 0){
-    CFG.customProxy = location.origin + '/proxy?url=';
-  }
+  if(local.indexOf(location.hostname) >= 0) CFG.customProxy = location.origin + '/proxy?url=';
+  else if(CFG.feedUrl) CFG.customProxy = CFG.feedUrl + '/proxy?url=';
 }
 function saveCfg(){
   try{
@@ -2895,6 +2901,7 @@ function wire(){
     CFG.customProxy = cleanUrl($('#setCustom').value);
     CFG.proxy = $('#setProxy').value;
     CFG.feedUrl = cleanUrl($('#setFeed').value);
+    useLocalProxy();                       // ny worker-adress → använd dess proxy om inget eget är satt
     CFG.refreshSec = clamp(+$('#setInterval').value||60, 15, 900);
     CFG.feeds   = $('#setFeeds').value.split('\n').map(s=>s.trim()).filter(Boolean);
     CFG.feedsSe = $('#setFeedsSe').value.split('\n').map(s=>s.trim()).filter(Boolean);

@@ -5,6 +5,10 @@
  *  POST /ingest   {"k":"HEMLIG","s":"NQ","t":1755700200000,"o":..,"h":..,"l":..,"c":..,"v":..}
  *  GET  /bars?s=NQ   ->  [{t,o,h,l,c,v}, ...]  (CORS öppet)
  *  GET  /status      ->  antal staplar och ålder per symbol
+ *  GET  /proxy?url=…  ->  hämtar Yahoo och RSS åt sidan (löser CORS på publika adresser)
+ *  GET  /konto       ->  demokontot: kapital, öppna positioner, affärer och setups
+ *  GET  /konto/tick?k=…      kör ett varv på studs
+ *  POST /konto/nollstall     börja om från 50 000
  *
  * Kräver: KV-namespace bundet som BARS, samt hemligheten FEED_KEY.
  * Cron (se [triggers] i wrangler.toml) kör demokontot var femte minut: stänger
@@ -14,6 +18,17 @@
 import { kontoTick, lasKonto, skrivKonto, tomtKonto, kontoUtsida } from './konto.js';
 
 const SYMBOLS = ['NQ', 'GC'];
+
+/* Proxyn är öppen för alla som känner till adressen, så bara marknads- och
+   nyhetskällor släpps igenom — annars vore workern en gratis öppen proxy. */
+const PROXY_VARDAR = [
+  'finance.yahoo.com', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com',
+  'news.google.com', 'investing.com', 'financialjuice.com', 'fxstreet.com',
+  'cnbc.com', 'dowjones.io', 'marketwatch.com', 'reuters.com', 'kitco.com',
+  'di.se', 'dn.se', 'svt.se', 'omni.se', 'placera.se'
+];
+const proxyOK = host => PROXY_VARDAR.some(v => host === v || host.endsWith('.' + v));
+const PROXY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
 const KEEP = 400;                       // ~33 h av 5-minutersstaplar
 
 const cors = {
@@ -71,6 +86,28 @@ export default {
       return json(JSON.parse((await env.BARS.get(sym)) || '[]'));
     }
 
+    /* ---------- proxy för sidan ---------- */
+    if(url.pathname === '/proxy'){
+      const mal = url.searchParams.get('url');
+      let u = null;
+      try{ u = new URL(mal); }catch{ u = null; }
+      if(!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) return json({ error: 'ange ?url=https://...' }, 400);
+      if(!proxyOK(u.hostname)) return json({ error: 'värden är inte tillåten här', host: u.hostname }, 403);
+      try{
+        const r = await fetch(u, {
+          redirect: 'follow',
+          headers: { 'user-agent': PROXY_UA, 'accept': '*/*', 'accept-language': 'en-US,en;q=0.9,sv;q=0.8' },
+          cf: { cacheTtl: 45, cacheEverything: true }
+        });
+        const txt = await r.text();
+        return new Response(txt, { status: r.status, headers: { ...cors,
+          'content-type': r.headers.get('content-type') || 'text/plain; charset=utf-8',
+          'cache-control': 'no-store' } });
+      }catch(e){
+        return json({ error: 'kunde inte hämta', detalj: String(e && e.message || e) }, 502);
+      }
+    }
+
     /* ---------- demokontot ---------- */
     if(url.pathname === '/konto' && req.method === 'GET'){
       return json(kontoUtsida(await lasKonto(env)));
@@ -107,7 +144,8 @@ export default {
     }
 
     return json({ tjanst: 'riptide-feed',
-      endpoints: ['/ingest (POST)', '/bars?s=NQ', '/status', '/konto', '/konto/tick?k=…', '/konto/nollstall (POST)'] });
+      endpoints: ['/ingest (POST)', '/bars?s=NQ', '/status', '/proxy?url=…',
+                  '/konto', '/konto/tick?k=…', '/konto/nollstall (POST)'] });
   },
 
   /* Cron: ett varv på demokontot. Körs även när ingen sida är öppen. */

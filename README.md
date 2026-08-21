@@ -28,6 +28,16 @@ för Yahoos fördröjda data.
 
 ---
 
+## Publik adress (GitHub Pages)
+
+Sidan fungerar lika bra utlagd publikt — men bara om workern är utrullad och dess adress
+är inlagd under ⚙ Inställningar. Då hämtas marknadsdata genom workerns proxy i stället för
+de opålitliga publika proxyerna, och demokontot läses från KV. Utan worker-URL på en publik
+adress får du de publika proxyerna, och de faller ofta bort: räkna med simulerad data.
+
+Adressen sparas per webbläsare, så den ska in en gång på datorn och en gång på telefonen.
+Sedan visar båda samma konto, samma affärer och samma siffror.
+
 ## 1. Kör lokalt
 
 ```bash
@@ -230,9 +240,14 @@ Workerns kontoslutpunkter:
 
 | | |
 |---|---|
+| `GET /proxy?url=…` | hämtar Yahoo och RSS åt sidan, så en publik adress får live-data |
 | `GET /konto` | kapital, öppna positioner, affärer och de senaste setuperna |
 | `GET /konto/tick?k=FEED_KEY` | kör ett varv på studs, för felsökning |
 | `POST /konto/nollstall` med `{"k":"FEED_KEY"}` | börja om från 50 000 |
+
+Proxyn släpper bara igenom marknads- och nyhetskällor (Yahoo, Google News, CNBC,
+Investing, FinancialJuice, FXStreet, MarketWatch, DI, DN, SVT med flera) — annars vore
+workern en öppen proxy för vem som helst som hittar adressen.
 
 Cron-schemat står i `wrangler.toml` (`crons = ["*/5 * * * *"]`) och följer med vid
 `wrangler deploy`. Lokalt gör `npm start` samma sak: dev-servern kör ett varv vid start
