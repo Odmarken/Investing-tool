@@ -7,7 +7,11 @@
  *  GET  /status      ->  antal staplar och ålder per symbol
  *
  * Kräver: KV-namespace bundet som BARS, samt hemligheten FEED_KEY.
+ * Cron (se [triggers] i wrangler.toml) kör demokontot var femte minut: stänger
+ * positioner som nått stopp eller mål och öppnar nya A- och B-setups, helt utan
+ * att någon sida är öppen.
  */
+import { kontoTick, lasKonto, skrivKonto, tomtKonto, kontoUtsida } from './konto.js';
 
 const SYMBOLS = ['NQ', 'GC'];
 const KEEP = 400;                       // ~33 h av 5-minutersstaplar
@@ -67,6 +71,27 @@ export default {
       return json(JSON.parse((await env.BARS.get(sym)) || '[]'));
     }
 
+    /* ---------- demokontot ---------- */
+    if(url.pathname === '/konto' && req.method === 'GET'){
+      return json(kontoUtsida(await lasKonto(env)));
+    }
+
+    if(url.pathname === '/konto/tick'){
+      if(!env.FEED_KEY || url.searchParams.get('k') !== env.FEED_KEY) return json({ error: 'fel nyckel' }, 401);
+      const rader = [];
+      const konto = await kontoTick(env, r => rader.push(r));
+      return json({ ok: true, handelser: rader, konto: kontoUtsida(konto) });
+    }
+
+    if(url.pathname === '/konto/nollstall' && req.method === 'POST'){
+      let b = {};
+      try{ b = JSON.parse(await req.text() || '{}'); }catch{ b = {}; }
+      if(!env.FEED_KEY || b.k !== env.FEED_KEY) return json({ error: 'fel nyckel' }, 401);
+      const nytt = tomtKonto();
+      await skrivKonto(env, nytt);
+      return json({ ok: true, konto: kontoUtsida(nytt) });
+    }
+
     if (url.pathname === '/status') {
       const out = {};
       for (const sym of SYMBOLS) {
@@ -81,6 +106,12 @@ export default {
       return json(out);
     }
 
-    return json({ tjanst: 'riptide-feed', endpoints: ['/ingest (POST)', '/bars?s=NQ', '/status'] });
+    return json({ tjanst: 'riptide-feed',
+      endpoints: ['/ingest (POST)', '/bars?s=NQ', '/status', '/konto', '/konto/tick?k=…', '/konto/nollstall (POST)'] });
+  },
+
+  /* Cron: ett varv på demokontot. Körs även när ingen sida är öppen. */
+  async scheduled(event, env, ctx){
+    ctx.waitUntil(kontoTick(env).catch(e => console.log('kontoTick fel: ' + (e && e.message))));
   }
 };

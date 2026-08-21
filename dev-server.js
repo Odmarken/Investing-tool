@@ -172,6 +172,13 @@ async function seedDemo(n = 120){
   nextClose();
 }
 
+/* Samma varv som Cloudflares cron kör i molnet — här lokalt var femte minut. */
+async function lokalCron(){
+  try{
+    await worker.scheduled({ scheduledTime: Date.now(), cron: '*/5 * * * *' }, env, { waitUntil: p => p });
+  }catch(e){ console.log('  demokonto: fel — ' + (e && e.message)); }
+}
+
 server.listen(PORT, HOST, async () => {
   console.log(`\nRiptide kör:     http://localhost:${PORT}/`);
   console.log(`Lokal proxy:     http://localhost:${PORT}/proxy?url=…   (sidan använder den av sig själv)`);
@@ -183,5 +190,8 @@ server.listen(PORT, HOST, async () => {
     await seedDemo();
     console.log('  Lägg in http://localhost:' + PORT + '/feed under ⚙ Inställningar för att se hela kedjan.');
   }
+  console.log('Demokonto:       http://localhost:' + PORT + '/feed/konto   (räknas om var 5:e minut)');
   console.log('Avsluta med Ctrl+C.\n');
+  lokalCron();
+  setInterval(lokalCron, 300000).unref?.();
 });

@@ -17,7 +17,9 @@ för Yahoos fördröjda data.
 
 | Fil | Vad den gör |
 |---|---|
-| `index.html` | Hela dashboarden — grafer, signalmotor, nyhetsflöden |
+| `index.html` | Dashboarden — grafer, kort, nyheter, demokonto |
+| `motor.js` | Signalmotorn: indikatorer, de fyra familjerna, ICT, gradering. Delas av sidan och workern |
+| `konto.js` | Demokontot på serversidan — öppnar, stänger och sparar i KV |
 | `dev-server.js` | Lokal server: serverar sidan, en CORS-proxy och en kopia av workern |
 | `worker.js` | Cloudflare Worker som tar emot TradingView-alerts och serverar staplarna |
 | `wrangler.toml` | Inställningar för utrullning av workern |
@@ -204,21 +206,37 @@ beter sig som ett terminskonto:
   får rätt utfall och rätt tidpunkt när du kommer tillbaka. Nås både stopp och mål inom
   samma stapel räknas stoppen. Inga avgifter eller slippage är avdragna.
 
-### Var sparas kontot?
+### Två lägen: lokalt eller i workern
 
-**Lokalt i webbläsaren** (`localStorage`), inte i molnet. Det betyder:
+Kontot kan ligga på två ställen, och sidan väljer själv:
 
-* Kontot överlever att du stänger fliken, webbläsaren och datorn — det räknar vidare
-  nästa gång du öppnar sidan, och tar igen det som hänt under tiden.
-* Det följer **inte** med till telefonen. Varje webbläsare och varje adress har sitt
-  eget konto — `localhost` och GitHub Pages-adressen räknas som olika platser.
-* Simuleringen tickar bara när sidan är öppen någonstans. Är allt stängt händer inget
-  förrän du öppnar den igen, och då spelas historiken upp.
+**Utan Worker-URL — lokalt.** Kontot sparas i webbläsaren (`localStorage`). Det överlever
+att du stänger fliken och datorn, och när du kommer tillbaka spelas de staplar som
+passerat upp så att affärer får rätt utfall. Men det tickar bara när sidan är öppen, och
+telefonen får ett eget konto — `localhost` och GitHub Pages räknas som olika platser.
 
-Vill du ha ett konto som är gemensamt för dator och telefon och som tickar av sig självt
-dygnet runt behöver läget ligga på servern: Cloudflare-workern och dess KV finns redan,
-och skulle behöva en kontoslutpunkt plus en cron-utlösare som hämtar pris var femte minut
-och stänger positioner. Det är inte byggt än.
+**Med Worker-URL — i molnet.** Lägg in workerns adress under ⚙ Inställningar, så tar
+servern över: kontot ligger i KV och workerns cron räknar om det **var femte minut, dygnet
+runt, utan att någon sida är öppen**. Datorn och telefonen ser exakt samma siffror, och
+sidan blir bara en skärm mot kontot. Rutan säger *"igång sedan … · servern · uppdaterad …"*
+när det läget är på.
+
+Det som gör det möjligt är att signalmotorn ligger i en egen fil, `motor.js`, som både
+sidan och workern importerar. Samma indikatorer, samma fyra familjer, samma ICT-kedja och
+samma gradering räknas alltså på båda ställena — kontot i molnet kan inte glida isär från
+det du ser på skärmen.
+
+Workerns kontoslutpunkter:
+
+| | |
+|---|---|
+| `GET /konto` | kapital, öppna positioner, affärer och de senaste setuperna |
+| `GET /konto/tick?k=FEED_KEY` | kör ett varv på studs, för felsökning |
+| `POST /konto/nollstall` med `{"k":"FEED_KEY"}` | börja om från 50 000 |
+
+Cron-schemat står i `wrangler.toml` (`crons = ["*/5 * * * *"]`) och följer med vid
+`wrangler deploy`. Lokalt gör `npm start` samma sak: dev-servern kör ett varv vid start
+och sedan var femte minut, så du kan prova hela kedjan innan du rullar ut.
 
 ---
 

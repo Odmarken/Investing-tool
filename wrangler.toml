@@ -15,3 +15,7 @@ id = "KLISTRA_IN_DITT_KV_ID"
 #
 # Vill du bara prova lokalt behöver du varken KV-id eller deploy:
 #   npm start   kör samma worker.js på http://localhost:8080/feed
+
+# Demokontot räknas om var femte minut, även när ingen sida är öppen.
+[triggers]
+crons = ["*/5 * * * *"]
