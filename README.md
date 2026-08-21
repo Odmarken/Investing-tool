@@ -19,7 +19,10 @@ för Yahoos fördröjda data.
 |---|---|
 | `index.html` | Dashboarden — grafer, kort, nyheter, demokonto |
 | `motor.js` | Signalmotorn: indikatorer, de fyra familjerna, ICT, gradering. Delas av sidan och workern |
-| `konto.js` | Demokontot på serversidan — öppnar, stänger och sparar i KV |
+| `konto.js` | Demokontot i Cloudflare-workern — öppnar, stänger och sparar i KV |
+| `functions/index.js` | Samma sak på Firebase: cron var 5:e minut, proxy, ingest och Firestore |
+| `firebase-config.js` | Projektets publika nycklar — tomt projectId stänger av Firebase |
+| `firebase.json`, `firestore.rules`, `.firebaserc` | Hosting, regler och projekt |
 | `dev-server.js` | Lokal server: serverar sidan, en CORS-proxy och en kopia av workern |
 | `worker.js` | Cloudflare Worker som tar emot TradingView-alerts och serverar staplarna |
 | `wrangler.toml` | Inställningar för utrullning av workern |
@@ -27,6 +30,50 @@ för Yahoos fördröjda data.
 | `package.json` | Startkommandon (`npm start`, `npm run demo`, …) |
 
 ---
+
+## Firebase — kontot live dygnet runt
+
+Det här är vägen som gör kontot gemensamt för alla enheter och som räknar vidare
+när allt är stängt. Molnfunktionen kör signalmotorn var femte minut och skriver till
+Firestore; sidan lyssnar på dokumentet och uppdateras **direkt** när något händer,
+utan att fråga om och om igen.
+
+### En gång
+
+1. Skapa projektet på console.firebase.google.com och klistra in webbkonfigurationen
+   i `firebase-config.js` (den ligger redan ifylld för `riptide-investing-tool`).
+2. Skapa databasen: **Firestore Database → Skapa databas → produktionsläge**, plats
+   `eur3` eller `europe-north1`.
+3. Uppgradera till **Blaze**. Funktioner kräver det, och på gratisplanen får de inte
+   ens ringa ut till Yahoo. Kostnaden landar ändå kring noll: 2 miljoner anrop ingår
+   per månad och cronen använder cirka 8 600.
+4. Logga in och rulla ut:
+
+```bash
+npx firebase login
+npx firebase functions:secrets:set FEED_KEY     # samma nyckel som TradingView-alertet
+npx firebase deploy
+```
+
+`deploy` tar med tre saker: funktionerna (`kontoCron` + `api`), Firestore-reglerna och
+sidan på Firebase Hosting. `motor.js` kopieras automatiskt in i `functions/` först, så
+molnet och skärmen kör exakt samma signalmotor.
+
+### Vad du får
+
+| | |
+|---|---|
+| `kontoCron` | Var femte minut: hämtar staplar, bygger setups, öppnar A- och B-affärer och stänger dem som nått stopp eller mål |
+| `GET /api/proxy?url=…` | Marknadsdata och RSS åt sidan, med en lista över tillåtna värdar |
+| `POST /api/ingest` | TradingView-alertets webhook, samma format som workern |
+| `GET /api/tick?k=FEED_KEY` | Kör ett varv på studs |
+| `GET /api/konto` | Kontot som JSON, för den som inte vill prata Firestore |
+
+Sidan kan ligga var som helst — Firebase Hosting, GitHub Pages eller `npm start`.
+`apiBas` i `firebase-config.js` pekar på funktionens fulla adress, så proxyn och kontot
+fungerar från alla tre.
+
+Kontot nollställs med `npx firebase firestore:delete riptide/konto` eller från konsolen.
 
 ## Publik adress (GitHub Pages)
 

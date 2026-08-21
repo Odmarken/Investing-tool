@@ -3,3 +3,6 @@ node_modules/
 .dev-bars.demo.json
 .wrangler/
 .dev.vars
+functions/motor.js
+functions/node_modules/
+.firebase/

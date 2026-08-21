@@ -1,0 +1,15 @@
+rules_version = '2';
+// Kontot får läsas av vem som helst som kan adressen — det är demopengar och
+// sidan läser det direkt från Firestore för att slippa polla. Skrivningar sker
+// bara från Cloud Functions, som går förbi de här reglerna via admin-SDK:t.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /riptide/konto {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /riptide/{dok} {
+      allow read, write: if false;
+    }
+  }
+}

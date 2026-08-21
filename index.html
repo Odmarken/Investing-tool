@@ -767,6 +767,7 @@ footer b{color:var(--muted)}
   </div>
 </div>
 
+<script src="./firebase-config.js"></script>
 <script type="module">
 "use strict";
 import * as MOTOR from './motor.js';
@@ -840,7 +841,8 @@ function useLocalProxy(){
   if(CFG.customProxy) return;
   const local = ['localhost', '127.0.0.1', '[::1]'];
   if(local.indexOf(location.hostname) >= 0) CFG.customProxy = location.origin + '/proxy?url=';
-  else if(CFG.feedUrl) CFG.customProxy = CFG.feedUrl + '/proxy?url=';
+  else if(firebasePa()) CFG.customProxy = firebaseApi() + '/proxy?url=';
+  else if(CFG.feedUrl)  CFG.customProxy = CFG.feedUrl + '/proxy?url=';
 }
 function saveCfg(){
   try{
@@ -2353,9 +2355,47 @@ function demoLadda(){
   }
 }
 
+/* ---------- Firebase: kontot i realtid ----------
+   Är projektet ifyllt i firebase-config.js lyssnar sidan på Firestore-dokumentet
+   i stället för att fråga om och om igen. Molnfunktionen skriver dit var femte
+   minut, och då uppdateras skärmen direkt — på alla enheter samtidigt. */
+const FB = (typeof window !== 'undefined' && window.RIPTIDE_FIREBASE) || {};
+const firebasePa = () => !!(FB.projectId && FB.apiKey);
+const firebaseApi = () => (FB.apiBas || '/api').replace(/\/+$/, '');
+
+async function firebaseStart(){
+  if(!firebasePa()) return;
+  try{
+    const [{ initializeApp }, { getFirestore, doc, onSnapshot }] = await Promise.all([
+      import('https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js'),
+      import('https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js')
+    ]);
+    const db = getFirestore(initializeApp({
+      apiKey: FB.apiKey, authDomain: FB.authDomain, projectId: FB.projectId, appId: FB.appId
+    }));
+    onSnapshot(doc(db, 'riptide', 'konto'), snap => {
+      const k = snap.data();
+      if(!k || !isFinite(k.kapital)) return;
+      KONTO.server     = 'firebase';
+      KONTO.start      = k.start;
+      KONTO.kontrakt   = k.kontrakt;
+      KONTO.kapital    = k.kapital;
+      KONTO.startad    = k.startad;
+      KONTO.uppdaterad = k.uppdaterad;
+      KONTO.oppna      = k.oppna || {};
+      KONTO.affarer    = k.affarer || [];
+      renderDemo();
+      coreRead('firebase: kontot uppdaterat · ' + Math.round(k.kapital) + ' $');
+    }, fel => console.warn('Firestore lyssnar inte: ' + fel.message));
+  }catch(e){
+    console.warn('Firebase kunde inte startas: ' + (e && e.message));
+  }
+}
+
 /* Med en Worker-URL inlagd äger servern kontot: den öppnar och stänger affärer
    var femte minut även när ingen sida är öppen, och sidan hämtar bara läget. */
 async function demoHamtaServer(){
+  if(KONTO.server === 'firebase') return;              // Firestore pushar redan
   if(!CFG.feedUrl){ KONTO.server = false; return; }
   try{
     const r = await fetch(CFG.feedUrl + '/konto', { cache:'no-store' });
@@ -2634,7 +2674,7 @@ function renderDemo(){
     ? new Intl.DateTimeFormat('sv-SE',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(KONTO.startad))
     : '–';
   const kallaTxt = KONTO.server
-    ? '<b class="pos">servern</b> · uppdaterad ' +
+    ? '<b class="pos">' + (KONTO.server === 'firebase' ? 'Firebase, realtid' : 'servern') + '</b> · uppdaterad ' +
       (KONTO.uppdaterad
         ? new Intl.DateTimeFormat('sv-SE',{hour:'2-digit',minute:'2-digit'}).format(new Date(KONTO.uppdaterad))
         : '–')
@@ -2653,7 +2693,10 @@ function renderDemo(){
     'Utfallet avgörs på 5-minutersstaplarnas högsta och lägsta, och alla staplar som passerat sedan förra kollen ' +
     'gås igenom — en position som stod öppen medan sidan var stängd får därför rätt utfall när du kommer tillbaka. ' +
     'Nås både stopp och mål inom samma stapel räknas stoppen. Inga avgifter eller slippage är avdragna. ' +
-    (KONTO.server
+    (KONTO.server === 'firebase'
+      ? 'Kontot ligger <b>i Firestore</b> och räknas om var femte minut av molnfunktionen — även när ingen sida är ' +
+        'öppen. Sidan lyssnar på dokumentet, så ändringar syns direkt på alla enheter utan att du laddar om.'
+    : KONTO.server
       ? 'Kontot ligger <b>i workern</b> och räknas om var femte minut av dess cron — även när ingen sida är öppen. ' +
         'Datorn och telefonen ser därför samma siffror. <i>Nollställ</i> frågar efter feed-nyckeln.'
       : 'Kontot sparas i <b>den här webbläsaren</b> och räknar bara när sidan är öppen; historiken spelas upp när ' +
@@ -2938,6 +2981,11 @@ function wire(){
   grafInteraktion();
   $('#btnDemoReset').onclick = async ()=>{
     if(!window.confirm('Nollställa demokontot? Alla ' + KONTO.affarer.length + ' affärer och resultatet försvinner.')) return;
+    if(KONTO.server === 'firebase'){
+      window.alert('Kontot ligger i Firestore. Nollställ det med:\n\n' +
+        'firebase firestore:delete riptide/konto\n\neller från Firebase-konsolen.');
+      return;
+    }
     if(KONTO.server){
       const nyckel = window.prompt('Feed-nyckeln (FEED_KEY) för att nollställa serverns konto:');
       if(!nyckel) return;
@@ -2975,6 +3023,7 @@ useLocalProxy();
 wire();
 demoLadda();
 renderDemo();
+firebaseStart();
 demoHamtaServer();
 requestAnimationFrame(coreFrame);
 tick(); setInterval(tick, 1000);
