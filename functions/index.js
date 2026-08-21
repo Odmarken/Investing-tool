@@ -22,7 +22,8 @@ import {
 
 initializeApp();
 const db = getFirestore();
-const REGION = 'europe-north1';
+const REGION = 'europe-north1';        // api: närmast Sverige
+const CRON_REGION = 'europe-west1';    // Cloud Scheduler finns inte i europe-north1
 const FEED_KEY = defineSecret('FEED_KEY');
 
 const KONTO_DOK = () => db.doc('riptide/konto');
@@ -191,7 +192,7 @@ export async function kontoVarv(logg = () => {}){
 
 /* ---------- cron ---------- */
 export const kontoCron = onSchedule(
-  { schedule: 'every 5 minutes', region: REGION, timeZone: 'Europe/Stockholm', timeoutSeconds: 120, memory: '256MiB' },
+  { schedule: 'every 5 minutes', region: CRON_REGION, timeZone: 'Europe/Stockholm', timeoutSeconds: 120, memory: '256MiB' },
   async () => {
     const rader = [];
     await kontoVarv(r => rader.push(r));

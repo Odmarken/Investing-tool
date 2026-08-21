@@ -33,6 +33,20 @@ för Yahoos fördröjda data.
 
 ## Firebase — kontot live dygnet runt
 
+**Utrullat och igång:**
+
+| | |
+|---|---|
+| Sidan | https://riptide-investing-tool.web.app |
+| API | `https://europe-north1-riptide-investing-tool.cloudfunctions.net/api` — eller `/api/…` på sidans egen adress |
+| Cron | `kontoCron` i `europe-west1`, var femte minut, tidszon Europe/Stockholm |
+| Databas | Firestore `eur3`, dokumentet `riptide/konto` |
+| TradingView-webhook | `https://riptide-investing-tool.web.app/api/ingest` |
+
+Cloud Scheduler finns inte i `europe-north1`, så cronen ligger i `europe-west1` medan
+API-funktionen ligger närmare Sverige. Det märks inte i användningen.
+
+
 Det här är vägen som gör kontot gemensamt för alla enheter och som räknar vidare
 när allt är stängt. Molnfunktionen kör signalmotorn var femte minut och skriver till
 Firestore; sidan lyssnar på dokumentet och uppdateras **direkt** när något händer,
