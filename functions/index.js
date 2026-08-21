@@ -5,7 +5,8 @@
  *              B-affärer och stänger dem som nått stopp eller mål. Skriver till
  *              Firestore, så sidan uppdateras direkt på alla enheter.
  *  api         HTTP: /proxy (marknadsdata åt sidan), /ingest (TradingView),
- *              /tick (kör ett varv på studs), /konto (läsning utan Firestore).
+ *              /bars (staplarna därifrån), /tick (kör ett varv på studs),
+ *              /konto (läsning utan Firestore).
  *
  * Signalmotorn är samma fil som sidan använder — motor.js kopieras hit vid
  * utrullning av kopiera-motor.js, så molnet och skärmen räknar aldrig olika.
@@ -281,6 +282,19 @@ export const api = onRequest(
     }
 
     /* läsning utan Firestore-klient */
+    /* Staplarna som TradingView-alertet skickat in. Sidan lägger dem över
+       Yahoos fördröjda serie, så grafen och signalerna räknar på dina egna
+       priser. Öppen läsning precis som kontot — det är samma data som redan
+       ritas på skärmen. */
+    if(vag === '/bars'){
+      const snap = await FEED_DOK().get();
+      const alla = (snap.exists && snap.data()) || {};
+      const s = String(req.query.s || 'NQ').toUpperCase();
+      res.set('cache-control', 'public, max-age=15');
+      res.json(alla[s] || []);
+      return;
+    }
+
     if(vag === '/konto'){
       const k = await lasKonto();
       delete k.live; delete k.sedd;
@@ -288,6 +302,6 @@ export const api = onRequest(
       return;
     }
 
-    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/tick?k=…', '/api/konto'] });
+    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/tick?k=…', '/api/konto'] });
   }
 );

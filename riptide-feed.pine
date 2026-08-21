@@ -1,10 +1,19 @@
 //@version=6
-// Riptide feed — lägg på MNQ1! (eller NQ1!) i 5-minutersgrafen.
-// Skapa sedan ett alert med villkoret "Any alert() function call" och din Worker-URL som webhook.
+// Riptide feed — lägg på CME_MINI:MNQ1! i 5-minutersgrafen.
+//
+// Skapa sedan ett alert:
+//   Villkor:  Riptide feed  ·  "Any alert() function call"
+//   Utlösare: Once per bar close
+//   Webhook:  https://riptide-investing-tool.web.app/api/ingest
+//
+// Varje stängd 5-minutersstapel skickas då till Firebase, och dashboarden
+// lägger dina priser över Yahoos fördröjda serie — både i grafen, i
+// signalerna och i molnkontot. Kräver ett TradingView-abonnemang som har
+// webhooks, och realtidsdata för CME om siffrorna ska vara i realtid.
 indicator("Riptide feed", overlay = true)
 
-nyckel    = input.string("BYT-UT-MIG", "Hemlig nyckel", tooltip = "Samma värde som FEED_KEY i din Cloudflare Worker (lokalt: 'dev' om du inte satt något).")
-symbolkod = input.string("NQ", "Symbolkod", options = ["NQ", "GC"], tooltip = "Låt stå på NQ — det är nyckeln workern och dashboarden använder, även när skriptet ligger på MNQ-grafen.")
+nyckel    = input.string("BYT-UT-MIG", "Hemlig nyckel", tooltip = "Samma värde som hemligheten FEED_KEY i Firebase (eller i din Cloudflare Worker; lokalt: 'dev').")
+symbolkod = input.string("NQ", "Symbolkod", options = ["NQ", "GC"], tooltip = "Låt stå på NQ — det är nyckeln servern och dashboarden använder, även när skriptet ligger på MNQ-grafen.")
 
 f(x) => str.tostring(x, format.mintick)
 

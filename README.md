@@ -80,6 +80,7 @@ molnet och skärmen kör exakt samma signalmotor.
 | `kontoCron` | Var femte minut: hämtar staplar, bygger setups, öppnar A- och B-affärer och stänger dem som nått stopp eller mål |
 | `GET /api/proxy?url=…` | Marknadsdata och RSS åt sidan, med en lista över tillåtna värdar |
 | `POST /api/ingest` | TradingView-alertets webhook, samma format som workern |
+| `GET /api/bars?s=NQ` | Staplarna som kommit in därifrån — sidan lägger dem över Yahoo |
 | `GET /api/tick?k=FEED_KEY` | Kör ett varv på studs |
 | `GET /api/konto` | Kontot som JSON, för den som inte vill prata Firestore |
 
@@ -140,6 +141,12 @@ demoläget när du tittar på riktiga nivåer. Låtsasstaplarna hamnar i en egen
 
 ## 2. Rulla ut workern till Cloudflare
 
+> **Kör du Firebase — som det här projektet gör — hoppar du över steg 2 och 3.**
+> Webhooken går rakt på `https://riptide-investing-tool.web.app/api/ingest`, staplarna
+> hamnar i Firestore och sidan hämtar dem själv från `/api/bars`. Ingen worker-URL
+> behöver fyllas i under ⚙. Nyckeln i Pine-skriptet ska vara samma värde som
+> hemligheten `FEED_KEY` i Firebase. Fortsätt på steg 4.
+
 Flödet i skarpt läge: TradingView-alert → webhook → din Cloudflare Worker → dashboarden.
 
 ```bash
@@ -180,19 +187,26 @@ Högerklicka i grafen → *Add alert*.
 | — | **Any alert() function call** |
 | Trigger | Once per bar close |
 | Expiration | så långt fram som ditt abonnemang tillåter |
-| Notifications → Webhook URL | `https://.../ingest` |
+| Notifications → Webhook URL | Firebase: `https://riptide-investing-tool.web.app/api/ingest` · worker: `https://.../ingest` |
 
 Ett alert per instrument. Guld är pausat i dashboarden, så `NQ` räcker.
 
 ## 6. Kontrollera
 
-Efter första stapelstängningen ska `https://.../status` visa `bars: 1`,
-och dashboarden ska få en grön **TradingView live**-bricka uppe till höger.
+Efter första stapelstängningen ska `https://riptide-investing-tool.web.app/api/bars?s=NQ`
+(eller workerns `https://.../status`) visa en stapel, och dashboarden ska få en grön
+**TradingView live**-bricka uppe till höger. Innan dess står det **TV-feed tom**.
 Fottexten byter till *"TradingView realtid via egen webhook"*.
 
 Säger brickan **TV-feed nås inte** stämmer inte URL:en, och **TV-feed tyst** betyder
-att workern svarar men att ingen ny stapel kommit på ett tag — då är det alertet
-som slutat skicka.
+att servern svarar men att ingen ny stapel kommit på ett tag — då är det alertet
+som slutat skicka. Så länge feeden lever slutar grafen på den senaste stängda
+TradingView-stapeln; Yahoos pågående stapel kastas, eftersom den är fördröjd.
+
+Siffrorna blir förstås inte mer exakta än datan i din TradingView: står det **D**
+för delayed i symbolfältet skickar alertet fördröjda priser, bara med annan
+fördröjning än Yahoo. Realtid kräver CME-abonnemanget hos TradingView, och
+webhooks kräver ett betalt TradingView-konto.
 
 ---
 
