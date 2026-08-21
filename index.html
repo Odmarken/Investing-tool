@@ -656,7 +656,7 @@ footer b{color:var(--muted)}
           <span><em style="background:#8CE6FF;opacity:.8"></em>VWAP</span>
           <span><em style="background:#FFB020"></em>Motstånd 15m</span>
           <span><em style="background:#2BD6C4"></em>Stöd 15m</span>
-          <span class="dim">dra = panorera · tidsaxeln = sträck staplarna · prisaxeln = sträck priset · scrolla = zoom</span>
+          <span class="dim">dra = flytta grafen fritt · tidsaxeln = sträck staplarna · prisaxeln = sträck priset · scrolla = zoom · dubbelklick = återställ</span>
           <span style="margin-left:auto" id="chartMeta" class="mono"></span>
         </div>
       </div>
@@ -1383,6 +1383,10 @@ function drawCandles(cv, opts){
     const mitt = (hi+lo)/2, halva = (hi-lo)/2*opts.prisSkala;
     hi = mitt + halva; lo = mitt - halva;
   }
+  if(opts.prisSkift){                                // grafen har dragits upp eller ned
+    const skift = (hi-lo)*opts.prisSkift;            // andel av fönstret, inte punkter
+    hi += skift; lo += skift;
+  }
   const Y = p => padT + (hi-p)/(hi-lo)*ch;
   const X = i => padL + (i+0.5)*(cw/bars.length);
   const bw = Math.max(1.2, Math.min(9, cw/bars.length*0.62));
@@ -1473,7 +1477,7 @@ const STATE = {
   ctx:{}, signals:[], news:[], seNews:[], quotes:{}, se:{},
   bias:{nq:0, gc:0}, newsBias:{nq:0, gc:0},
   chartSym:'NQ', feed:{}, newsFilter:'all', sigFilter:'all',
-  vy:{ n:96, off:0, pris:1 },               // grafens fönster: staplar, hur långt bak, prisskala
+  vy:{ n:96, off:0, pris:1, py:0 },         // grafens fönster: staplar, hur långt bak, prisskala, höjdläge
   lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[]
 };
 
@@ -1949,6 +1953,7 @@ function grafInteraktion(){
     v.n = clamp(Math.round(v.n), 24, Math.max(24, max));
     v.off = clamp(Math.round(v.off), 0, Math.max(0, max - v.n));
     v.pris = clamp(v.pris || 1, 0.12, 6);
+    v.py   = clamp(v.py || 0, -4, 4);
     renderMainChart();
   };
 
@@ -1980,12 +1985,19 @@ function grafInteraktion(){
       senastX = e.clientX; putsa();
       return;
     }
+    // Fri förflyttning: staplarna följer musen i sidled, prisfönstret i höjdled.
+    let rita = false;
     const perStapel = (cv.clientWidth - 68)/v.n;
     const steg = Math.round(dx/perStapel);
-    if(steg){ v.off += steg; senastX = e.clientX; putsa(); }
+    if(steg){ v.off += steg; senastX = e.clientX; rita = true; }
+    if(Math.abs(dy) >= 1){
+      v.py += dy/Math.max(80, cv.clientHeight);      // andel av fönstrets höjd
+      senastY = e.clientY; rita = true;
+    }
+    if(rita) putsa();
   });
   window.addEventListener('mouseup', () => { drar = false; strackning = 'graf'; cv.style.cursor = 'grab'; });
-  cv.addEventListener('dblclick', () => { v.n = 96; v.off = 0; v.pris = 1; putsa(); });
+  cv.addEventListener('dblclick', () => { v.n = 96; v.off = 0; v.pris = 1; v.py = 0; putsa(); });
   cv.style.cursor = 'grab';
 
   cv.addEventListener('touchstart', e => {
@@ -2015,9 +2027,19 @@ function grafInteraktion(){
       senastX = e.touches[0].clientX; putsa();
       return;
     }
+    // Ett finger drar grafen i sidled och tar med höjdledet på köpet, så länge
+    // rörelsen är mest vågrät. Är den mest lodrät rör vi inte grafen alls — då vill
+    // fingret scrolla sidan, och det ska det få göra.
+    let rita = false;
     const perStapel = (cv.clientWidth - 68)/v.n;
     const steg = Math.round(dx/perStapel);
-    if(steg){ e.preventDefault(); v.off += steg; senastX = e.touches[0].clientX; putsa(); }
+    if(steg){ v.off += steg; senastX = e.touches[0].clientX; rita = true; }
+    if(Math.abs(dx) > Math.abs(dy)*0.8 && Math.abs(dy) >= 1){
+      e.preventDefault();
+      v.py += dy/Math.max(80, cv.clientHeight);
+      senastY = e.touches[0].clientY; rita = true;
+    }
+    if(rita){ e.preventDefault(); putsa(); }
   }, { passive:false });
   cv.addEventListener('touchend', () => { drar = false; strackning = 'graf'; pinch = 0; });
 }
@@ -2066,7 +2088,7 @@ function renderMainChart(){
 
   drawCandles($('#mainChart'), {
     bars, height: window.innerWidth < 680 ? 250 : window.innerWidth >= 1900 ? 460 : 330,
-    dec:c.inst.dec, prisSkala: v.pris,
+    dec:c.inst.dec, prisSkala: v.pris, prisSkift: v.py,
     lines:[
       {data:cut(c.e9a),   color:'#4FD3FF', w:1.2},
       {data:cut(c.e21a),  color:'#FF2E4C', w:1.2},
@@ -3168,7 +3190,7 @@ function wire(){
     const v = STATE.vy, k = b.dataset.zoom;
     if(k === 'in')  v.n = Math.max(24, Math.round(v.n*0.75));
     if(k === 'ut')  v.n = Math.min(1200, Math.round(v.n*1.35));
-    if(k === 'reset'){ v.n = 96; v.off = 0; v.pris = 1; }
+    if(k === 'reset'){ v.n = 96; v.off = 0; v.pris = 1; v.py = 0; }
     renderMainChart();
   });
   grafInteraktion();
