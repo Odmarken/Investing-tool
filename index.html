@@ -149,6 +149,15 @@ header.topbar{
 @media (max-width:1240px){.wrap{grid-template-columns:minmax(0,1fr);}
   .col-side{order:3}
 }
+
+/* Grafen och signalerna ligger under varandra normalt, men sida vid sida
+   så snart skärmen är bred nog att ge båda spalterna dryga 550 px. */
+.parvis{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0}
+@media (min-width:1900px){
+  .parvis{grid-template-columns:minmax(0,1.06fr) minmax(0,1fr);align-items:start}
+  .parvis .sig-body{grid-template-columns:minmax(0,1fr)}   /* smalare spalt: minigrafen under nivåerna */
+  .parvis #sigList{max-height:520px;overflow-y:auto}   /* justeras i körningen till grafens höjd */
+}
 .col{display:flex;flex-direction:column;gap:12px;min-width:0}
 .panel, .pb, .ph{min-width:0}
 
@@ -625,52 +634,54 @@ footer b{color:var(--muted)}
       </div>
     </div>
 
-    <!-- Huvudgraf -->
-    <div class="panel">
-      <div class="ph">
-        <span class="accent"></span><h2>5-minutersgraf</h2>
-        <div class="chart-tabs">
-          <button class="ct on" data-sym="NQ">MNQ · Micro Nasdaq-100</button>
+    <div class="parvis">
+      <!-- Huvudgraf -->
+      <div class="panel">
+        <div class="ph">
+          <span class="accent"></span><h2>5-minutersgraf</h2>
+          <div class="chart-tabs">
+            <button class="ct on" data-sym="NQ">MNQ · Micro Nasdaq-100</button>
+          </div>
+          <div class="chart-tabs" style="margin-left:auto;gap:5px">
+            <button class="ct" data-zoom="ut" title="Zooma ut">−</button>
+            <button class="ct" data-zoom="in" title="Zooma in">+</button>
+            <button class="ct" data-zoom="reset" title="Tillbaka till senaste staplarna och normal prisskala">Återställ</button>
+          </div>
         </div>
-        <div class="chart-tabs" style="margin-left:auto;gap:5px">
-          <button class="ct" data-zoom="ut" title="Zooma ut">−</button>
-          <button class="ct" data-zoom="in" title="Zooma in">+</button>
-          <button class="ct" data-zoom="reset" title="Tillbaka till senaste staplarna och normal prisskala">Återställ</button>
+        <div class="chartbox" id="ownBox"><canvas id="mainChart" height="330"></canvas></div>
+        <div class="legendline" id="ownLegend">
+          <span><em style="background:#4FD3FF"></em>EMA 9</span>
+          <span><em style="background:#FF2E4C"></em>EMA 21</span>
+          <span><em style="background:#FFB020"></em>EMA 50</span>
+          <span><em style="background:#8CE6FF;opacity:.8"></em>VWAP</span>
+          <span><em style="background:#FFB020"></em>Motstånd 15m</span>
+          <span><em style="background:#2BD6C4"></em>Stöd 15m</span>
+          <span class="dim">dra = panorera · tidsaxeln = sträck staplarna · prisaxeln = sträck priset · scrolla = zoom</span>
+          <span style="margin-left:auto" id="chartMeta" class="mono"></span>
         </div>
       </div>
-      <div class="chartbox" id="ownBox"><canvas id="mainChart" height="330"></canvas></div>
-      <div class="legendline" id="ownLegend">
-        <span><em style="background:#4FD3FF"></em>EMA 9</span>
-        <span><em style="background:#FF2E4C"></em>EMA 21</span>
-        <span><em style="background:#FFB020"></em>EMA 50</span>
-        <span><em style="background:#8CE6FF;opacity:.8"></em>VWAP</span>
-        <span><em style="background:#FFB020"></em>Motstånd 15m</span>
-        <span><em style="background:#2BD6C4"></em>Stöd 15m</span>
-        <span class="dim">dra = panorera · tidsaxeln = sträck staplarna · prisaxeln = sträck priset · scrolla = zoom</span>
-        <span style="margin-left:auto" id="chartMeta" class="mono"></span>
-      </div>
-    </div>
 
-    <!-- Signaler -->
-    <div class="panel">
-      <div class="ph">
-        <span class="accent"></span><h2>Signaler · graderade A / B / C</h2>
-        <div class="chart-tabs">
-          <button class="ct on" data-sf="all">Alla</button>
-          <button class="ct" data-sf="A" title="Bara setups där alla tre strategier pekar åt samma håll">A</button>
-          <button class="ct" data-sf="B" title="Bara setups med två av tre strategier bakom sig">B</button>
+      <!-- Signaler -->
+      <div class="panel">
+        <div class="ph">
+          <span class="accent"></span><h2>Signaler · graderade A / B / C</h2>
+          <div class="chart-tabs">
+            <button class="ct on" data-sf="all">Alla</button>
+            <button class="ct" data-sf="A" title="Bara setups där alla tre strategier pekar åt samma håll">A</button>
+            <button class="ct" data-sf="B" title="Bara setups med två av tre strategier bakom sig">B</button>
+          </div>
+          <span class="right"><span id="sigStamp">–</span></span>
         </div>
-        <span class="right"><span id="sigStamp">–</span></span>
-      </div>
-      <div class="pb" style="padding:11px" id="sigList">
-        <div class="empty"><span class="spin"></span> Beräknar setups…</div>
-      </div>
-      <div class="legendline">
-        <span><span class="strat A" style="width:16px;height:16px;font-size:9px">A</span> Minst tre av fyra strategier pekar åt samma håll</span>
-        <span><span class="strat B" style="width:16px;height:16px;font-size:9px">B</span> Två av fyra</span>
-        <span><span class="strat C" style="width:16px;height:16px;font-size:9px">C</span> En eller ingen — lägst potential</span>
-        <span><span class="fam trend">TREND</span> pullback · <span class="fam svep">SVEP</span> likviditet ·
-          <span class="fam brott">BROTT</span> range · <span class="fam ict">ICT</span> svep + MSS + FVG</span>
+        <div class="pb" style="padding:11px" id="sigList">
+          <div class="empty"><span class="spin"></span> Beräknar setups…</div>
+        </div>
+        <div class="legendline">
+          <span><span class="strat A" style="width:16px;height:16px;font-size:9px">A</span> Minst tre av fyra strategier pekar åt samma håll</span>
+          <span><span class="strat B" style="width:16px;height:16px;font-size:9px">B</span> Två av fyra</span>
+          <span><span class="strat C" style="width:16px;height:16px;font-size:9px">C</span> En eller ingen — lägst potential</span>
+          <span><span class="fam trend">TREND</span> pullback · <span class="fam svep">SVEP</span> likviditet ·
+            <span class="fam brott">BROTT</span> range · <span class="fam ict">ICT</span> svep + MSS + FVG</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1835,6 +1846,7 @@ function renderSignals(){
     });
   });
   $('#sigStamp').textContent = 'uppdaterad ' + timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  jamnaSpalter();
 }
 
 /* ---- TradingView-widget ---- */
@@ -1993,6 +2005,19 @@ function grafInteraktion(){
   cv.addEventListener('touchend', () => { drar = false; strackning = 'graf'; pinch = 0; });
 }
 
+/* Ligger grafen och signalerna sida vid sida ska spalterna sluta på samma rad.
+   Signallistan får därför exakt den höjd som blir över när grafpanelen mätts. */
+function jamnaSpalter(){
+  const lista = $('#sigList');
+  if(!lista) return;
+  if(window.innerWidth < 1900){ lista.style.maxHeight = ''; return; }
+  const grafPanel = $('#ownBox') && $('#ownBox').closest('.panel');
+  const sigPanel  = lista.closest('.panel');
+  if(!grafPanel || !sigPanel) return;
+  const ramar = sigPanel.offsetHeight - lista.offsetHeight;      // rubrik + teckenförklaring
+  lista.style.maxHeight = Math.max(360, grafPanel.offsetHeight - ramar) + 'px';
+}
+
 function renderMainChart(){
   const c = STATE.ctx[STATE.chartSym]; if(!c) return;
   const v = STATE.vy;
@@ -2023,7 +2048,8 @@ function renderMainChart(){
               levels.push({p:c.prev.l, color:'#5D7EA5', label:'PDL', dash:[2,4]}); }
 
   drawCandles($('#mainChart'), {
-    bars, height: window.innerWidth < 680 ? 250 : 330, dec:c.inst.dec, prisSkala: v.pris,
+    bars, height: window.innerWidth < 680 ? 250 : window.innerWidth >= 1900 ? 460 : 330,
+    dec:c.inst.dec, prisSkala: v.pris,
     lines:[
       {data:cut(c.e9a),   color:'#4FD3FF', w:1.2},
       {data:cut(c.e21a),  color:'#FF2E4C', w:1.2},
@@ -2042,6 +2068,7 @@ function renderMainChart(){
     `ATR ${fmt(c.atr,1)}${c.inst.unit} · ${bars.length} staplar${v.off ? ' (' + v.off + ' bak)' : ''}` +
     `<span class="dim"> · nivåer från 15m</span>` +
     `<span class="dim">${zonTxt}</span>`;
+  jamnaSpalter();
 }
 
 /* ==========================================================================
