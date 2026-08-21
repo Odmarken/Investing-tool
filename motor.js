@@ -55,6 +55,28 @@ const INSTR = {
 };
 const SYMS = Object.keys(INSTR);          // enda stället som avgör vilka instrument som körs
 
+/* ---------- positionsstorlek ----------
+   Förlusten är det som hålls fast: en stoppad affär kostar MAX_RISK dollar,
+   inte mer. Antalet kontrakt räknas därför ut från hur långt stoppen faktiskt
+   sitter — ligger den bakom ett stöd en bra bit bort blir kontrakten färre,
+   ligger den tätt under swinglowen blir de fler. Vinsten får bli vad R:R ger.
+   Ett kontrakt är golvet: är stoppen så vid att ens ett MNQ riskerar mer än
+   taket flaggas det i stället för att affären räknas bort. */
+const MAX_RISK = 750;
+
+function positionsStorlek(inst, riskPunkter, malPunkter, maxRisk = MAX_RISK){
+  const pt = (INSTR[inst] && INSTR[inst].ptValue) || 2;
+  const perKontrakt = Math.abs(riskPunkter) * pt;
+  const kontrakt = perKontrakt > 0 ? Math.max(1, Math.floor(maxRisk / perKontrakt)) : 1;
+  return {
+    kontrakt,
+    perKontrakt,                              // dollar per kontrakt om stoppen tas
+    riskUsd: perKontrakt * kontrakt,          // hela affärens förlust vid stopp
+    malUsd: Math.abs(malPunkter) * pt * kontrakt,
+    overRisk: perKontrakt > maxRisk           // ett enda kontrakt spränger redan taket
+  };
+}
+
 /* ==========================================================================
    4. INDIKATORER
    ========================================================================== */
@@ -519,6 +541,7 @@ function makeSignal(ctx, o){
 
   const rr = t/risk;
   const dist = gap;
+  const storlek = positionsStorlek(ctx.inst.key, risk, t);
 
   // ---- konfidens ----
   let c = 44;
@@ -551,6 +574,8 @@ function makeSignal(ctx, o){
     fam:o.fam, famName:FAM[o.fam]||'', grade:G.grade, backers:G.backers, backN:G.n, against:G.against,
     side:o.side, name:o.name, entry, sl, tp,
     risk, ptsTp:t, rr, conf:c, why:o.why||[], invalid,
+    kontrakt:storlek.kontrakt, riskUsd:storlek.riskUsd, malUsd:storlek.malUsd,
+    riskPerKontrakt:storlek.perKontrakt, overRisk:storlek.overRisk,
     tpBasis:T.basis, tpMacro:T.macro, tpAlign:T.align,
     dist, atr:ctx.atr, bars:ctx.bars, ctxPx:ctx.px, status:'VÄNTAR'
   };
@@ -784,7 +809,7 @@ function assignStatus(sigs, pxByInst){
 export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
-  INSTR, RISK_MULT, FAM, FAM_KORT, FAM_KEY, FAM_N, GRADE_RANK,
+  INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, GRADE_RANK,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,
   makeSignal, generateSignals, combine, assignStatus, LIVE, SEDD

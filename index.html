@@ -800,7 +800,7 @@ import * as MOTOR from './motor.js';
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
-  INSTR, SYMS, RISK_MULT, FAM, FAM_KORT, FAM_KEY, FAM_N, GRADE_RANK,
+  INSTR, SYMS, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, GRADE_RANK,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, pickTarget, makeSignal, generateSignals, combine, assignStatus,
   LIVE, SEDD, MOTORCFG
@@ -1827,8 +1827,9 @@ function renderSignals(){
       </div>
       <div class="metrics">
         <div class="m"><i>R:R</i><b class="${s.rr>=2?'pos':s.rr<1.3?'neg':''}">${s.rr.toFixed(2)}</b></div>
-        <div class="m"><i>Risk/kontrakt</i><b class="neg">${fmt(s.risk*(INSTR[s.inst]?INSTR[s.inst].ptValue:1), 0)} $</b></div>
-        <div class="m"><i>Mål/kontrakt</i><b class="pos">${fmt(Math.abs(s.tp-s.entry)*(INSTR[s.inst]?INSTR[s.inst].ptValue:1), 0)} $</b></div>
+        <div class="m"><i>Kontrakt</i><b title="Så många MNQ ryms under ${fmt(MAX_RISK,0)} $ risk med den här stoppen">${s.kontrakt} <span class="dim" style="font-size:9.5px;font-weight:600">MNQ</span></b></div>
+        <div class="m"><i>Risk</i><b class="neg" title="${fmt(s.riskPerKontrakt,0)} $ per kontrakt × ${s.kontrakt}${s.overRisk ? ' — stoppen är så vid att ett enda kontrakt går över taket' : ''}">${fmt(s.riskUsd, 0)} $${s.overRisk ? ' <span class="dim" style="font-size:9px">över taket</span>' : ''}</b></div>
+        <div class="m"><i>Mål</i><b class="pos" title="${s.rr.toFixed(2)} × risken">${fmt(s.malUsd, 0)} $</b></div>
         ${pnl}
         <div class="conf"><i class="dim" style="font-style:normal;font-size:9px;letter-spacing:.8px">KONF</i>
           <div class="confbar ${cCls}"><i style="width:${s.conf}%"></i></div>
@@ -2469,7 +2470,7 @@ const KONTO_NYCKEL = 'riptide.demo.v2';
 const MARGINAL_PER_KONTRAKT = 100;   // dagmarginal per MNQ hos en typisk mäklare
 const KONTO = {
   start: 50000,          // startkapital i dollar
-  kontrakt: 5,           // antal MNQ-kontrakt per affär
+  kontrakt: 0,           // 0 = storleken räknas per affär ur MAX_RISK, se positionsStorlek
   kapital: 50000,
   startad: null,
   oppna: {},             // id -> position
@@ -2612,18 +2613,21 @@ function demoTick(){
     if(KONTO.oppna[sig.id]) return;
     if(KONTO.affarer.some(a => a.id === sig.id)) return;    // redan avslutad
     // Hela braketten läggs på en gång: fyllning, stopp och mål (OCO).
+    // Antalet kontrakt är signalens egna — så vitt stoppen sitter kostar en
+    // stoppad affär alltid ungefär MAX_RISK dollar, aldrig mer.
+    const antal = sig.kontrakt || KONTO.kontrakt || 1;
     KONTO.oppna[sig.id] = {
       id: sig.id, inst: sig.inst, side: sig.side, grade: sig.grade,
       namn: sig.name, entry: sig.entryFyllt || sig.entry, sl: sig.sl, tp: sig.tp,
-      kontrakt: KONTO.kontrakt, oppnad: sig.oppnad || Date.now(), risk: sig.risk,
+      kontrakt: antal, oppnad: sig.oppnad || Date.now(), risk: sig.risk,
       // stapeln som pågick när vi fylldes; först nästa stapel får avgöra på högsta/lägsta
       kollad: (STATE.ctx[sig.inst] && STATE.ctx[sig.inst].bars.length)
                 ? STATE.ctx[sig.inst].bars[STATE.ctx[sig.inst].bars.length - 1].t
                 : Date.now(),
-      marginal: KONTO.kontrakt*MARGINAL_PER_KONTRAKT
+      marginal: antal*MARGINAL_PER_KONTRAKT
     };
     andrat = true;
-    coreRead('demokonto: ' + (sig.side === 'long' ? 'KÖPT' : 'SÅLT') + ' ' + KONTO.kontrakt +
+    coreRead('demokonto: ' + (sig.side === 'long' ? 'KÖPT' : 'SÅLT') + ' ' + antal +
              ' MNQ @ ' + fmt(sig.entryFyllt || sig.entry, sig.dec) +
              ' · stopp ' + fmt(sig.sl, sig.dec) + ' · mål ' + fmt(sig.tp, sig.dec));
   });
@@ -2849,8 +2853,10 @@ function renderDemo(){
 
   $('#demoNote').innerHTML =
     'Pappershandel i realtid, inga riktiga pengar. Kontot beter sig som ett terminskonto: startkapital ' +
-    fmt(KONTO.start, 0) + ' $ och <b>' + KONTO.kontrakt + ' MNQ-kontrakt</b> per affär till ' +
-    demoPunktVarde('NQ') + ' $ per punkt, samma storlek varje gång. När en setup går aktiv läggs hela braketten ' +
+    fmt(KONTO.start, 0) + ' $ och <b>högst ' + fmt(MAX_RISK, 0) + ' $ i förlust per affär</b>. Antalet MNQ-kontrakt ' +
+    'räknas därför ut för varje setup: sitter stoppen långt bort, bakom ett stöd eller en swinglow, blir kontrakten färre, ' +
+    'och sitter den tätt blir de fler — kostnaden om stoppen tas blir densamma. Vinsten får bli vad R:R ger. ' +
+    'Ett kontrakt är ' + demoPunktVarde('NQ') + ' $ per punkt. När en setup går aktiv läggs hela braketten ' +
     'automatiskt — fyllning, stopp och mål — och positionen hålls tills ett av dem nås. Bara <b>A och B</b> handlas; ' +
     'C-setups är för svaga och tas inte. Marginalen räknas som ' + MARGINAL_PER_KONTRAKT + ' $ per kontrakt, vilket ' +
     'är ungefär vad en mäklare tar i dagmarginal för mikroterminen — den siffran är ett antagande, inte hämtad ' +

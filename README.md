@@ -9,7 +9,7 @@ för Yahoos fördröjda data.
 > **Signaler och graf går på MNQ**, mikroterminen: samma index och samma tick som NQ,
 > men $2 per punkt i stället för $20. Nyhetsanalysen och nyhetsbiasen räknas fortfarande
 > på NQ/Nasdaq-100 — det är samma marknad, och rubrikerna handlar om indexet. Korten visar
-> risk och mål i dollar per kontrakt, räknat på mikrokontraktets värde.
+> antal kontrakt, risk och mål i dollar för hela affären, räknat på mikrokontraktets värde.
 >
 > **Guld är pausat.** Dashboarden kör bara NQ. Workern och Pine-skriptet klarar
 > fortfarande `GC`, så för att ta tillbaka guld räcker det att avkommentera
@@ -264,7 +264,12 @@ står den andra som `+ SVEP` efter.
 **Demokontot** längst ned är pappershandel i realtid — inga riktiga pengar, men det
 beter sig som ett terminskonto:
 
-* Startkapital **50 000 USD**, **5 MNQ-kontrakt** per affär, 2 $ per punkt.
+* Startkapital **50 000 USD** och **högst 750 $ i förlust per affär** (`MAX_RISK` i
+  `motor.js`). Antalet MNQ-kontrakt räknas ut per setup: `golv(750 / (stopp i punkter × 2 $))`,
+  minst ett. Sitter stoppen långt bort — bakom ett stöd eller en swinglow — blir kontrakten
+  färre, sitter den tätt blir de fler, men en stoppad affär kostar ungefär lika mycket varje
+  gång. Vinsten får bli vad R:R ger. Samma tal används av signalkorten, molnfunktionen och
+  kontot, så alla tre visar samma storlek.
 * När en setup går aktiv läggs hela braketten automatiskt: fyllning, stopp och mål.
   Positionen hålls tills ett av dem nås.
 * **Bara A och B handlas.** C-setups är för svaga och går inte ens till aktiv längre.

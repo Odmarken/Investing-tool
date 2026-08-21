@@ -30,7 +30,7 @@ const KONTO_DOK = () => db.doc('riptide/konto');
 const FEED_DOK  = () => db.doc('riptide/feed');
 
 const START_KAPITAL = 50000;
-const KONTRAKT = 5;
+const KONTRAKT = 0;                    // 0 = storleken räknas per affär ur MAX_RISK
 const MARGINAL_PER_KONTRAKT = 100;
 const INST = INSTR.NQ;
 const PUNKTVARDE = INST.ptValue;
@@ -135,11 +135,11 @@ export async function kontoVarv(logg = () => {}){
     konto.oppna[s.id] = {
       id: s.id, side: s.side, grade: s.grade, namn: s.name,
       entry: s.entryFyllt || s.entry, sl: s.sl, tp: s.tp, risk: s.risk,
-      kontrakt: konto.kontrakt, oppnad: s.oppnad || Date.now(),
+      kontrakt: s.kontrakt || konto.kontrakt || 1, oppnad: s.oppnad || Date.now(),
       kollad: bars[bars.length - 1].t,
-      marginal: konto.kontrakt*MARGINAL_PER_KONTRAKT
+      marginal: (s.kontrakt || konto.kontrakt || 1)*MARGINAL_PER_KONTRAKT
     };
-    logg('öppnar ' + s.grade + ' ' + s.side + ' @ ' + s.entry.toFixed(2));
+    logg('öppnar ' + s.grade + ' ' + s.side + ' × ' + (s.kontrakt || 1) + ' @ ' + s.entry.toFixed(2));
   });
 
   Object.keys(konto.oppna).forEach(id => {

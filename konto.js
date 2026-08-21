@@ -10,7 +10,7 @@ import { INSTR, MOTORCFG, buildContext, generateSignals, assignStatus, LIVE, SED
 
 export const KONTO_NYCKEL = 'konto';
 export const START_KAPITAL = 50000;
-export const KONTRAKT = 5;
+export const KONTRAKT = 0;                    // 0 = storleken räknas per affär ur MAX_RISK i motor.js
 export const MARGINAL_PER_KONTRAKT = 100;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
 const INST = INSTR.NQ;
@@ -101,9 +101,9 @@ export async function kontoTick(env, loggRad){
     konto.oppna[s.id] = {
       id: s.id, side: s.side, grade: s.grade, namn: s.name,
       entry: s.entryFyllt || s.entry, sl: s.sl, tp: s.tp, risk: s.risk,
-      kontrakt: konto.kontrakt, oppnad: s.oppnad || Date.now(),
+      kontrakt: s.kontrakt || konto.kontrakt || 1, oppnad: s.oppnad || Date.now(),
       kollad: bars[bars.length - 1].t,
-      marginal: konto.kontrakt*MARGINAL_PER_KONTRAKT
+      marginal: (s.kontrakt || konto.kontrakt || 1)*MARGINAL_PER_KONTRAKT
     };
     logg('öppnar ' + s.grade + ' ' + s.side + ' @ ' + s.entry.toFixed(2));
   });
