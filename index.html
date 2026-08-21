@@ -1038,9 +1038,14 @@ function mergeBars(base, feed){
     if(t > newest) newest = t;
   });
   let bars = [...map.values()].sort((a,b)=>a.t-b.t);
-  // Yahoos pågående stapel är fördröjd — när feeden lever slutar serien på senaste stängda TV-stapel
-  if(newest) bars = bars.filter(b => b.t <= newest);
-  return { bars: bars.slice(-400), newest, added, n:(feed||[]).length };
+  // Yahoos pågående stapel är fördröjd — så länge feeden lever slutar serien på
+  // senaste stängda TV-stapel. Har alertet tystnat (utgånget, pausat, borttaget)
+  // vore det däremot fel att kapa serien där: då skulle sidan visa gamla priser
+  // som om de vore färska. Är feeden mer än elva minuter gammal behålls därför
+  // Yahoos svans, och de TV-staplar som finns används bara som historik.
+  const fardk = newest && (Date.now() - newest) < 11*60000;
+  if(fardk) bars = bars.filter(b => b.t <= newest);
+  return { bars: bars.slice(-400), newest, added, fardk, n:(feed||[]).length };
 }
 
 /* --------- Simulerad data (fallback, tydligt märkt) --------- */
@@ -2918,10 +2923,10 @@ async function loadMarket(){
       const m = mergeBars(d.bars, feed);
       bars = m.bars;
       const ageMin = (Date.now() - m.newest)/60000;
-      coreRead('TradingView-feed · ' + m.n + ' staplar, senaste ' + Math.round(ageMin) + ' min gammal');
-      fs = { n:m.n, ageMin, live: ageMin < 11 };
-      if(fs.live){ demoK[k] = false; liveOk++; }
-      d.meta.regularMarketPrice = last(bars).c;
+      coreRead('TradingView-feed · ' + m.n + ' staplar, senaste ' + Math.round(ageMin) + ' min gammal' +
+               (m.fardk ? '' : ' — för gammal, kör vidare på Yahoo'));
+      fs = { n:m.n, ageMin, live: m.fardk };
+      if(fs.live){ demoK[k] = false; liveOk++; d.meta.regularMarketPrice = last(bars).c; }
     }
     STATE.feed[k] = fs;
     corePing('ind', 2);
