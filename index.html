@@ -2934,6 +2934,43 @@ function renderDemo(){
     ' <i>Nollställ</i> börjar om från ' + fmt(KONTO.start, 0) + ' $.';
 }
 
+/* Brickan uppe till höger. Historiken ligger alltid ett femminutersfack efter
+   — den skrivs först när facket är slut — så åldern måste räknas på det
+   färskaste av historiken och den pågående stapeln. Annars säger brickan tyst
+   fast feeden tickar. */
+function renderFeedPill(){
+  const pill = $('#feedPill');
+  if(!pill) return;
+  if(!feedAdress()){ pill.style.display = 'none'; return; }
+  pill.style.display = '';
+
+  const f = STATE.feed;
+  const historik = SYMS.map(k=>f[k]).find(Boolean);
+  const liveAlder = STATE.liveNar ? (Date.now() - STATE.liveNar)/60000 : Infinity;
+  const alder = Math.min(liveAlder, historik ? historik.ageMin : Infinity);
+  const kanal = CFG.feedUrl ? 'egen worker' : 'Firebase';
+
+  if(alder < 11){
+    pill.className = 'sesspill rth';
+    pill.title = 'TradingView-feeden lever · ' + kanal + ' · ' +
+      (liveAlder < 11
+        ? (STATE.liveKalla === 'firestore' ? 'pågående stapeln pushas i realtid' : 'pågående stapeln hämtas var 5:e sekund')
+        : 'senaste stängda stapeln är ' + Math.round(alder) + ' min gammal');
+    $('#feedTxt').textContent = 'LIVE';
+    return;
+  }
+
+  pill.className = 'sesspill pre';
+  if(historik || isFinite(liveAlder)){
+    pill.title = 'Feeden svarar, men senaste stapeln är ' + Math.round(alder) +
+      ' minuter gammal — alertet i TradingView har slutat skicka. Panelen räknar på Yahoo så länge.';
+    $('#feedTxt').textContent = 'TV-feed tyst ' + Math.round(alder) + ' min';
+  }else{
+    pill.title = feedErr ? 'Feed-adressen svarar inte: ' + feedErr : 'Ingen stapel har kommit in ännu.';
+    $('#feedTxt').textContent = feedErr ? ('TV-feed nås inte · ' + feedErr) : 'TV-feed tom';
+  }
+}
+
 /* --------------------------------------------------------------------------
    Den pågående stapeln — panelens snabbaste puls.
    TradingView-alertet kan skicka oftare än var femte minut (5-sekunders- eller
@@ -2969,7 +3006,7 @@ function taEmotLive(bar){
   const pxBy = {}; SYMS.forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
   STATE.signals = assignStatus(STATE.signals, pxBy);
   demoTick();
-  renderTape(); renderSignals(); renderMainChart(); renderTech(); renderDemo();
+  renderTape(); renderSignals(); renderMainChart(); renderTech(); renderDemo(); renderFeedPill();
   if(livePuls % 12 === 1) corePing('feed', 1);
 }
 
@@ -3032,23 +3069,7 @@ async function loadMarket(){
   DEMO = Object.values(demoK).some(Boolean);
   $('#bnDemo').classList.toggle('show', DEMO);
 
-  const f = STATE.feed, live = SYMS.filter(k=>f[k] && f[k].live);
-  const pill = $('#feedPill');
-  if(!feedAdress()){ pill.style.display = 'none'; }
-  else{
-    pill.style.display = '';
-    if(live.length){
-      pill.className = 'sesspill rth';
-      const puls = STATE.liveNar && (Date.now() - STATE.liveNar < 120000)
-        ? ' · ' + (STATE.liveKalla === 'firestore' ? 'realtid' : 'var 5:e sek') : '';
-      $('#feedTxt').textContent = 'TradingView live · ' + live.join(' + ') + (CFG.feedUrl ? '' : ' · Firebase') + puls;
-    }else{
-      const any = SYMS.map(k=>f[k]).find(Boolean);
-      pill.className = 'sesspill pre';
-      $('#feedTxt').textContent = any ? ('TV-feed tyst ' + Math.round(any.ageMin) + ' min')
-                                 : (feedErr ? ('TV-feed nås inte · ' + feedErr) : 'TV-feed tom');
-    }
-  }
+  renderFeedPill();
   return liveOk;
 }
 
@@ -3291,6 +3312,7 @@ function wire(){
     rz = setTimeout(()=>{ renderMainChart(); renderSignals(); renderDemo(); }, 200); });
 }
 
+pollaLive();                          // direkt vid start, annars står brickan tyst i fem sekunder
 setInterval(pollaLive, 5000);         // samma takt som feeden kan skicka i
 
 let timer = null;
