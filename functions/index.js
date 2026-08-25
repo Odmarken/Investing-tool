@@ -142,7 +142,7 @@ export async function kontoVarv(logg = () => {}){
     if(FAM_HANDLAS[s.fam] === false) return;               // mätt förlustbringande familj
     if(konto.oppna[s.id] || konto.affarer.some(a => a.id === s.id)) return;
     konto.oppna[s.id] = {
-      id: s.id, side: s.side, grade: s.grade, namn: s.name,
+      id: s.id, inst: INST.key, side: s.side, grade: s.grade, namn: s.name,
       entry: s.entryFyllt || s.entry, sl: s.sl, tp: s.tp, risk: s.risk,
       kontrakt: s.kontrakt || konto.kontrakt || 1, oppnad: s.oppnad || Date.now(),
       kollad: bars[bars.length - 1].t,

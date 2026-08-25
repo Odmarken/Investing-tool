@@ -2572,6 +2572,13 @@ const KONTO = {
 
 const demoPunktVarde = inst => (INSTR[inst] && INSTR[inst].ptValue) || 2;
 
+/* Vilket instrument en position gäller. Positioner som molnfunktionen öppnat
+   saknade fältet, och då hittade sidan ingen kurs: öppen P/L stod kvar på noll
+   och saldot rörde sig först när affären stängdes. Nu antas NQ när fältet
+   saknas — det är ändå det enda instrument panelen kör. */
+const posInst = pos => (pos && pos.inst && INSTR[pos.inst]) ? pos.inst : 'NQ';
+const posCtx  = pos => STATE.ctx[posInst(pos)];
+
 function demoLadda(){
   let d = null;
   try{ d = JSON.parse(localStorage.getItem(KONTO_NYCKEL) || 'null'); }catch(e){ d = null; }
@@ -2734,7 +2741,7 @@ function demoTick(){
 
   Object.keys(KONTO.oppna).forEach(id => {
     const pos = KONTO.oppna[id];
-    const c = STATE.ctx[pos.inst];
+    const c = posCtx(pos);
     if(!c || !c.bars.length) return;
     const dir = pos.side === 'long' ? 1 : -1;
     // Alla staplar som passerat sedan senaste kollen gås igenom, så att en position
@@ -2758,10 +2765,10 @@ function demoTick(){
     if(exit === null) return;
 
     const punkter = dir*(exit - pos.entry);
-    const dollar = punkter*pos.kontrakt*demoPunktVarde(pos.inst);
+    const dollar = punkter*pos.kontrakt*demoPunktVarde(posInst(pos));
     KONTO.kapital += dollar;
     KONTO.affarer.push({
-      id: pos.id, inst: pos.inst, side: pos.side, grade: pos.grade, namn: pos.namn,
+      id: pos.id, inst: posInst(pos), side: pos.side, grade: pos.grade, namn: pos.namn,
       entry: pos.entry, exit, hur, punkter, dollar, kontrakt: pos.kontrakt,
       oppnad: pos.oppnad, stangd: nar,
       R: pos.risk ? punkter/pos.risk : null,
@@ -2779,10 +2786,10 @@ function demoOrealiserat(){
   let sum = 0;
   Object.keys(KONTO.oppna).forEach(id => {
     const pos = KONTO.oppna[id];
-    const c = STATE.ctx[pos.inst];
+    const c = posCtx(pos);
     if(!c) return;
     const dir = pos.side === 'long' ? 1 : -1;
-    sum += dir*(c.px - pos.entry)*pos.kontrakt*demoPunktVarde(pos.inst);
+    sum += dir*(c.px - pos.entry)*pos.kontrakt*demoPunktVarde(posInst(pos));
   });
   return sum;
 }
@@ -2867,18 +2874,19 @@ function renderDemo(){
   const oppnaIdn = Object.keys(KONTO.oppna);
   const marginal = oppnaIdn.reduce((sum, id) => sum + (KONTO.oppna[id].marginal || KONTO.oppna[id].kontrakt*MARGINAL_PER_KONTRAKT), 0);
   const exponering = oppnaIdn.reduce((sum, id) => {
-    const pos = KONTO.oppna[id], c = STATE.ctx[pos.inst];
-    return sum + (c ? c.px : pos.entry)*pos.kontrakt*demoPunktVarde(pos.inst);
+    const pos = KONTO.oppna[id], c = posCtx(pos);
+    return sum + (c ? c.px : pos.entry)*pos.kontrakt*demoPunktVarde(posInst(pos));
   }, 0);
   const tile = (etikett, varde, cls) =>
     '<div class="btstat"><i>' + etikett + '</i><b class="' + (cls||'') + '">' + varde + '</b></div>';
 
   $('#demoStats').innerHTML =
-    tile('Kapital', fmt(eget, 0) + ' $', eget >= KONTO.start ? 'pos' : 'neg') +
+    tile('Saldo nu', fmt(eget, 0) + ' $', eget >= KONTO.start ? 'pos' : 'neg') +
+    tile('Varav öppet', oppnaIdn.length ? fmtSigned(orealiserat, 0) + ' $' : '–',
+         orealiserat > 0 ? 'pos' : orealiserat < 0 ? 'neg' : '') +
     tile('Resultat', fmtSigned(eget - KONTO.start, 0) + ' $', eget >= KONTO.start ? 'pos' : 'neg') +
     tile('Avkastning', pct(pct1, 1), pct1 >= 0 ? 'pos' : 'neg') +
     tile('Realiserat', fmtSigned(KONTO.kapital - KONTO.start, 0) + ' $', KONTO.kapital >= KONTO.start ? 'pos' : 'neg') +
-    tile('Öppen P/L', oppnaIdn.length ? fmtSigned(orealiserat, 0) + ' $' : '–', orealiserat >= 0 ? 'pos' : 'neg') +
     tile('Marginal', marginal ? fmt(marginal, 0) + ' $' : '–') +
     tile('Fri marginal', fmt(eget - marginal, 0) + ' $') +
     tile('Exponering', exponering ? fmt(exponering, 0) + ' $' : '–') +
@@ -2891,10 +2899,10 @@ function renderDemo(){
 
   $('#demoOppna').innerHTML = oppnaIdn.map(id => {
     const pos = KONTO.oppna[id];
-    const c = STATE.ctx[pos.inst];
+    const c = posCtx(pos);
     const dir = pos.side === 'long' ? 1 : -1;
     const px = c ? c.px : pos.entry;
-    const dollar = dir*(px - pos.entry)*pos.kontrakt*demoPunktVarde(pos.inst);
+    const dollar = dir*(px - pos.entry)*pos.kontrakt*demoPunktVarde(posInst(pos));
     const dec = c ? c.inst.dec : 2;
     return '<div class="oppen"><span class="tag">' + pos.grade + '</span>' +
       '<b class="' + (pos.side === 'long' ? 'pos' : 'neg') + '">' + (pos.side === 'long' ? 'LONG' : 'SHORT') + '</b>' +
