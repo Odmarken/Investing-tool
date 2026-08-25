@@ -240,7 +240,11 @@ header.topbar{
 .fam.brott{background:rgba(140,230,255,.11);color:var(--lblue-2);border:1px solid rgba(140,230,255,.32)}
 .fam.ict{background:rgba(255,46,76,.15);color:var(--scarlet-2);border:1px solid rgba(255,46,76,.50);
   box-shadow:0 0 10px rgba(255,46,76,.18)}
+.fam.orb{background:rgba(0,229,140,.13);color:var(--green);border:1px solid rgba(0,229,140,.42)}
 .fam.extra{background:transparent;color:var(--muted);border:1px dashed var(--line-2)}
+.ejhandlas{display:inline-flex;align-items:center;gap:4px;font-size:8.5px;letter-spacing:.7px;font-weight:800;
+  text-transform:uppercase;color:var(--muted);border:1px dashed var(--line-2);border-radius:5px;padding:2px 6px}
+.sig.ohandlad .edge{opacity:.35}
 .strat.A{background:rgba(0,229,140,.16);color:var(--green);border:1px solid rgba(0,229,140,.55)}
 .strat.B{background:rgba(79,211,255,.14);color:var(--lblue);border:1px solid rgba(79,211,255,.45)}
 .strat.C{background:rgba(255,176,32,.12);color:var(--amber);border:1px solid rgba(255,176,32,.35)}
@@ -676,11 +680,13 @@ footer b{color:var(--muted)}
           <div class="empty"><span class="spin"></span> Beräknar setups…</div>
         </div>
         <div class="legendline">
-          <span><span class="strat A" style="width:16px;height:16px;font-size:9px">A</span> Minst tre av fyra strategier pekar åt samma håll</span>
-          <span><span class="strat B" style="width:16px;height:16px;font-size:9px">B</span> Två av fyra</span>
+          <span><span class="strat A" style="width:16px;height:16px;font-size:9px">A</span> Minst tre av fem strategier pekar åt samma håll</span>
+          <span><span class="strat B" style="width:16px;height:16px;font-size:9px">B</span> Två av fem</span>
           <span><span class="strat C" style="width:16px;height:16px;font-size:9px">C</span> En eller ingen — lägst potential</span>
           <span><span class="fam trend">TREND</span> pullback · <span class="fam svep">SVEP</span> likviditet ·
-            <span class="fam brott">BROTT</span> range · <span class="fam ict">ICT</span> svep + MSS + FVG</span>
+            <span class="fam brott">BROTT</span> range · <span class="fam ict">ICT</span> svep + MSS + FVG ·
+            <span class="fam orb">ORB</span> öppningsrange</span>
+          <span class="dim"><span class="ejhandlas">handlas ej</span> familjen förlorade pengar i mätningen — signalen visas, men demokontot tar den inte</span>
         </div>
       </div>
     </div>
@@ -800,9 +806,9 @@ import * as MOTOR from './motor.js';
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
-  INSTR, SYMS, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, GRADE_RANK,
+  INSTR, SYMS, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
-  moveBounds, pickTarget, makeSignal, generateSignals, combine, assignStatus,
+  moveBounds, pickTarget, makeSignal, generateSignals, combine, assignStatus, MODELL,
   LIVE, SEDD, MOTORCFG
 } = MOTOR;
 /* ==========================================================================
@@ -1478,7 +1484,8 @@ const STATE = {
   bias:{nq:0, gc:0}, newsBias:{nq:0, gc:0},
   chartSym:'NQ', feed:{}, newsFilter:'all', sigFilter:'all',
   vy:{ n:96, off:0, pris:1, py:0 },         // grafens fönster: staplar, hur långt bak, prisskala, höjdläge
-  lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[]
+  lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[],
+  livePris:null, liveNar:0, liveKalla:null
 };
 
 function computeNewsBias(items){
@@ -1798,7 +1805,7 @@ function renderSignals(){
   }
   if(!list.length){
     el.innerHTML = '<div class="empty">' +
-      (STATE.sigFilter === 'A' ? 'Ingen A-setup just nu — minst tre av fyra strategier måste peka åt samma håll.'
+      (STATE.sigFilter === 'A' ? 'Ingen A-setup just nu — minst tre av fem strategier måste peka åt samma håll.'
      : STATE.sigFilter === 'B' ? 'Ingen B-setup just nu.'
      : 'Inga giltiga setups just nu.') + '</div>';
     return;
@@ -1826,7 +1833,7 @@ function renderSignals(){
     const cCls = s.conf>=68?'hi':s.conf<45?'lo':'';
     const stCls = ['ACTIVE','NÄRA','LÖPANDE','TP','SL'].includes(s.status)?s.status:'';
     const pnl = nz(s.openPnl) ? `<div class="m"><i>Öppen</i><b class="${s.openPnl>=0?'pos':'neg'}">${fmtSigned(s.openPnl/s.risk,2)} R</b></div>` : '';
-    return `<div class="sig ${s.side} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
+    return `<div class="sig ${s.side} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
       <span class="edge"></span>
       <div class="sig-top">
         <span class="strat ${s.grade}" title="${s.backN} av ${FAM_N} strategifamiljer bakom riktningen">${s.grade}</span>
@@ -1834,6 +1841,7 @@ function renderSignals(){
         ${(s.also||[]).map(x=>`<span class="fam extra" title="Sammanslagen med ${esc(x)}">+ ${FAM_KORT[FAM_KEY(x)] || ''}</span>`).join('')}
         <span class="sig-inst">${esc(s.instLabel.split(' · ')[0])} <span class="dim" style="font-weight:500">${esc(s.instLabel.split(' · ')[1]||'')}</span></span>
         <span class="sig-dir ${s.side}">${dirTxt}</span>
+        ${FAM_HANDLAS[s.fam] === false ? '<span class="ejhandlas" title="Familjen ' + esc(s.famName) + ' hade negativ förväntan i mätningen på 60 dagar — demokontot öppnar inga affärer på den">handlas ej</span>' : ''}
         <span class="status ${stCls}"><span class="d"></span>${esc(s.statusTxt||s.status)}</span>
         <span class="sig-name">${esc(s.name)}</span>
       </div>
@@ -2569,6 +2577,14 @@ async function firebaseStart(){
     const db = getFirestore(initializeApp({
       apiKey: cfg.apiKey, authDomain: cfg.authDomain, projectId: cfg.projectId, appId: cfg.appId
     }));
+    /* Den pågående stapeln pushas hit så fort molnet tagit emot den. */
+    onSnapshot(doc(db, 'riptide', 'live'), snap => {
+      const d = snap.data();
+      if(!d || !d.NQ) return;
+      STATE.liveKalla = 'firestore';
+      taEmotLive(d.NQ);
+    }, fel => console.warn('Firestore live: ' + fel.message));
+
     onSnapshot(doc(db, 'riptide', 'konto'), snap => {
       const k = snap.data();
       if(!k || !isFinite(k.kapital)) return;
@@ -2648,6 +2664,7 @@ function demoTick(){
   STATE.signals.forEach(sig => {
     if(sig.status !== 'ACTIVE') return;
     if(sig.grade !== 'A' && sig.grade !== 'B') return;     // C handlas inte
+    if(FAM_HANDLAS[sig.fam] === false) return;             // familjen är mätt förlustbringande
     if(KONTO.oppna[sig.id]) return;
     if(KONTO.affarer.some(a => a.id === sig.id)) return;    // redan avslutad
     // Hela braketten läggs på en gång: fyllning, stopp och mål (OCO).
@@ -2917,6 +2934,58 @@ function renderDemo(){
     ' <i>Nollställ</i> börjar om från ' + fmt(KONTO.start, 0) + ' $.';
 }
 
+/* --------------------------------------------------------------------------
+   Den pågående stapeln — panelens snabbaste puls.
+   TradingView-alertet kan skicka oftare än var femte minut (5-sekunders- eller
+   1-minutersgrafen). Molnet väger ihop det till det femminutersfack som pågår,
+   och sidan får facket pushat av Firestore. Då behöver ingenting räknas om från
+   grunden: senaste stapeln byts ut, priset uppdateras och statusarna prövas mot
+   det nya priset, så en stopp eller ett mål träffas inom sekunder i stället för
+   vid nästa hela varv.
+   -------------------------------------------------------------------------- */
+let livePuls = 0, liveSenast = 0;
+
+function taEmotLive(bar){
+  if(!bar || !isFinite(bar.t) || !nz(bar.c)) return;
+  if(bar.t === liveSenast && STATE.livePris === bar.c) return;     // inget nytt
+  liveSenast = bar.t;
+  STATE.livePris = bar.c;
+  STATE.liveNar  = Date.now();
+  livePuls++;
+
+  const c = STATE.ctx.NQ;
+  if(!c || !c.bars.length) return;
+  const b = { t:bar.t, o:+bar.o, h:+bar.h, l:+bar.l, c:+bar.c, v:+bar.v || 0 };
+  const sista = c.bars[c.bars.length-1];
+  if(b.t === sista.t) c.bars[c.bars.length-1] = b;
+  else if(b.t > sista.t) c.bars.push(b);
+  else return;                                                     // gammal stapel, strunt i den
+
+  c.px = b.c;
+  const q = STATE.quotes.NQ;
+  if(q && nz(q.prev)){ q.px = b.c; q.chg = b.c - q.prev; q.chgPct = (b.c - q.prev)/q.prev*100; }
+
+  // Statusarna prövas mot det nya priset — ACTIVE, mål och stopp reagerar direkt.
+  const pxBy = {}; SYMS.forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
+  STATE.signals = assignStatus(STATE.signals, pxBy);
+  demoTick();
+  renderTape(); renderSignals(); renderMainChart(); renderTech(); renderDemo();
+  if(livePuls % 12 === 1) corePing('feed', 1);
+}
+
+/* Utan Firestore — localhost, GitHub Pages — frågar vi efter samma stapel. */
+async function pollaLive(){
+  if(STATE.liveKalla === 'firestore') return;
+  const bas = feedAdress();
+  if(!bas) return;
+  try{
+    const r = await fetch(bas.replace(/\/bars$/, '/live'), { cache:'no-store' });
+    if(!r.ok) return;
+    const b = await r.json();
+    if(b){ STATE.liveKalla = STATE.liveKalla || 'pollning'; taEmotLive(b); }
+  }catch(e){ /* nästa varv */ }
+}
+
 /* ==========================================================================
    10. HUVUDLOOP
    ========================================================================== */
@@ -2970,7 +3039,9 @@ async function loadMarket(){
     pill.style.display = '';
     if(live.length){
       pill.className = 'sesspill rth';
-      $('#feedTxt').textContent = 'TradingView live · ' + live.join(' + ') + (CFG.feedUrl ? '' : ' · Firebase');
+      const puls = STATE.liveNar && (Date.now() - STATE.liveNar < 120000)
+        ? ' · ' + (STATE.liveKalla === 'firestore' ? 'realtid' : 'var 5:e sek') : '';
+      $('#feedTxt').textContent = 'TradingView live · ' + live.join(' + ') + (CFG.feedUrl ? '' : ' · Firebase') + puls;
     }else{
       const any = SYMS.map(k=>f[k]).find(Boolean);
       pill.className = 'sesspill pre';
@@ -3220,6 +3291,8 @@ function wire(){
     rz = setTimeout(()=>{ renderMainChart(); renderSignals(); renderDemo(); }, 200); });
 }
 
+setInterval(pollaLive, 5000);         // samma takt som feeden kan skicka i
+
 let timer = null;
 function restartTimer(){
   if(timer) clearInterval(timer);
@@ -3229,7 +3302,7 @@ function restartTimer(){
 /* Allt som är värt att peta på från konsolen — och det testerna hakar i. */
 window.RIPTIDE = {
   STATE, KONTO, CFG, MOTOR,
-  assignStatus, buildAllSignals, generateSignals, buildContext, demoTick, renderDemo,
+  assignStatus, buildAllSignals, generateSignals, buildContext, demoTick, renderDemo, FAM_HANDLAS, MODELL, taEmotLive,
   renderSignals, renderMainChart, stodOchMotstand, till15m, fokusSignal, refresh
 };
 

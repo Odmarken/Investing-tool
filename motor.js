@@ -42,6 +42,9 @@ function sessionState(nar){
   return {k:'globex', t:'Globex — nattsession', cls:''};
 }
 
+/* ---------- den lärda modellen ---------- */
+import { MODELL } from './modell.js';
+
 /* ---------- instrument ---------- */
 const INSTR = {
   // Nyckeln heter NQ eftersom det är den koden feeden och nyhetsanalysen använder,
@@ -110,12 +113,51 @@ function atr(bars, p=14){
   for(let i=p;i<bars.length;i++){ a = (a*(p-1)+tr[i])/p; out[i]=a; }
   return out;
 }
-function dayKeyNY(ms){
-  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ms));
+/* Tidsomräkningarna är dyra och samma stapel slås upp om och om igen när
+   fönstret glider framåt, så svaren sparas. Taket håller minnet i schack. */
+const TIDCACHE = new Map();
+function tidNY(ms){
+  let v = TIDCACHE.get(ms);
+  if(v) return v;
+  const d = new Date(ms);
+  const p = new Intl.DateTimeFormat('en-CA',{ timeZone:'America/New_York', hour12:false,
+    year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', weekday:'short'
+  }).formatToParts(d);
+  const o = {}; p.forEach(x => o[x.type] = x.value);
+  v = { dag: o.year + '-' + o.month + '-' + o.day, min: (+o.hour%24)*60 + (+o.minute), vd: o.weekday };
+  if(TIDCACHE.size > 60000) TIDCACHE.clear();
+  TIDCACHE.set(ms, v);
+  return v;
 }
-function minutesNY(ms){
-  const p = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit'}).formatToParts(new Date(ms));
-  const o={}; p.forEach(x=>o[x.type]=x.value); return (+o.hour%24)*60 + (+o.minute);
+function dayKeyNY(ms){ return tidNY(ms).dag; }
+function minutesNY(ms){ return tidNY(ms).min; }
+function weekdayNY(ms){ return tidNY(ms).vd; }
+
+/* ADX — hur riktad marknaden är. Forskningen på VWAP-återgång är tydlig med
+   att det är regimen som avgör: hög ADX = trend, och då fungerar återgång
+   dåligt. Den får därför vara ett eget drag till modellen. */
+function adx(bars, p=14){
+  const out = new Array(bars.length).fill(null);
+  if(bars.length < p*2) return out;
+  let tr=0, dp=0, dm=0;
+  const trs=[], dps=[], dms=[];
+  for(let i=1;i<bars.length;i++){
+    const upp = bars[i].h - bars[i-1].h, ned = bars[i-1].l - bars[i].l;
+    trs.push(Math.max(bars[i].h-bars[i].l, Math.abs(bars[i].h-bars[i-1].c), Math.abs(bars[i].l-bars[i-1].c)));
+    dps.push(upp > ned && upp > 0 ? upp : 0);
+    dms.push(ned > upp && ned > 0 ? ned : 0);
+  }
+  let dx = null, adxV = null;
+  for(let i=0;i<trs.length;i++){
+    if(i < p){ tr+=trs[i]; dp+=dps[i]; dm+=dms[i]; if(i<p-1) continue; }
+    else { tr = tr - tr/p + trs[i]; dp = dp - dp/p + dps[i]; dm = dm - dm/p + dms[i]; }
+    if(!(tr > 0)) continue;
+    const pdi = 100*dp/tr, mdi = 100*dm/tr, summa = pdi+mdi;
+    dx = summa ? 100*Math.abs(pdi-mdi)/summa : 0;
+    adxV = adxV === null ? dx : (adxV*(p-1)+dx)/p;
+    out[i+1] = adxV;
+  }
+  return out;
 }
 function sessionVWAP(bars){
   const out = new Array(bars.length).fill(null);
@@ -168,12 +210,22 @@ function buildContext(inst, bars){
   };
   const today = range(days[todayKey]);
   const prev  = prevKey ? range(days[prevKey]) : null;
+  const vardag = weekdayNY(bars[i].t);
 
   // RTH och opening range (första 30 min = 6 st 5m-staplar)
   const rthIx = (days[todayKey]||[]).filter(ix => { const m=minutesNY(bars[ix].t); return m>=570 && m<960; });
-  const orIx  = rthIx.slice(0,6);
+  const orIx  = rthIx.slice(0,6);                 // 09:30–10:00 = de sex första 5m-staplarna
   const or    = range(orIx);
   const rth   = range(rthIx);
+  if(or){
+    // Öppningsrangens egen riktning: stänger den i övre halvan är utbrottet uppåt
+    // klart mer sannolikt (mätt på 6 000+ dagar i ES och NQ).
+    or.klar = orIx.length >= 6;
+    or.o = bars[orIx[0]].o;
+    or.c = bars[orIx[orIx.length-1]].c;
+    or.riktning = (or.h > or.l) ? (or.c - or.mid)/((or.h - or.l)/2) : 0;   // −1..1
+    or.bredd = or.h - or.l;
+  }
 
   // volym
   const vols = bars.slice(-60).map(b=>b.v).filter(v=>v>0);
@@ -193,15 +245,89 @@ function buildContext(inst, bars){
   if(nz(e200[i])) trend += (px > e200[i] ? 16 : -16);
   trend = clamp(trend, -100, 100);
 
+  const ad = adx(bars, 14);
   const momo = nz(r[i]) ? r[i] : 50;
   const chgPct = (px - bars[Math.max(0,i-12)].c) / bars[Math.max(0,i-12)].c * 100;
 
   return {
     inst, bars, i, px, atr:A, e9:e9[i], e21:e21[i], e50:e50[i], e200:e200[i],
     rsi:momo, vwap:vw[i], vwapArr:vw, e9a:e9, e21a:e21, e50a:e50,
-    today, prev, or, rth, relVol, trend, chgPct,
+    today, prev, or, rth, relVol, trend, chgPct, vardag,
+    adx: nz(ad[i]) ? ad[i] : 20, minNY: minutesNY(bars[i].t),
     recentHi, recentLo, atrPct:A/px*100
   };
+}
+
+/* ==========================================================================
+   4b. DRAG TILL MODELLEN
+   Samma funktion körs när sidan räknar och när träningen spelar upp historiken,
+   så en vikt betyder alltid samma sak. Ordningen är låst: läggs ett drag till
+   måste modellen tränas om, och tills dess vägrar aiSannolikhet svara.
+   ========================================================================== */
+const DRAG_NAMN = [
+  'lang', 'trend', 'svep', 'brott', 'ict', 'orb',
+  'trendriktning', 'rsiriktning', 'relvolym', 'atrprocent',
+  'avstand', 'rr', 'medhall', 'mothall',
+  'vwapriktning', 'daglage', 'daglageriktning',
+  'orlage', 'orbredd', 'orriktning', 'orklar',
+  'adx', 'rth', 'ytterhandel', 'globex', 'rthandel',
+  'mandag', 'tisdag', 'onsdag', 'torsdag', 'fredag',
+  'killzone', 'stopporder'
+];
+
+function drag(ctx, o, rr, dist, G){
+  const dir = o.side === 'long' ? 1 : -1;
+  const A = ctx.atr || 1, px = ctx.px;
+  const vw = nz(ctx.vwap) ? ctx.vwap : px;
+  const T = ctx.today, OR = ctx.or;
+  const dagLage = (T && T.h > T.l) ? clamp((px - T.l)/(T.h - T.l), 0, 1) : 0.5;
+  const m = ctx.minNY, iRth = (m >= 570 && m < 960);
+  const yttre = (m >= 240 && m < 570) || (m >= 960 && m < 1200);
+  const vd = ctx.vardag;
+  return [
+    dir > 0 ? 1 : 0,
+    o.fam === 'trend' ? 1 : 0, o.fam === 'svep' ? 1 : 0,
+    o.fam === 'brott' ? 1 : 0, o.fam === 'ict' ? 1 : 0, o.fam === 'orb' ? 1 : 0,
+    clamp(ctx.trend/100, -1, 1) * dir,
+    clamp((ctx.rsi - 50)/50, -1, 1) * dir,
+    Math.log(clamp(ctx.relVol || 1, 0.1, 6)),
+    clamp(ctx.atrPct, 0, 1),
+    clamp(dist/A, 0, 4),
+    clamp(rr, 0, 6),
+    (G ? G.n : 0)/4,
+    (G ? G.against.length : 0)/4,
+    clamp((px - vw)/A, -4, 4) * dir,
+    dagLage,
+    (dagLage - 0.5)*2*dir,
+    OR ? clamp((px - OR.mid)/((OR.bredd/2) || A), -4, 4) * dir : 0,
+    OR ? clamp(OR.bredd/A, 0, 8) : 0,
+    OR ? OR.riktning * dir : 0,
+    (OR && OR.klar) ? 1 : 0,
+    clamp(ctx.adx, 0, 60)/50,
+    iRth ? 1 : 0,
+    yttre ? 1 : 0,
+    (!iRth && !yttre) ? 1 : 0,
+    iRth ? clamp((m - 570)/390, 0, 1) : 0,
+    vd === 'Mon' ? 1 : 0, vd === 'Tue' ? 1 : 0, vd === 'Wed' ? 1 : 0,
+    vd === 'Thu' ? 1 : 0, vd === 'Fri' ? 1 : 0,
+    ictKillzone(ctx.bars[ctx.i].t) ? 1 : 0,
+    o.trigger === 'stop' ? 1 : 0
+  ];
+}
+
+/* Sannolikheten att setupen når målet före stoppen, enligt de tränade vikterna.
+   Saknas modell — eller har draglistan ändrats sedan träningen — svarar den
+   null, och resten av sidan använder den handsatta konfidensen som förut. */
+function aiSannolikhet(x){
+  const M = MODELL;
+  if(!M || !M.vikter || M.vikter.length !== x.length) return null;
+  if(M.drag && M.drag.length && M.drag.join(',') !== DRAG_NAMN.join(',')) return null;
+  let z = M.bias || 0;
+  for(let i=0;i<x.length;i++){
+    const sk = (M.skala && M.skala[i]) ? M.skala[i] : 1;
+    z += M.vikter[i] * ((x[i] - ((M.medel && M.medel[i]) || 0)) / sk);
+  }
+  return 1/(1 + Math.exp(-clamp(z, -18, 18)));
 }
 
 /* ==========================================================================
@@ -213,9 +339,30 @@ function buildContext(inst, bars){
      C = en familj eller ingen
    ========================================================================== */
 const RISK_MULT = { tight:0.95, normal:1.30, wide:1.75 };
-const FAM = { trend:'Trendfortsättning', svep:'Likviditetssvep', brott:'Range-brott', ict:'ICT-modell' };
-const FAM_KORT = { trend:'TREND', svep:'SVEP', brott:'BROTT', ict:'ICT' };
+const FAM = { trend:'Trendfortsättning', svep:'Likviditetssvep', brott:'Range-brott', ict:'ICT-modell', orb:'Öppningsrange' };
+const FAM_KORT = { trend:'TREND', svep:'SVEP', brott:'BROTT', ict:'ICT', orb:'ORB' };
 const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
+
+/* Vilka familjer som får öppna riktiga affärer i demokontot.
+   Siffrorna kommer från `npm run trana`: 60 dagars MNQ-historik, 17 184
+   avgjorda setups, uppdelade i fyra lika långa tidsblock.
+
+     familj   snitt R   block 1   block 2   block 3   block 4   n
+     trend     −0,128    −0,149    −0,101    −0,143    −0,119   9 905
+     brott     −0,091    −0,136    −0,015    −0,039    −0,169   2 190
+     svep      +0,001    +0,003    −0,000    −0,017    +0,020   3 997
+     ict       +0,009    −0,021    +0,111    −0,055    −0,005   1 002
+     orb       −0,033    −0,117    +0,499    −0,145    −0,415     123
+
+   Trendfamiljen förlorar i alla fyra blocken på nästan tiotusen setups. Det
+   är inte otur, det är en negativ förväntan, och den får därför inte handlas.
+   Range-brott är negativ i alla fyra blocken den också. Svep och ICT är i
+   praktiken nollresultat men stabila, och ORB är för ung för att döma — den
+   har bara 123 avgjorda setups. Alla familjer visas fortfarande som signaler;
+   spärren gäller vilka demokontot tar.
+   Kör om mätningen efter varje ändring i motorn: siffrorna ovan gäller den
+   motor som fanns när de mättes. */
+const FAM_HANDLAS = { trend:false, svep:true, brott:false, ict:true, orb:true };
 const FAM_N = Object.keys(FAM).length;
 const GRADE_RANK = { A:0, B:1, C:2 };
 
@@ -339,10 +486,47 @@ function tightRange(bars, slut, A){
 }
 
 /* +1 = familjen talar för uppgång, -1 för nedgång, 0 = neutral just nu. */
+/* Var står priset mot öppningsrangen, och har brottet bekräftats av en
+   stängd stapel? Returnerar null utanför RTH, innan rangen är klar, eller
+   när priset fortfarande ligger inne i den. */
+function orbLage(ctx){
+  const OR = ctx.or;
+  if(!OR || !OR.klar || !(OR.bredd > 0)) return null;
+  const m = ctx.minNY;
+  if(m < 600 || m >= 950) return null;              // först efter 10:00, och inte i stängningen
+  const bars = ctx.bars, n = bars.length;
+  const sista = bars[n-1];
+
+  // Bekräftelsen: senaste stängda stapeln ska ha stängt utanför kanten.
+  let dir = 0;
+  if(sista.c > OR.h) dir = 1;
+  else if(sista.c < OR.l) dir = -1;
+  if(!dir) return null;
+
+  // Hur länge sedan brottet skedde — ett färskt brott är något annat än ett
+  // pris som legat utanför i två timmar.
+  let sedan = 0;
+  for(let i = n-1; i >= Math.max(0, n-40); i--){
+    const c = bars[i].c;
+    if(dir > 0 ? c > OR.h : c < OR.l) sedan++;
+    else break;
+  }
+
+  // Dubbelbrott: har priset varit utanför åt andra hållet tidigare idag är
+  // dagen hackig. NQ dubbelbryter 30-minutersrangen 39 procent av dagarna.
+  let dubbel = false;
+  for(let i = Math.max(0, n-80); i < n; i++){
+    const c = bars[i].c;
+    if(dir > 0 ? c < OR.l : c > OR.h){ dubbel = true; break; }
+  }
+
+  return { dir, sedan, dubbel, niva: dir > 0 ? OR.h : OR.l, bredd: OR.bredd, riktning: OR.riktning };
+}
+
 function familyVotes(ctx){
   const px = ctx.px, A = ctx.atr;
   const vw = nz(ctx.vwap) ? ctx.vwap : px;
-  const v = { trend:0, svep:0, brott:0, ict:0 };
+  const v = { trend:0, svep:0, brott:0, ict:0, orb:0 };
   const ict = ctx.ict !== undefined ? ctx.ict : (ctx.ict = ictState(ctx));
 
   // 1. Trendfortsättning — EMA-stacken och läget mot VWAP
@@ -388,6 +572,14 @@ function familyVotes(ctx){
 
   // 4. ICT — svep av likviditet följt av strukturbrott åt andra hållet
   if(ict) v.ict = ict.dir;
+
+  // 5. Öppningsrange — den enda familjen med publicerad statistik bakom sig.
+  // Mätt på 6 142 ES- och NQ-dagar fortsätter ett brott av 30-minutersrangen
+  // i brottets riktning i drygt 70 procent av fallen när bekräftelsen är en
+  // stängd 5-minutersstapel utanför kanten, mot 67 procent på bara en wick.
+  // Vi kräver därför stängning, och bara medan RTH pågår.
+  const orb = orbLage(ctx);
+  if(orb) v.orb = orb.dir;
 
   return v;
 }
@@ -568,8 +760,15 @@ function makeSignal(ctx, o){
   c -= G.against.length * 4;
   c = clamp(Math.round(c), 12, 93);
 
+  // Dragen och modellens svar. p = sannolikhet att målet nås före stoppen,
+  // ev = förväntat utfall i R om affären tas (p*rr − (1−p)*1).
+  const x = drag(ctx, o, rr, dist, G);
+  const p = aiSannolikhet(x);
+  const ev = p === null ? null : p*rr - (1-p);
+
   return {
     id, trigger, reachSign, inst:ctx.inst.key, instLabel:ctx.inst.label,
+    x, ai: p === null ? null : Math.round(p*100), ev,
     dec:ctx.inst.dec, unit:ctx.inst.unit,
     fam:o.fam, famName:FAM[o.fam]||'', grade:G.grade, backers:G.backers, backN:G.n, against:G.against,
     side:o.side, name:o.name, entry, sl, tp,
@@ -647,6 +846,45 @@ function generateSignals(ctx){
         'Stopparna över dagshögsta är målet — svep följt av avvisning är en klassisk fälla.',
         'Kräver att 5m-stapeln stänger tillbaka under nivån innan entry.',
         'VWAP är första riktiga stödet på vägen ned.'
+      ]
+    }));
+  }
+
+  /* ---------- FAMILJ 5 · ÖPPNINGSRANGE (ORB) ----------
+     Reglerna kommer från statistiken, inte från magkänsla:
+       · bekräftelse = stängd 5m-stapel utanför kanten (71,5 % fortsättning på NQ
+         mot 67 % på wick)
+       · stoppen läggs inne i rangen, vid mitten — mätt maximal motrörelse är
+         omkring 30–40 % av dagens ATR, alltså långt innanför andra kanten
+       · målet är en hel rangebredd bortom kanten (1,0× extension nås i 64 % av
+         fallen på 5-minutersrangen)
+       · uppåtbrott är historiskt 8–10 procentenheter starkare än nedåt, och en
+         öppningsrange som stänger i sin övre halva pekar oftast ut riktningen */
+  const orb = orbLage(ctx);
+  if(orb && OR){
+    const upp = orb.dir > 0;
+    const entry = orb.niva + (upp ? 0.05*A : -0.05*A);
+    const mitt  = OR.mid;
+    const sl    = upp ? Math.max(mitt, entry - 1.7*A) : Math.min(mitt, entry + 1.7*A);
+    let bonus = 0;
+    if(orb.dubbel) bonus -= 10;                       // hackig dag, båda sidor testade
+    if(orb.sedan > 8) bonus -= 6;                     // brottet är gammalt
+    if(orb.sedan <= 2) bonus += 5;                    // färskt
+    if(upp) bonus += 4;                               // uppåtasymmetrin
+    if((upp && orb.riktning > 0.2) || (!upp && orb.riktning < -0.2)) bonus += 6;
+    if(orb.bredd > 2.2*A) bonus += 5;                 // vid range = starkare fortsättning
+    if(orb.bredd < 0.9*A) bonus -= 6;                 // hopklämd öppning = brus
+    S.push(makeSignal(ctx, {
+      fam:'orb', trigger:'stop', side: upp ? 'long' : 'short',
+      name: upp ? 'Öppningsrangen bruten uppåt (ORB)' : 'Öppningsrangen bruten nedåt (ORB)',
+      entry, sl, preferPrice: orb.niva + (upp ? orb.bredd : -orb.bredd),
+      bonus,
+      why:[
+        'Öppningsrangen 09:30–10:00 är ' + fmt(orb.bredd, ctx.inst.dec) + ' punkter bred och ' +
+          (upp ? 'högsta' : 'lägsta') + ' är bruten med en stängd 5-minutersstapel.',
+        orb.dubbel ? 'Båda kanterna har testats idag — dubbelbrott betyder hackig dag och sänkt vikt.'
+                   : 'Bara den här kanten har brutits idag, vilket historiskt är det renare fallet.',
+        'Stoppen ligger inne i rangen vid mitten, målet en hel rangebredd bortom kanten.'
       ]
     }));
   }
@@ -809,7 +1047,8 @@ function assignStatus(sigs, pxByInst){
 export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
-  INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, GRADE_RANK,
+  INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
+  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,
   makeSignal, generateSignals, combine, assignStatus, LIVE, SEDD

@@ -27,6 +27,8 @@ för Yahoos fördröjda data.
 | `worker.js` | Cloudflare Worker som tar emot TradingView-alerts och serverar staplarna |
 | `wrangler.toml` | Inställningar för utrullning av workern |
 | `riptide-feed.pine` | Pine-skriptet som skickar staplarna från TradingView |
+| `trana.mjs` | Mätriggen: spelar upp historiken genom motorn och tränar modellen |
+| `modell.js` | Vikterna mätriggen kom fram till, plus testsiffrorna |
 | `package.json` | Startkommandon (`npm start`, `npm run demo`, …) |
 
 ---
@@ -81,6 +83,7 @@ molnet och skärmen kör exakt samma signalmotor.
 | `GET /api/proxy?url=…` | Marknadsdata och RSS åt sidan, med en lista över tillåtna värdar |
 | `POST /api/ingest` | TradingView-alertets webhook, samma format som workern |
 | `GET /api/bars?s=NQ` | Staplarna som kommit in därifrån — sidan lägger dem över Yahoo |
+| `GET /api/live` | Det femminutersfack som just nu byggs, för den som inte lyssnar på Firestore |
 | `GET /api/tick?k=FEED_KEY` | Kör ett varv på studs |
 | `GET /api/konto` | Kontot som JSON, för den som inte vill prata Firestore |
 
@@ -398,3 +401,93 @@ och sedan var femte minut, så du kan prova hela kedjan innan du rullar ut.
 * **Utan lokal server** fungerar sidan fortfarande — då används de publika
   proxyerna i proxylistan, men de är trögare och faller ofta bort. Går ingen
   fram visas simulerad data med en tydlig varningsbanner.
+
+
+---
+
+## Mätriggen och den lärda modellen
+
+```bash
+npm run trana
+```
+
+Riggen hämtar 60 dagars 5-minutersstaplar för MNQ, glider ett 420-staplars fönster
+genom dem och låter **samma motor som sidan använder** generera setups. Varje setup
+följs framåt i tiden: fylls entryn, och nås målet före stoppen? Nås båda i samma
+stapel räknas stoppen. Resultatet blir omkring 17 000 avgjorda setups med facit.
+
+Sedan tränas en ridge-regression som förutsäger utfallet i R, och den testas
+**rullande**: varje setup i testperioden bedöms av en modell som bara sett affärer
+som redan var avgjorda när setupen dök upp. Ingen dag får se sin egen framtid.
+
+Staplarna och datasetet cachas i `.staplar-cache.json` och `.setups-cache.json`
+(båda gitignorerade), så en omkörning tar sekunder i stället för minuter.
+
+### Vad mätningen visade
+
+Modellen **underkändes av sitt eget test**. Dess bästa fjärdedel gick sämre än
+dess sämsta — den lärde sig samband i juli som vände i augusti. Samma sak hände
+med logistisk regression på träffprocent, med hårdare regularisering, med kortare
+minne och med mindre dragmängder. `modell.js` skrivs därför med `duger: false`,
+och då rör den ingenting: sidan använder de handsatta poängen precis som förut.
+
+Det som däremot höll var mätningen av familjerna. Datasetet delat i fyra lika
+långa tidsblock, snitt-R per setup:
+
+| familj | snitt R | block 1 | block 2 | block 3 | block 4 | n |
+|---|---|---|---|---|---|---|
+| trend | −0,128 | −0,149 | −0,101 | −0,143 | −0,119 | 9 905 |
+| brott | −0,091 | −0,136 | −0,015 | −0,039 | −0,169 | 2 190 |
+| svep | +0,001 | +0,003 | −0,000 | −0,017 | +0,020 | 3 997 |
+| ict | +0,009 | −0,021 | +0,111 | −0,055 | −0,005 | 1 002 |
+| orb | −0,033 | −0,117 | +0,499 | −0,145 | −0,415 | 123 |
+
+Trendfamiljen förlorar i alla fyra blocken på nästan tiotusen setups — det är en
+negativ förväntan, inte otur. Range-brott likaså. Därför finns `FAM_HANDLAS` i
+`motor.js`: familjer som mätt förlorar pengar visas fortfarande som signaler, med
+märket **handlas ej**, men demokontot öppnar inga affärer på dem. Spärren gäller
+lika i webbläsaren, i molnfunktionen och i workern.
+
+**Kör om mätningen efter varje ändring i motorn.** Siffrorna gäller den motor som
+fanns när de mättes, och `FAM_HANDLAS` ska följa med.
+
+### ORB — familjen med publicerad statistik bakom sig
+
+Femte familjen är öppningsrangen 09:30–10:00 New York-tid, byggd på en studie av
+6 142 ES- och NQ-dagar:
+
+* bekräftelse är en **stängd** 5-minutersstapel utanför kanten (71,5 % fortsättning
+  på NQ mot 67 % på bara en wick)
+* stoppen ligger **inne i rangen**, vid mitten — uppmätt maximal motrörelse är
+  ungefär 30–40 % av dagens ATR
+* målet är en hel rangebredd bortom kanten
+* vikten justeras för dubbelbrott (hackig dag), hur färskt brottet är, om rangen
+  är vid eller hopklämd, och för att uppåtbrott historiskt är 8–10 procentenheter
+  starkare än nedåtbrott
+
+Den har bara 123 avgjorda setups på 60 dagar och är därför inte dömd åt något håll
+ännu — men den mäts automatiskt vid varje `npm run trana`.
+
+---
+
+## Snabbare feed: var femte sekund i stället för var femte minut
+
+`/api/ingest` väger ihop allt som kommer in i samma femminutersfack: öppningen är
+den första observationen, högsta och lägsta rullar, stängningen är den senaste.
+Det pågående facket ligger i `riptide/live` — ett dokument på ett par hundra byte
+— och skrivs över till historiken först när facket är slut. Sidan lyssnar på det
+med `onSnapshot`, så priset, grafens sista stapel, signalstatusarna och demokontot
+uppdateras i samma ögonblick som molnet tagit emot stapeln. Utan Firestore
+(localhost, GitHub Pages) frågar sidan efter `/api/live` var femte sekund i stället.
+
+Så här väljer du takt i TradingView — samma skript, bara ett annat grafintervall:
+
+| Grafintervall | Uppdatering | Anrop per dygn | Kommentar |
+|---|---|---|---|
+| 5 minuter | var 5:e minut | ~280 | dagens läge, räcker gott |
+| 1 minut | varje minut | ~1 400 | säker och billig kompromiss |
+| 5 sekunder | var 5:e sekund | ~17 000 | kräver Premium; nära TradingViews takgränser |
+
+Kostnaden i Firestore är ungefär en dollar i månaden på 5-sekundersnivån och
+försumbar på 1-minutersnivån. Börja på 1 minut — hoppet från fem minuter till en
+minut är det som märks mest, och det belastar varken abonnemanget eller kontot.

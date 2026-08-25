@@ -6,7 +6,7 @@
  * stängs när stoppen eller målet nås. Kontot ligger i KV, så datorn och
  * telefonen ser samma siffror och räkningen fortsätter även när allt är stängt.
  */
-import { INSTR, MOTORCFG, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK } from './motor.js';
+import { INSTR, MOTORCFG, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS } from './motor.js';
 
 export const KONTO_NYCKEL = 'konto';
 export const START_KAPITAL = 50000;
@@ -97,6 +97,7 @@ export async function kontoTick(env, loggRad){
   sigs.forEach(s => {
     if(s.status !== 'ACTIVE') return;
     if(s.grade !== 'A' && s.grade !== 'B') return;
+    if(FAM_HANDLAS[s.fam] === false) return;               // mätt förlustbringande familj
     if(konto.oppna[s.id] || konto.affarer.some(a => a.id === s.id)) return;
     konto.oppna[s.id] = {
       id: s.id, side: s.side, grade: s.grade, namn: s.name,

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node dev-server.js",
     "demo": "node dev-server.js --demo",
+    "trana": "node trana.mjs",
     "worker:dev": "npx wrangler dev",
     "worker:deploy": "npx wrangler deploy",
     "worker:secret": "npx wrangler secret put FEED_KEY",

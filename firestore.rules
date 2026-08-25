@@ -8,6 +8,16 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // Prisstaplarna från TradingView-feeden. Sidan lyssnar på den pågående
+    // stapeln för att kunna uppdatera var femte sekund utan att polla.
+    match /riptide/live {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /riptide/feed {
+      allow read: if true;
+      allow write: if false;
+    }
     match /riptide/{dok} {
       allow read, write: if false;
     }

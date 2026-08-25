@@ -18,7 +18,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 import {
-  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK
+  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS
 } from './motor.js';
 
 initializeApp();
@@ -29,6 +29,7 @@ const FEED_KEY = defineSecret('FEED_KEY');
 
 const KONTO_DOK = () => db.doc('riptide/konto');
 const FEED_DOK  = () => db.doc('riptide/feed');
+const LIVE_DOK  = () => db.doc('riptide/live');     // den pågående stapeln, ett par hundra byte
 
 const START_KAPITAL = 50000;
 const KONTRAKT = 0;                    // 0 = storleken räknas per affär ur MAX_RISK
@@ -103,6 +104,12 @@ async function hamtaStaplar(){
     feed = (snap.exists && snap.data().NQ) || [];
   }catch(e){ feed = []; }
 
+  let live = null;
+  try{
+    const lsnap = await LIVE_DOK().get();
+    live = lsnap.exists ? lsnap.data().NQ : null;
+  }catch(e){ live = null; }
+  if(live && isFinite(live.t)) feed = feed.concat([live]);   // pågående facket räknas med
   if(!feed.length) return yahoo;
   const karta = new Map(yahoo.map(b => [b.t, b]));
   feed.forEach(b => {
@@ -132,6 +139,7 @@ export async function kontoVarv(logg = () => {}){
   sigs.forEach(s => {
     if(s.status !== 'ACTIVE') return;
     if(s.grade !== 'A' && s.grade !== 'B') return;
+    if(FAM_HANDLAS[s.fam] === false) return;               // mätt förlustbringande familj
     if(konto.oppna[s.id] || konto.affarer.some(a => a.id === s.id)) return;
     konto.oppna[s.id] = {
       id: s.id, side: s.side, grade: s.grade, namn: s.name,
@@ -257,17 +265,47 @@ export const api = onRequest(
       if(t === null){ res.status(400).json({ error: 'saknar tid' }); return; }
       if(t < 1e12) t *= 1000;
       t = Math.floor(t/300000)*300000;
-      const stapel = { t, o: num(b.o), h: num(b.h), l: num(b.l), c: num(b.c), v: num(b.v) || 0 };
-      if([stapel.o, stapel.h, stapel.l, stapel.c].some(v => v === null)){
+      const inne = { t, o: num(b.o), h: num(b.h), l: num(b.l), c: num(b.c), v: num(b.v) || 0 };
+      if([inne.o, inne.h, inne.l, inne.c].some(v => v === null)){
         res.status(400).json({ error: 'ofullständig stapel' }); return;
       }
-      const snap = await FEED_DOK().get();
-      const nu = (snap.exists && snap.data().NQ) || [];
-      const ix = nu.findIndex(x => x.t === t);
-      if(ix >= 0) nu[ix] = stapel; else nu.push(stapel);
-      nu.sort((a,b2) => a.t - b2.t);
-      await FEED_DOK().set({ NQ: nu.slice(-400), uppdaterad: FieldValue.serverTimestamp() }, { merge: true });
-      res.json({ ok: true, staplar: Math.min(nu.length, 400), t });
+
+      /* Skickar TradingView oftare än var femte minut — 5-sekundersgrafen, eller
+         1-minutersgrafen — hör flera anrop till samma femminutersfack. De vägs
+         ihop i stället för att skriva över varandra: öppningen är den första vi
+         såg, högsta och lägsta rullar, stängningen är den senaste. Facket ligger
+         i ett eget litet dokument som sidan lyssnar på, så en uppdatering kostar
+         ett par hundra byte i stället för hela historiken. */
+      const lsnap = await LIVE_DOK().get();
+      const forra = lsnap.exists ? lsnap.data().NQ : null;
+      let live;
+      if(forra && forra.t === t){
+        live = { t,
+          o: forra.o,
+          h: Math.max(forra.h, inne.h),
+          l: Math.min(forra.l, inne.l),
+          c: inne.c,
+          v: Math.max(forra.v || 0, inne.v || 0),
+          delar: (forra.delar || 1) + 1 };
+      }else{
+        live = { ...inne, delar: 1 };
+      }
+      await LIVE_DOK().set({ NQ: live, uppdaterad: FieldValue.serverTimestamp() });
+
+      /* Facket är slut när ett nytt börjar. Då — och bara då — skrivs den
+         färdiga stapeln in i historiken, alltså högst var femte minut. */
+      let historik = null;
+      if(forra && forra.t !== t){
+        const snap = await FEED_DOK().get();
+        const nu = (snap.exists && snap.data().NQ) || [];
+        const klar = { t: forra.t, o: forra.o, h: forra.h, l: forra.l, c: forra.c, v: forra.v || 0 };
+        const ix = nu.findIndex(x => x.t === klar.t);
+        if(ix >= 0) nu[ix] = klar; else nu.push(klar);
+        nu.sort((a,b2) => a.t - b2.t);
+        historik = nu.slice(-400);
+        await FEED_DOK().set({ NQ: historik, uppdaterad: FieldValue.serverTimestamp() }, { merge: true });
+      }
+      res.json({ ok: true, t, delar: live.delar, staplar: historik ? historik.length : null });
       return;
     }
 
@@ -295,6 +333,15 @@ export const api = onRequest(
       return;
     }
 
+    /* Den pågående stapeln. Sidan lyssnar hellre på Firestore direkt, men den
+       här vägen finns för localhost och allt som inte pratar Firestore. */
+    if(vag === '/live'){
+      const snap = await LIVE_DOK().get();
+      res.set('cache-control', 'no-store');
+      res.json((snap.exists && snap.data().NQ) || null);
+      return;
+    }
+
     if(vag === '/konto'){
       const k = await lasKonto();
       delete k.live; delete k.sedd;
@@ -302,6 +349,6 @@ export const api = onRequest(
       return;
     }
 
-    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/tick?k=…', '/api/konto'] });
+    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/tick?k=…', '/api/konto'] });
   }
 );
