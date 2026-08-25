@@ -156,7 +156,7 @@ header.topbar{
 @media (min-width:1900px){
   .parvis{grid-template-columns:minmax(0,1.06fr) minmax(0,1fr);align-items:start}
   .parvis .sig-body{grid-template-columns:minmax(0,1fr)}   /* smalare spalt: minigrafen under nivåerna */
-  .parvis #sigList{max-height:520px;overflow-y:auto}   /* justeras i körningen till grafens höjd */
+  .parvis #sigList{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
 }
 .col{display:flex;flex-direction:column;gap:12px;min-width:0}
 .panel, .pb, .ph{min-width:0}
@@ -200,6 +200,26 @@ header.topbar{
   padding:11px 12px;margin-bottom:10px;transition:.2s;overflow:hidden;
 }
 .sig:last-child{margin-bottom:0}
+
+/* Rutnätet: signalerna ligger som små rutor bredvid varandra så att alla syns
+   utan att man scrollar. Den man klickar på fäller ut sig över hela bredden. */
+#sigList{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:8px;align-content:start}
+#sigList .empty, #sigList .votes{grid-column:1/-1}
+.sig{margin-bottom:0;padding:9px 10px;cursor:pointer}
+.sig.oppen{grid-column:1/-1;cursor:default;padding:11px 12px}
+.sig-mer{display:none}
+.sig.oppen .sig-mer{display:block}
+.sig .vik{margin-left:auto;color:var(--muted);font-size:11px;line-height:1;transition:transform .15s}
+.sig.oppen .vik{transform:rotate(180deg)}
+.sig-namn{font-size:10.5px;color:var(--text-2);margin:5px 0 6px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.sig.oppen .sig-namn{white-space:normal}
+.sig-snabb{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11px}
+.sig-snabb .e{font-weight:700;color:var(--text)}
+.sig-snabb i{font-style:normal;font-size:8.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);
+  font-family:var(--sans, inherit);font-weight:800}
+.sig-snabb .rr{margin-left:auto;color:var(--text-2)}
+.sig.oppen .sig-snabb{display:none}
 .sig .edge{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--muted-2)}
 .sig.long .edge{background:linear-gradient(180deg,var(--green),rgba(0,229,140,.15))}
 .sig.short .edge{background:linear-gradient(180deg,var(--red),rgba(255,51,85,.15))}
@@ -1485,7 +1505,7 @@ const STATE = {
   chartSym:'NQ', feed:{}, newsFilter:'all', sigFilter:'all',
   vy:{ n:96, off:0, pris:1, py:0 },         // grafens fönster: staplar, hur långt bak, prisskala, höjdläge
   lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[],
-  livePris:null, liveNar:0, liveKalla:null
+  livePris:null, liveNar:0, liveKalla:null, oppnaSignaler:new Set()
 };
 
 function computeNewsBias(items){
@@ -1795,6 +1815,23 @@ function rationaleHTML(s){
     `<span class="why">${esc(s.why.slice(1).join(' '))}</span>`;
 }
 
+/* Ett klick fäller ut kortet. Valet sparas per signal-id, annars skulle
+   uppdateringen var femte sekund slå igen det man just öppnat. */
+function kopplaSignalKlick(){
+  const el = $('#sigList');
+  if(!el || el.dataset.klick) return;
+  el.dataset.klick = '1';
+  el.addEventListener('click', e => {
+    const kort = e.target.closest('.sig');
+    if(!kort || !kort.dataset.sig) return;
+    if(kort.classList.contains('oppen') && !e.target.closest('.sig-top')) return;  // låt text markeras
+    const id = kort.dataset.sig;
+    if(STATE.oppnaSignaler.has(id)) STATE.oppnaSignaler.delete(id);
+    else STATE.oppnaSignaler.add(id);
+    renderSignals();
+  });
+}
+
 function renderSignals(){
   const el = $('#sigList');
   let list = STATE.signals.slice();
@@ -1833,7 +1870,7 @@ function renderSignals(){
     const cCls = s.conf>=68?'hi':s.conf<45?'lo':'';
     const stCls = ['ACTIVE','NÄRA','LÖPANDE','TP','SL'].includes(s.status)?s.status:'';
     const pnl = nz(s.openPnl) ? `<div class="m"><i>Öppen</i><b class="${s.openPnl>=0?'pos':'neg'}">${fmtSigned(s.openPnl/s.risk,2)} R</b></div>` : '';
-    return `<div class="sig ${s.side} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
+    return `<div data-sig="${esc(s.id)}" class="sig ${s.side} ${STATE.oppnaSignaler.has(s.id) ? 'oppen' : ''} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
       <span class="edge"></span>
       <div class="sig-top">
         <span class="strat ${s.grade}" title="${s.backN} av ${FAM_N} strategifamiljer bakom riktningen">${s.grade}</span>
@@ -1843,8 +1880,14 @@ function renderSignals(){
         <span class="sig-dir ${s.side}">${dirTxt}</span>
         ${FAM_HANDLAS[s.fam] === false ? '<span class="ejhandlas" title="Familjen ' + esc(s.famName) + ' hade negativ förväntan i mätningen på 60 dagar — demokontot öppnar inga affärer på den">handlas ej</span>' : ''}
         <span class="status ${stCls}"><span class="d"></span>${esc(s.statusTxt||s.status)}</span>
-        <span class="sig-name">${esc(s.name)}</span>
+        <span class="vik">▾</span>
       </div>
+      <div class="sig-namn">${esc(s.name)}</div>
+      <div class="sig-snabb">
+        <i>entry</i><span class="e">${fmt(s.entry,s.dec)}</span>
+        <span class="rr">R:R ${s.rr.toFixed(2)}</span>
+      </div>
+      <div class="sig-mer">
       <div class="sig-body">
         <div class="legs">
           <div class="leg entry"><i>Entry ${s.trigger==='stop'?'stop':'limit'}</i><b>${fmt(s.entry,s.dec)}</b><s>${s.dist<s.atr*0.3?'i zonen':(s.dist/s.atr).toFixed(1)+' ATR'}</s></div>
@@ -1864,17 +1907,20 @@ function renderSignals(){
           <b class="mono" style="font-size:11px">${s.conf}%</b></div>
       </div>
       <div class="rationale">${rationaleHTML(s)}</div>
+      </div>
     </div>`;
   }).join('');
 
   // rita minigrafer
   requestAnimationFrame(()=>{
     $$('#sigList canvas[data-mini]').forEach(cv=>{
+      if(!cv.clientWidth) return;                 // ligger i ett hopfällt kort
       const s = list[+cv.dataset.mini]; if(!s) return;
       drawSetupChart(cv, s);
     });
   });
   $('#sigStamp').textContent = 'uppdaterad ' + timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  kopplaSignalKlick();
   jamnaSpalter();
 }
 
@@ -2057,12 +2103,11 @@ function grafInteraktion(){
 function jamnaSpalter(){
   const lista = $('#sigList');
   if(!lista) return;
-  if(window.innerWidth < 1900){ lista.style.maxHeight = ''; return; }
-  const grafPanel = $('#ownBox') && $('#ownBox').closest('.panel');
-  const sigPanel  = lista.closest('.panel');
-  if(!grafPanel || !sigPanel) return;
-  const ramar = sigPanel.offsetHeight - lista.offsetHeight;      // rubrik + teckenförklaring
-  lista.style.maxHeight = Math.max(360, grafPanel.offsetHeight - ramar) + 'px';
+  if(window.innerWidth < 1900){ lista.style.maxHeight = ''; lista.style.minHeight = ''; return; }
+  // Rutnätet ska varken scrollas eller sträckas: panelen slutar där signalerna
+  // slutar, och växer av sig själv när ett kort fälls ut.
+  lista.style.maxHeight = '';
+  lista.style.minHeight = '';
 }
 
 function renderMainChart(){
