@@ -2835,6 +2835,7 @@ async function firebaseStart(){
         KONTO.uppdaterad = k.uppdaterad;
         KONTO.oppna      = k.oppna || {};
         KONTO.affarer    = k.affarer || [];
+        liveFranMolnet(k);              // molnets fyllningar syns på skärmen också
         renderDemo();
         coreRead('firebase: kontot uppdaterat · ' + Math.round(k.kapital) + ' $');
       }, fel => console.warn('Firestore lyssnar inte: ' + fel.message));
@@ -3402,12 +3403,64 @@ async function loadNews(){
   coreRead('väger nyhetsbias · NQ ' + fmtSigned(STATE.newsBias.nq, 0) + ' av 100');
 }
 
+/* --------------------------------------------------------------------------
+   Påbörjade affärer överlever omladdning.
+   LIVE håller reda på vilka setups som faktiskt fyllts, och det är den som gör
+   att ett kort står kvar som ACTIVE tills målet eller stoppen nås. Kartan låg
+   bara i minnet, så en omladdning glömde alltihop och kortet föll tillbaka
+   till VÄNTAR — eller trillade ur listan när motorn hittade sex färskare
+   setups. Nu sparas den, och molnets egen bild vägs in när kontot kommer.
+   -------------------------------------------------------------------------- */
+const LIVE_NYCKEL = 'riptide.live.v1';
+const LIVE_KVAR   = 1800000;      // avslutade affärer visas en halvtimme till
+const LIVE_MAXALD = 36*3600e3;    // äldre än så är inte intressant att väcka
+
+function liveSpara(){
+  try{
+    const nu = Date.now(), ut = [];
+    LIVE.forEach((st, id) => {
+      if(st.slutAt && nu - st.slutAt > LIVE_KVAR) return;
+      if(nu - (st.at || nu) > LIVE_MAXALD) return;
+      ut.push([id, st]);
+    });
+    localStorage.setItem(LIVE_NYCKEL, JSON.stringify({
+      nar: nu, live: ut, sedd: [...SEDD.entries()].slice(-400)
+    }));
+  }catch(e){ /* full lagring — kör vidare */ }
+}
+
+function liveLadda(){
+  try{
+    const d = JSON.parse(localStorage.getItem(LIVE_NYCKEL) || 'null');
+    if(!d || Date.now() - (d.nar || 0) > LIVE_MAXALD) return;
+    (d.live || []).forEach(([id, st]) => { if(st && st.sig) LIVE.set(id, st); });
+    (d.sedd || []).forEach(([id, v]) => SEDD.set(id, v));
+  }catch(e){ /* strunt i det */ }
+}
+
+/* Molnet ser fyllningarna även när ingen sida är öppen. Dess bild läggs in
+   här så att skärmen och kontot är överens om vad som är igång. */
+function liveFranMolnet(k){
+  if(!k) return;
+  const nu = Date.now();
+  Object.entries(k.live || {}).forEach(([id, st]) => {
+    if(!st || !st.sig) return;
+    if(st.slutAt && nu - st.slutAt > LIVE_KVAR) return;
+    const egen = LIVE.get(id);
+    if(!egen || (!egen.hitTp && !egen.hitSl)) LIVE.set(id, st);
+  });
+  Object.entries(k.sedd || {}).forEach(([id, v]) => { if(!SEDD.has(id)) SEDD.set(id, v); });
+}
+
 function buildAllSignals(){
   const nq = STATE.ctx.NQ;
   if(nq) nq.newsBias = STATE.newsBias.nq;
   const byGrade = (a,b) => (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf);
   const nqAll = nq ? generateSignals(nq).sort(byGrade) : [];
-  const sig = nqAll.slice(0, 6);
+  // En setup som redan är fylld ska aldrig konkurrera om plats i listan.
+  const igang = nqAll.filter(x => LIVE.has(x.id));
+  const ovriga = nqAll.filter(x => !LIVE.has(x.id));
+  const sig = igang.concat(ovriga.slice(0, Math.max(3, 6 - igang.length)));
   // en påbörjad affär ska synas tills den är avslutad, även om motorn slutat föreslå den
   const idn = new Set(sig.map(x => x.id));
   LIVE.forEach((st, id) => {
@@ -3436,6 +3489,7 @@ function buildAllSignals(){
   if(bast) coreRead(STATE.signals.length + ' setups · bäst ' + bast.grade + ' ' +
                     (FAM_KORT[bast.fam] || '') + ' ' + (bast.side === 'long' ? 'LONG' : 'SHORT') +
                     ' @ ' + fmt(bast.entry, bast.dec));
+  liveSpara();
 }
 
 function paint(){
@@ -3593,6 +3647,7 @@ window.RIPTIDE = {
 loadCfg();
 useLocalProxy();
 wire();
+liveLadda();
 demoLadda();
 renderDemo();
 firebaseStart();
