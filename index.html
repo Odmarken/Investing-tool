@@ -741,9 +741,6 @@ footer b{color:var(--muted)}
   <div class="panel">
     <div class="ph">
       <span class="accent"></span><h2>Demokonto · live</h2>
-      <div class="chart-tabs">
-        <button class="ct" id="btnDemoReset" title="Nollställ kontot och börja om från 50 000">Nollställ</button>
-      </div>
       <span class="right"><span id="demoStamp" class="dim">–</span></span>
     </div>
     <div class="pb">
@@ -2696,6 +2693,9 @@ function demoSpara(){
   }catch(e){ /* full lagring — kör vidare */ }
 }
 
+/* Ingen knapp leder hit längre — ett felklick skulle radera hela historiken.
+   Kontot i molnet nollställs med `firebase firestore:delete riptide/konto`,
+   och det lokala med RIPTIDE.demoNollstall() i konsolen. */
 function demoNollstall(){
   KONTO.kapital = KONTO.start;
   KONTO.oppna = {};
@@ -2980,11 +2980,13 @@ function renderDemo(){
         'via <code>/api/konto</code> vid varje uppdatering; på riptide-investing-tool.web.app pushas det i realtid.'
     : KONTO.server
       ? 'Kontot ligger <b>i workern</b> och räknas om var femte minut av dess cron — även när ingen sida är öppen. ' +
-        'Datorn och telefonen ser därför samma siffror. <i>Nollställ</i> frågar efter feed-nyckeln.'
+        'Datorn och telefonen ser därför samma siffror.'
       : 'Kontot sparas i <b>den här webbläsaren</b> och räknar bara när sidan är öppen; historiken spelas upp när ' +
         'du kommer tillbaka. Lägg in Worker-URL:en under ⚙ Inställningar så tar servern över och kontot blir ' +
         'gemensamt för alla dina enheter.') +
-    ' <i>Nollställ</i> börjar om från ' + fmt(KONTO.start, 0) + ' $.';
+    ' Kontot går inte att nollställa härifrån — det finns ingen knapp att råka klicka på. ' +
+    'Ska det börja om från ' + fmt(KONTO.start, 0) + ' $ gör du det med ' +
+    '<code>firebase firestore:delete riptide/konto</code>.';
 }
 
 /* Brickan uppe till höger. Historiken ligger alltid ett femminutersfack efter
@@ -3339,28 +3341,6 @@ function wire(){
     renderMainChart();
   });
   grafInteraktion();
-  $('#btnDemoReset').onclick = async ()=>{
-    if(!window.confirm('Nollställa demokontot? Alla ' + KONTO.affarer.length + ' affärer och resultatet försvinner.')) return;
-    if(KONTO.server === 'firebase' || KONTO.server === 'api'){
-      window.alert('Kontot ligger i Firestore. Nollställ det med:\n\n' +
-        'firebase firestore:delete riptide/konto\n\neller från Firebase-konsolen.');
-      return;
-    }
-    if(KONTO.server){
-      const nyckel = window.prompt('Feed-nyckeln (FEED_KEY) för att nollställa serverns konto:');
-      if(!nyckel) return;
-      try{
-        const r = await fetch(CFG.feedUrl + '/konto/nollstall', {
-          method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ k: nyckel })
-        });
-        const svar = await r.json();
-        if(svar.error) window.alert('Servern sa nej: ' + svar.error);
-        else demoHamtaServer();
-      }catch(e){ window.alert('Nådde inte servern: ' + (e.message || e)); }
-      return;
-    }
-    demoNollstall();
-  };
   let rz; window.addEventListener('resize', ()=>{ clearTimeout(rz);
     rz = setTimeout(()=>{ renderMainChart(); renderSignals(); renderDemo(); }, 200); });
 }
@@ -3378,6 +3358,7 @@ function restartTimer(){
 window.RIPTIDE = {
   STATE, KONTO, CFG, MOTOR,
   assignStatus, buildAllSignals, generateSignals, buildContext, demoTick, renderDemo, FAM_HANDLAS, MODELL, taEmotLive,
+  demoNollstall,
   renderSignals, renderMainChart, stodOchMotstand, till15m, fokusSignal, refresh
 };
 
