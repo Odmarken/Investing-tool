@@ -84,6 +84,22 @@ async function serveStatic(req, res){
 
 /* ---------- CORS-proxy: sidan får hämta Yahoo och RSS via oss ---------- */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
+
+/* Firebase Hosting serverar sin konfiguration på /__/firebase/init.json. Lokalt
+   finns ingen sådan fil, och nycklarna ligger med flit inte i repot — så vi
+   hämtar den från den publicerade sidan i stället. Då fungerar inloggning och
+   realtidskonto även på localhost. Nyckeln är låst till bland annat
+   localhost:8080 i Google Cloud, så den duger bara härifrån. */
+const INIT_URL = 'https://riptide-investing-tool.web.app/__/firebase/init.json';
+let initCache = null;
+async function firebaseInit(){
+  if(initCache && Date.now() - initCache.nar < 3600e3) return initCache.text;
+  const r = await fetch(INIT_URL, { signal: AbortSignal.timeout(8000) });
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  const text = await r.text();
+  initCache = { nar: Date.now(), text };
+  return text;
+}
 const MAX_BODY = 8 * 1024 * 1024;
 
 /* Några källor kräver att anropet ser ut att komma från deras egen sida. */
@@ -133,10 +149,22 @@ async function serveWorker(req, res, path){
   res.writeHead(out.status, Object.fromEntries(out.headers)).end(Buffer.from(await out.arrayBuffer()));
 }
 
+async function serveInit(req, res){
+  try{
+    const text = await firebaseInit();
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+    res.end(text);
+  }catch(e){
+    res.writeHead(502, { 'content-type':'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'nådde inte hostingens init.json: ' + e.message }));
+  }
+}
+
 const server = createServer((req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
   const p = path === '/feed' ? '/' : path.startsWith('/feed/') ? path.slice(5) : null;
   const job = path === '/proxy' ? serveProxy(req, res)
+            : path === '/__/firebase/init.json' ? serveInit(req, res)
             : p !== null ? serveWorker(req, res, p)
             : serveStatic(req, res);
   job.catch(e => { if(!res.headersSent) res.writeHead(500, {'content-type':'text/plain; charset=utf-8'}); res.end('500 — ' + e.message); });

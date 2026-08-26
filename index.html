@@ -558,6 +558,24 @@ footer b{color:var(--muted)}
 .modal textarea{min-height:110px;resize:vertical;line-height:1.6}
 .modal input:focus,.modal textarea:focus{outline:none;border-color:var(--lblue);box-shadow:var(--glow-lblue)}
 .hint{font-size:10px;color:var(--muted-2);margin-top:4px}
+
+/* Inloggning */
+.modal .box.smal{width:min(400px,100%)}
+.authflik{display:flex;gap:6px;margin-bottom:4px}
+.authflik button{flex:1;background:transparent;border:1px solid var(--line-2);color:var(--muted);
+  border-radius:7px;padding:8px 10px;font:inherit;font-size:11px;font-weight:800;letter-spacing:.6px;
+  text-transform:uppercase;cursor:pointer;transition:.15s}
+.authflik button.on{border-color:var(--lblue);color:var(--lblue);background:rgba(79,211,255,.10)}
+.authkryss{display:flex;align-items:center;gap:8px;margin:14px 0 2px;font-size:11px;color:var(--text-2);cursor:pointer}
+.authkryss input{width:auto;margin:0;accent-color:var(--lblue)}
+.authfel{display:none;margin-top:12px;padding:8px 10px;border-radius:7px;font-size:11px;line-height:1.5;
+  background:rgba(255,46,76,.10);border:1px solid rgba(255,46,76,.35);color:var(--scarlet-2)}
+.authfel.syns{display:block}
+.authklar{background:rgba(0,229,140,.10);border-color:rgba(0,229,140,.35);color:var(--green)}
+#btnAuth.inloggad{border-color:rgba(0,229,140,.45);color:var(--green)}
+.laslapp{display:grid;place-items:center;gap:10px;padding:38px 20px;text-align:center}
+.laslapp .ikon{font-size:26px;opacity:.75}
+.laslapp p{font-size:11.5px;color:var(--muted);max-width:420px;line-height:1.65}
 </style>
 </head>
 <body>
@@ -579,6 +597,7 @@ footer b{color:var(--muted)}
       <div class="c"><b id="clkNy">--:--:--</b><i>New York</i></div>
     </div>
     <button class="btn primary" id="btnRefresh">↻ Uppdatera</button>
+    <button class="btn" id="btnAuth" title="Logga in för att se demokontot">Logga in</button>
     <button class="btn" id="btnSettings">⚙ Inställningar</button>
   </div>
   <div class="tape" id="tape"></div>
@@ -743,7 +762,15 @@ footer b{color:var(--muted)}
       <span class="accent"></span><h2>Demokonto · live</h2>
       <span class="right"><span id="demoStamp" class="dim">–</span></span>
     </div>
-    <div class="pb">
+    <div class="pb" id="demoLas">
+      <div class="laslapp">
+        <div class="ikon">🔒</div>
+        <p><b>Demokontot är låst.</b> Logga in för att se saldo, öppna positioner och historik.
+          Alla med konto ser samma siffror — det är ett enda konto som molnet räknar dygnet runt.</p>
+        <button class="btn primary" id="btnLasUpp">Logga in</button>
+      </div>
+    </div>
+    <div class="pb" id="demoInnehall" style="display:none">
       <div class="btstats" id="demoStats"></div>
       <div id="demoOppna"></div>
       <canvas id="demoChart"></canvas>
@@ -761,6 +788,38 @@ footer b{color:var(--muted)}
 </footer>
 
 <!-- ============ INSTÄLLNINGAR ============ -->
+<div class="modal" id="authModal">
+  <div class="box smal">
+    <div class="ph"><span class="accent"></span><h2 id="authRubrik">Logga in</h2>
+      <span class="right"><button class="btn" id="authStang">✕ Stäng</button></span></div>
+    <div class="pb">
+      <div class="authflik">
+        <button data-lage="in" class="on">Jag har konto</button>
+        <button data-lage="ny">Skapa konto</button>
+      </div>
+
+      <label for="authEpost">E-post</label>
+      <input id="authEpost" type="email" autocomplete="email" placeholder="du@exempel.se">
+
+      <label for="authLosen">Lösenord</label>
+      <input id="authLosen" type="password" autocomplete="current-password" placeholder="minst sex tecken">
+
+      <label class="authkryss" for="authKom">
+        <input type="checkbox" id="authKom" checked>
+        <span>Kom ihåg mig på den här enheten</span>
+      </label>
+      <div class="hint" id="authKomHint">Du förblir inloggad tills du loggar ut. Avmarkerat gäller inloggningen bara tills du stänger fliken.</div>
+
+      <div class="authfel" id="authFel"></div>
+
+      <div style="height:16px"></div>
+      <button class="btn primary" id="authKor" style="width:100%;padding:10px">Logga in</button>
+      <div class="hint" style="margin-top:10px">Kontot styr bara vem som får se demokontots siffror. Panelen, grafen och
+        signalerna är öppna för alla.</div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="modal">
   <div class="box">
     <div class="ph"><span class="accent"></span><h2>Inställningar</h2><span class="right"><button class="btn" id="btnClose">✕ Stäng</button></span></div>
@@ -2615,17 +2674,122 @@ async function firebaseKonfig(){
   return (FB.apiKey && FB.projectId) ? FB : null;
 }
 
+/* --------------------------------------------------------------------------
+   Inloggning.
+   Kontot avgör en enda sak: vem som får se demokontots siffror. Resten av
+   panelen är öppen. Samma demokonto för alla inloggade — det finns bara ett,
+   och molnet räknar på det dygnet runt.
+
+   "Kom ihåg mig" är skillnaden mellan browserLocalPersistence, som överlever
+   att webbläsaren stängs, och browserSessionPersistence, som bara gäller
+   fliken. Firebase sköter förnyelsen av token åt oss.
+   -------------------------------------------------------------------------- */
+const AUTH = { app:null, auth:null, anvandare:null, lage:'in', modul:null, avlyssnare:null };
+
+const AUTH_FEL = {
+  'auth/invalid-email': 'Det där ser inte ut som en e-postadress.',
+  'auth/missing-password': 'Fyll i ett lösenord.',
+  'auth/weak-password': 'Lösenordet måste vara minst sex tecken.',
+  'auth/email-already-in-use': 'Det finns redan ett konto med den adressen. Byt till "Jag har konto".',
+  'auth/invalid-credential': 'Fel e-post eller lösenord.',
+  'auth/invalid-login-credentials': 'Fel e-post eller lösenord.',
+  'auth/wrong-password': 'Fel lösenord.',
+  'auth/user-not-found': 'Ingen användare med den adressen. Skapa ett konto i stället.',
+  'auth/too-many-requests': 'För många försök. Vänta en stund och prova igen.',
+  'auth/network-request-failed': 'Nådde inte Firebase. Kolla nätet.',
+  'auth/operation-not-allowed': 'E-postinloggning är inte påslagen i projektet.'
+};
+
+function authMeddela(text, klar){
+  const el = $('#authFel');
+  if(!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('syns', !!text);
+  el.classList.toggle('authklar', !!klar);
+}
+
+function authLage(lage){
+  AUTH.lage = lage;
+  $$('.authflik button').forEach(b => b.classList.toggle('on', b.dataset.lage === lage));
+  $('#authRubrik').textContent = lage === 'ny' ? 'Skapa konto' : 'Logga in';
+  $('#authKor').textContent    = lage === 'ny' ? 'Skapa konto' : 'Logga in';
+  $('#authLosen').setAttribute('autocomplete', lage === 'ny' ? 'new-password' : 'current-password');
+  authMeddela('');
+}
+
+function authOppna(lage){
+  if(!AUTH.auth){
+    authMeddela('Inloggningen kunde inte startas — sidan nådde inte Firebase.');
+  }
+  authLage(lage || 'in');
+  $('#authModal').classList.add('show');
+  setTimeout(() => $('#authEpost').focus(), 60);
+}
+
+async function authKor(){
+  if(!AUTH.auth || !AUTH.modul){ authMeddela('Inloggningen är inte igång på den här adressen.'); return; }
+  const epost = ($('#authEpost').value || '').trim();
+  const losen = $('#authLosen').value || '';
+  if(!epost || !losen){ authMeddela('Fyll i både e-post och lösenord.'); return; }
+
+  const { signInWithEmailAndPassword, createUserWithEmailAndPassword,
+          setPersistence, browserLocalPersistence, browserSessionPersistence } = AUTH.modul;
+  const knapp = $('#authKor');
+  knapp.disabled = true;
+  authMeddela('');
+  try{
+    await setPersistence(AUTH.auth, $('#authKom').checked ? browserLocalPersistence : browserSessionPersistence);
+    if(AUTH.lage === 'ny') await createUserWithEmailAndPassword(AUTH.auth, epost, losen);
+    else                   await signInWithEmailAndPassword(AUTH.auth, epost, losen);
+    $('#authLosen').value = '';
+    $('#authModal').classList.remove('show');
+  }catch(e){
+    authMeddela(AUTH_FEL[e && e.code] || ('Det gick inte: ' + ((e && e.code) || e)));
+  }finally{
+    knapp.disabled = false;
+  }
+}
+
+/* Vad som syns beror på om någon är inloggad. */
+function authRitaOm(){
+  const inne = !!AUTH.anvandare;
+  const knapp = $('#btnAuth');
+  if(knapp){
+    knapp.textContent = inne ? (AUTH.anvandare.email || 'Inloggad') : 'Logga in';
+    knapp.title = inne ? 'Klicka för att logga ut' : 'Logga in för att se demokontot';
+    knapp.classList.toggle('inloggad', inne);
+  }
+  const las = $('#demoLas'), innehall = $('#demoInnehall');
+  if(las && innehall){
+    las.style.display = inne ? 'none' : '';
+    innehall.style.display = inne ? '' : 'none';
+  }
+  if(inne) renderDemo();
+}
+
+/* Färsk id-token att skicka till /api/konto när sidan inte pratar Firestore. */
+async function authToken(){
+  if(!AUTH.anvandare) return null;
+  try{ return await AUTH.anvandare.getIdToken(); }catch(e){ return null; }
+}
+
 async function firebaseStart(){
   const cfg = await firebaseKonfig();
   if(!cfg) return;
   try{
-    const [{ initializeApp }, { getFirestore, doc, onSnapshot }] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, doc, onSnapshot }, authModul] = await Promise.all([
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js'),
-      import('https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js')
+      import('https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js'),
+      import('https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js')
     ]);
-    const db = getFirestore(initializeApp({
+    const app = initializeApp({
       apiKey: cfg.apiKey, authDomain: cfg.authDomain, projectId: cfg.projectId, appId: cfg.appId
-    }));
+    });
+    const db = getFirestore(app);
+
+    AUTH.app = app;
+    AUTH.modul = authModul;
+    AUTH.auth = authModul.getAuth(app);
     /* Den pågående stapeln pushas hit så fort molnet tagit emot den. */
     onSnapshot(doc(db, 'riptide', 'live'), snap => {
       const d = snap.data();
@@ -2634,20 +2798,39 @@ async function firebaseStart(){
       taEmotLive(d.NQ);
     }, fel => console.warn('Firestore live: ' + fel.message));
 
-    onSnapshot(doc(db, 'riptide', 'konto'), snap => {
-      const k = snap.data();
-      if(!k || !isFinite(k.kapital)) return;
-      KONTO.server     = 'firebase';
-      KONTO.start      = k.start;
-      KONTO.kontrakt   = k.kontrakt;
-      KONTO.kapital    = k.kapital;
-      KONTO.startad    = k.startad;
-      KONTO.uppdaterad = k.uppdaterad;
-      KONTO.oppna      = k.oppna || {};
-      KONTO.affarer    = k.affarer || [];
-      renderDemo();
-      coreRead('firebase: kontot uppdaterat · ' + Math.round(k.kapital) + ' $');
-    }, fel => console.warn('Firestore lyssnar inte: ' + fel.message));
+    /* Kontot läses bara när någon är inloggad — reglerna i Firestore säger
+       samma sak, så en utloggad flik får inte ens svaret. */
+    const lyssnaKonto = () => {
+      if(AUTH.avlyssnare) return;
+      AUTH.avlyssnare = onSnapshot(doc(db, 'riptide', 'konto'), snap => {
+        const k = snap.data();
+        if(!k || !isFinite(k.kapital)) return;
+        KONTO.server     = 'firebase';
+        KONTO.start      = k.start;
+        KONTO.kontrakt   = k.kontrakt;
+        KONTO.kapital    = k.kapital;
+        KONTO.startad    = k.startad;
+        KONTO.uppdaterad = k.uppdaterad;
+        KONTO.oppna      = k.oppna || {};
+        KONTO.affarer    = k.affarer || [];
+        renderDemo();
+        coreRead('firebase: kontot uppdaterat · ' + Math.round(k.kapital) + ' $');
+      }, fel => console.warn('Firestore lyssnar inte: ' + fel.message));
+    };
+
+    authModul.onAuthStateChanged(AUTH.auth, anv => {
+      AUTH.anvandare = anv || null;
+      if(anv){
+        lyssnaKonto();
+        coreRead('inloggad som ' + (anv.email || 'okänd'));
+      }else{
+        if(AUTH.avlyssnare){ AUTH.avlyssnare(); AUTH.avlyssnare = null; }
+        KONTO.server = false;
+        KONTO.oppna = {}; KONTO.affarer = []; KONTO.kapital = KONTO.start;
+        renderDemo();                       // töm rutorna, annars ligger siffrorna kvar i dolt läge
+      }
+      authRitaOm();
+    });
   }catch(e){
     console.warn('Firebase kunde inte startas: ' + (e && e.message));
   }
@@ -2665,8 +2848,10 @@ async function demoHamtaServer(){
   if(KONTO.server === 'firebase') return;              // Firestore pushar redan
   const adress = kontoAdress();
   if(!adress){ KONTO.server = false; return; }
+  const token = await authToken();
+  if(!token){ KONTO.server = false; return; }          // utloggad: kontot är inte vårt att visa
   try{
-    const r = await fetch(adress, { cache:'no-store' });
+    const r = await fetch(adress, { cache:'no-store', headers:{ authorization: 'Bearer ' + token } });
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const k = await r.json();
     if(!k || !isFinite(k.kapital)) throw new Error('oväntat svar');
@@ -3289,6 +3474,24 @@ function tick(){
 /* ---------- wiring ---------- */
 function wire(){
   $('#btnRefresh').onclick = refresh;
+
+  $('#btnAuth').onclick = async () => {
+    if(AUTH.anvandare){
+      if(!window.confirm('Logga ut ' + (AUTH.anvandare.email || '') + '?')) return;
+      try{ await AUTH.modul.signOut(AUTH.auth); }catch(e){ /* redan ute */ }
+      return;
+    }
+    authOppna('in');
+  };
+  $('#btnLasUpp').onclick = () => authOppna('in');
+  $('#authStang').onclick = () => $('#authModal').classList.remove('show');
+  $('#authModal').addEventListener('click', e => { if(e.target.id === 'authModal') $('#authModal').classList.remove('show'); });
+  $$('.authflik button').forEach(b => b.onclick = () => authLage(b.dataset.lage));
+  $('#authKor').onclick = authKor;
+  ['#authEpost','#authLosen'].forEach(sel => $(sel).addEventListener('keydown', e => {
+    if(e.key === 'Enter') authKor();
+  }));
+  authRitaOm();
   $('#btnSettings').onclick = ()=>{
     $('#setProxy').value = CFG.proxy;
     $('#setFeed').value = CFG.feedUrl || '';

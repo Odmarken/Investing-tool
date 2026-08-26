@@ -4,8 +4,10 @@ rules_version = '2';
 // bara från Cloud Functions, som går förbi de här reglerna via admin-SDK:t.
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Demokontot syns bara för inloggade. Det är samma konto för alla —
+    // inloggningen avgör vem som får se siffrorna, inte vems de är.
     match /riptide/konto {
-      allow read: if true;
+      allow read: if request.auth != null;
       allow write: if false;
     }
     // Prisstaplarna från TradingView-feeden. Sidan lyssnar på den pågående

@@ -16,6 +16,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 import {
   INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS
@@ -342,7 +343,17 @@ export const api = onRequest(
       return;
     }
 
+    /* Kontot kräver inloggning, precis som Firestore-reglerna. Sidan skickar
+       sin id-token; utan giltig token finns inget att hämta här. */
     if(vag === '/konto'){
+      const huvud = String(req.get('authorization') || '');
+      const token = huvud.startsWith('Bearer ') ? huvud.slice(7) : '';
+      if(!token){ res.status(401).json({ error: 'inloggning krävs' }); return; }
+      try{
+        await getAuth().verifyIdToken(token);
+      }catch(e){
+        res.status(401).json({ error: 'ogiltig inloggning' }); return;
+      }
       const k = await lasKonto();
       delete k.live; delete k.sedd;
       res.json(k);
