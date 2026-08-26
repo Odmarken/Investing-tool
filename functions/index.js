@@ -191,6 +191,15 @@ export async function kontoVarv(logg = () => {}){
       kapitalEfter: konto.kapital
     });
     delete konto.oppna[id];
+    /* Motorns egen minnespost ska också veta att affären är slut. Annars
+       ligger den kvar som pågående, och sidor som läser kontot skulle visa
+       ett kort som ACTIVE i evighet. */
+    const st = LIVE.get(id);
+    if(st && !st.hitTp && !st.hitSl){
+      if(hur === 'mål') st.hitTp = true; else st.hitSl = true;
+      st.slutAt = nar;
+      LIVE.set(id, st);
+    }
     logg('stänger ' + pos.grade + ' på ' + hur + ' · ' + Math.round(dollar) + ' $');
   });
 
@@ -204,6 +213,14 @@ export async function kontoVarv(logg = () => {}){
   });
   let n = 0;
   SEDD.forEach((v, k) => { if(n++ < 400) sedd[k] = v; });
+
+  /* Gallring: en fyllning som varken nått mål eller stopp på ett dygn är inte
+     pågående längre, den är bortglömd. Utan det växer dokumentet i all evighet. */
+  const nu = Date.now();
+  Object.entries(live).forEach(([id, st]) => {
+    const gammal = st.slutAt ? (nu - st.slutAt > 6*3600e3) : (nu - (st.at || nu) > 24*3600e3);
+    if(gammal) delete live[id];
+  });
 
   konto.live = live;
   konto.sedd = sedd;

@@ -3443,9 +3443,13 @@ function liveLadda(){
 function liveFranMolnet(k){
   if(!k) return;
   const nu = Date.now();
+  // Affärer kontot redan bokfört är avgjorda, oavsett vad minnesposten säger.
+  const avslutade = new Set((k.affarer || []).map(a => a.id));
   Object.entries(k.live || {}).forEach(([id, st]) => {
     if(!st || !st.sig) return;
+    if(avslutade.has(id)) return;
     if(st.slutAt && nu - st.slutAt > LIVE_KVAR) return;
+    if(!st.slutAt && nu - (st.at || 0) > LIVE_MAXALD) return;   // bortglömd, inte pågående
     const egen = LIVE.get(id);
     if(!egen || (!egen.hitTp && !egen.hitSl)) LIVE.set(id, st);
   });
@@ -3465,7 +3469,10 @@ function buildAllSignals(){
   const idn = new Set(sig.map(x => x.id));
   LIVE.forEach((st, id) => {
     if(!st.sig || idn.has(id)) return;
-    if(st.slutAt && Date.now() - st.slutAt > 1800000){ LIVE.delete(id); return; }   // släpp efter 30 min
+    if(st.slutAt && Date.now() - st.slutAt > LIVE_KVAR){ LIVE.delete(id); return; }   // släpp efter 30 min
+    // Fylld men varken vunnen eller förlorad på ett och ett halvt dygn: släpp den.
+    // Annars kan ett kort stå kvar som ACTIVE i all evighet.
+    if(!st.slutAt && Date.now() - (st.at || 0) > LIVE_MAXALD){ LIVE.delete(id); return; }
     const ctx = STATE.ctx[st.sig.inst];
     if(!ctx) return;
     sig.push(Object.assign({}, st.sig, { bars: ctx.bars, ctxPx: ctx.px, atr: ctx.atr || st.sig.atr }));

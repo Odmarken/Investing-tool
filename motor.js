@@ -994,6 +994,20 @@ function combine(list, A){
 /* ACTIVE betyder att affären är påbörjad. Den ligger kvar som ACTIVE tills
    målet eller stoppen nås — inte bara medan priset råkar stå i entryzonen. */
 function assignStatus(sigs, pxByInst){
+  /* En fylld setup som motorn slutat föreslå — priset har dragit iög eller
+     strukturen har ändrats — försvinner ur listan nedan och skulle då aldrig
+     få sitt slut. Den här svepningen prövar alla påbörjade affärer mot samma
+     mål och stopp som när de togs, precis som kontot gör med sina positioner. */
+  const iListan = new Set(sigs.map(s => s.id));
+  LIVE.forEach((st, id) => {
+    if(iListan.has(id) || !st || !st.sig || st.hitTp || st.hitSl) return;
+    const g = st.sig, px = pxByInst[g.inst];
+    if(!nz(px)) return;
+    const dir = g.side === 'long' ? 1 : -1;
+    if(dir*(px - g.tp) >= 0){ st.hitTp = true; st.slutAt = Date.now(); }
+    else if(dir*(px - g.sl) <= 0){ st.hitSl = true; st.slutAt = Date.now(); }
+  });
+
   sigs.forEach(s=>{
     const px = pxByInst[s.inst];
     const dir = s.side==='long' ? 1 : -1;
