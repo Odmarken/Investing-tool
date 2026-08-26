@@ -2709,17 +2709,32 @@ function authLage(lage){
   authMeddela('');
 }
 
-function authOppna(lage){
-  if(!AUTH.auth){
-    authMeddela('Inloggningen kunde inte startas — sidan nådde inte Firebase.');
-  }
+/* Kom sidan upp innan Firebase svarade — eller startades den lokala servern
+   innan den kunde servera konfigurationen — gör vi ett försök till här i
+   stället för att bara säga nej. */
+async function authSakerstall(){
+  if(AUTH.auth) return true;
+  try{ await firebaseStart(); }catch(e){ /* meddelandet kommer nedan */ }
+  return !!AUTH.auth;
+}
+
+function authSaknasText(){
+  const lokal = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  return lokal
+    ? 'Inloggningen får sin Firebase-konfiguration från den lokala servern. Starta om den med ' +
+      'npm start — eller använd riptide-investing-tool.web.app.'
+    : 'Sidan nådde inte Firebase. Ladda om, och kolla nätet om det inte hjälper.';
+}
+
+async function authOppna(lage){
   authLage(lage || 'in');
   $('#authModal').classList.add('show');
   setTimeout(() => $('#authEpost').focus(), 60);
+  if(!(await authSakerstall())) authMeddela(authSaknasText());
 }
 
 async function authKor(){
-  if(!AUTH.auth || !AUTH.modul){ authMeddela('Inloggningen är inte igång på den här adressen.'); return; }
+  if(!(await authSakerstall())){ authMeddela(authSaknasText()); return; }
   const epost = ($('#authEpost').value || '').trim();
   const losen = $('#authLosen').value || '';
   if(!epost || !losen){ authMeddela('Fyll i både e-post och lösenord.'); return; }
@@ -2763,6 +2778,7 @@ async function authToken(){
 }
 
 async function firebaseStart(){
+  if(AUTH.app) return;                       // redan igång — initiera inte två gånger
   const cfg = await firebaseKonfig();
   if(!cfg) return;
   try{
