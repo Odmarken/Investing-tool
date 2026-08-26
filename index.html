@@ -2656,6 +2656,7 @@ const firebasePa = () => !!FB.apiBas;
    någon annanstans finns ingen sådan fil, och då läses kontot i stället från
    /api/konto — samma siffror, bara utan realtidspush. */
 async function firebaseKonfig(){
+  /* 1. Firebase Hosting lägger den här av sig själv. */
   try{
     const r = await fetch('/__/firebase/init.json', { cache: 'no-store' });
     if(r.ok){
@@ -2663,6 +2664,21 @@ async function firebaseKonfig(){
       if(k && k.apiKey && k.projectId) return k;
     }
   }catch(e){ /* inte Firebase Hosting */ }
+
+  /* 2. Ligger sidan någon annanstans — GitHub Pages, localhost, en filkopia —
+        finns ingen sådan fil. Då frågar vi vår egen funktion, som hämtar samma
+        konfiguration från hostingen. Nycklarna slipper därmed repot. */
+  if(FB.apiBas){
+    try{
+      const r = await fetch(firebaseApi() + '/webbkonfig', { cache: 'no-store' });
+      if(r.ok){
+        const k = await r.json();
+        if(k && k.apiKey && k.projectId) return k;
+      }
+    }catch(e){ /* nästa försök */ }
+  }
+
+  /* 3. Sista utvägen: något ifyllt för hand i firebase-config.js. */
   return (FB.apiKey && FB.projectId) ? FB : null;
 }
 
@@ -2723,7 +2739,8 @@ function authSaknasText(){
   return lokal
     ? 'Inloggningen får sin Firebase-konfiguration från den lokala servern. Starta om den med ' +
       'npm start — eller använd riptide-investing-tool.web.app.'
-    : 'Sidan nådde inte Firebase. Ladda om, och kolla nätet om det inte hjälper.';
+    : 'Sidan nådde varken Firebase Hosting eller molnfunktionen, så konfigurationen saknas. ' +
+      'Ladda om — hjälper det inte fungerar riptide-investing-tool.web.app alltid.';
 }
 
 async function authOppna(lage){

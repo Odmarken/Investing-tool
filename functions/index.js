@@ -58,6 +58,18 @@ const EXTRA_HUVUDEN = {
 
 const proxyOK = host => PROXY_VARDAR.some(v => host === v || host.endsWith('.' + v));
 
+/* Hämtas en gång och ligger kvar så länge instansen lever. */
+const INIT_URL = 'https://riptide-investing-tool.web.app/__/firebase/init.json';
+let konfigCache = null;
+async function webbkonfig(){
+  if(konfigCache && Date.now() - konfigCache.nar < 6*3600e3) return konfigCache.data;
+  const r = await fetch(INIT_URL);
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  const data = await r.json();
+  konfigCache = { nar: Date.now(), data };
+  return data;
+}
+
 export function tomtKonto(){
   return {
     start: START_KAPITAL, kontrakt: KONTRAKT, punktVarde: PUNKTVARDE,
@@ -336,6 +348,22 @@ export const api = onRequest(
 
     /* Den pågående stapeln. Sidan lyssnar hellre på Firestore direkt, men den
        här vägen finns för localhost och allt som inte pratar Firestore. */
+    /* Firebase-konfigurationen för webbklienten. Hosting serverar den själv på
+       /__/firebase/init.json, men sidan ligger också på GitHub Pages och på
+       localhost, och där finns ingen sådan fil. Nycklarna ska inte ligga i
+       repot, så funktionen hämtar dem från hostingen och lämnar dem vidare.
+       De är publika av design och låsta till våra adresser i Google Cloud. */
+    if(vag === '/webbkonfig'){
+      try{
+        const k = await webbkonfig();
+        res.set('cache-control', 'public, max-age=600');
+        res.json(k);
+      }catch(e){
+        res.status(502).json({ error: 'nådde inte hostingens konfiguration' });
+      }
+      return;
+    }
+
     if(vag === '/live'){
       const snap = await LIVE_DOK().get();
       res.set('cache-control', 'no-store');
@@ -360,6 +388,6 @@ export const api = onRequest(
       return;
     }
 
-    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/tick?k=…', '/api/konto'] });
+    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/webbkonfig', '/api/tick?k=…', '/api/konto'] });
   }
 );
