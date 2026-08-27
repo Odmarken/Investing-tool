@@ -19,7 +19,8 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
 import {
-  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS
+  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS,
+  computeNewsBias, biasLage
 } from './motor.js';
 
 initializeApp();
@@ -58,6 +59,51 @@ const EXTRA_HUVUDEN = {
 
 const proxyOK = host => PROXY_VARDAR.some(v => host === v || host.endsWith('.' + v));
 
+/* Nyhetsbias. Skärmen visar den och den avgör vilket håll signaler ges åt, så
+   kontot måste räkna samma sak — annars skulle molnet kunna öppna en affär åt
+   ett håll som panelen inte ens visar. Google News räcker: reglerna i motorn
+   läser rubriker, och rubriker är vad ett RSS-flöde ger. */
+/* Samma två breda Google-flöden som panelen läser. En smalare sökning —
+   "nvidia", "inflation" — väljer sina egna rubriker och gav +71 av 100 när de
+   breda gav +13. Frågan måste vara neutral, annars mäter man sin egen sökning. */
+const NYHETS_URLAR = [
+  'https://news.google.com/rss/search?q=(futures+OR+%22stock+market%22+OR+Fed)+when:1d&hl=en-US&gl=US&ceid=US:en',
+  'https://news.google.com/rss/search?q=(Nasdaq+OR+%22Nasdaq+100%22+OR+gold+OR+XAUUSD+OR+Fed)+when:1d&hl=en-US&gl=US&ceid=US:en'
+];
+let biasCache = null;
+
+function rssPoster(xml){
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => {
+    const bit = m[1];
+    const rubrik = ((bit.match(/<title>([\s\S]*?)<\/title>/) || [,''])[1] || '')
+      .replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').trim();
+    const nar = (bit.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [,''])[1];
+    return { title: rubrik, desc: '', ts: Date.parse(nar) || Date.now() };
+  }).filter(x => x.title);
+}
+
+async function nyhetsbias(){
+  if(biasCache && Date.now() - biasCache.nar < 4*60000) return biasCache.varde;
+  let varde = { poang: 0, n: 0, nar: Date.now() };
+  try{
+    const svar = await Promise.all(NYHETS_URLAR.map(u =>
+      fetch(u, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(9000) })
+        .then(r => r.ok ? r.text() : '')
+        .catch(() => '')));
+    const sedda = new Set();
+    const poster = svar.flatMap(rssPoster)
+      .filter(x => { if(sedda.has(x.title)) return false; sedda.add(x.title); return true; })
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 45);
+    if(poster.length){
+      const b = computeNewsBias(poster);
+      varde = { poang: Math.round(b.nq*10)/10, n: poster.length, nar: Date.now() };
+    }
+  }catch(e){ /* utan nyheter blir biasen neutral, och då spärras ingenting */ }
+  biasCache = { nar: Date.now(), varde };
+  return varde;
+}
+
 /* Hämtas en gång och ligger kvar så länge instansen lever. */
 const INIT_URL = 'https://riptide-investing-tool.web.app/__/firebase/init.json';
 let konfigCache = null;
@@ -87,6 +133,11 @@ async function lasKonto(){
 async function skrivKonto(konto){
   konto.affarer = (konto.affarer || []).slice(-300);
   await KONTO_DOK().set(konto);
+  /* Biasen läggs i live-dokumentet, som är öppet för läsning — då kan panelen
+     filtrera på exakt samma siffra som kontot handlar på, utan inloggning. */
+  try{
+    await LIVE_DOK().set({ bias: konto.nyhetsbias }, { merge: true });
+  }catch(e){ /* biasen är en bonus, inte ett krav */ }
 }
 
 /* ---------- staplar: TradingView-feeden först, annars Yahoo ---------- */
@@ -143,6 +194,10 @@ export async function kontoVarv(logg = () => {}){
   Object.entries(konto.sedd || {}).forEach(([k,v]) => SEDD.set(k, v));
 
   const ctx = buildContext(INST, bars.slice(-420));
+  const nb = await nyhetsbias();
+  const lage = biasLage(nb.poang);
+  ctx.newsBias = nb.poang;
+  ctx.biasRiktning = lage.riktning;          // samma spärr som panelen visar
   const px = ctx.px;
   const sigs = assignStatus(
     generateSignals(ctx).sort((a,b) => (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf)),
@@ -222,6 +277,7 @@ export async function kontoVarv(logg = () => {}){
     if(gammal) delete live[id];
   });
 
+  konto.nyhetsbias = { poang: nb.poang, n: nb.n, nar: nb.nar, riktning: lage.riktning, styrka: lage.styrka };
   konto.live = live;
   konto.sedd = sedd;
   konto.pris = px;
@@ -383,8 +439,9 @@ export const api = onRequest(
 
     if(vag === '/live'){
       const snap = await LIVE_DOK().get();
+      const d = snap.exists ? snap.data() : null;
       res.set('cache-control', 'no-store');
-      res.json((snap.exists && snap.data().NQ) || null);
+      res.json(d ? { NQ: d.NQ || null, bias: d.bias || null } : null);
       return;
     }
 

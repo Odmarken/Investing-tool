@@ -330,6 +330,122 @@ function aiSannolikhet(x){
   return 1/(1 + Math.exp(-clamp(z, -18, 18)));
 }
 
+
+/* ==========================================================================
+   4c. NYHETSTOLKNING
+   Reglerna bodde i sidan, men molnet behöver samma bedömning: biasen styr
+   numera vilket håll signaler ges åt, och skärmen och kontot får inte tycka
+   olika. Därför ligger de här, i den fil båda delar.
+   ========================================================================== */
+const RULES = [
+  // --- Inflation ---
+  {k:/\b(cpi|inflation)\b.*\b(hotter|higher|beats|above|rises|jump|accelerat)/i, nq:-3, gc:-1, c:'macro', sv:'Hetare inflation än väntat → högre räntebana och press på tillväxtaktier. Tyngst i de längsta techcaseen.'},
+  {k:/\b(cpi|inflation)\b.*\b(cool|softer|lower|below|eases|slow|miss)/i, nq:3, gc:2, c:'macro', sv:'Svalare inflation → marknaden prisar in mjukare Fed. Lägre realräntor lyfter värderingen på tillväxtbolag, alltså medvind för NQ.'},
+  {k:/\b(cpi|ppi|pce|core inflation)\b/i, nq:0, gc:0, c:'macro', sv:'Inflationsdata i fokus — direkt input till Fed-banan och därmed till hela värderingen av NQ.'},
+  // --- Fed / räntor ---
+  {k:/\b(rate cut|cuts rates|dovish|easing cycle|lower rates)\b/i, nq:3, gc:3, c:'macro', sv:'Duvaktig Fed-signal → lägre realräntor. Historiskt bränsle för Nasdaq, ofta med snabb reaktion i 5m-grafen.'},
+  {k:/\b(rate hike|hawkish|higher for longer|tighten)/i, nq:-3, gc:-2, c:'macro', sv:'Hökaktig ton → högre diskonteringsränta. Negativt för Nasdaq, och dollarn brukar stärkas samtidigt.'},
+  {k:/\b(fomc|federal reserve|the fed)\b/i, nq:0, gc:0, c:'macro', sv:'Fed-relaterat — den enskilt viktigaste drivkraften för indexet just nu.'},
+  {k:/\bpowell\b/i, nq:0, gc:0, c:'macro', sv:'Powell-uttalande. Tonläget flyttar räntekurvan direkt; vänta ut första reaktionen innan entry.'},
+  {k:/\b(yields?)\b.*\b(rise|surge|jump|higher|climb)/i, nq:-2, gc:-2, c:'macro', sv:'Stigande obligationsräntor → tryck på högt värderade techbolag, som diskonteras hårdare.'},
+  {k:/\b(yields?)\b.*\b(fall|drop|slide|lower|decline)/i, nq:2, gc:2, c:'macro', sv:'Fallande räntor → lättnad för Nasdaq-värderingar, särskilt i de längsta tillväxtcaseen.'},
+  // --- Dollar ---
+  {k:/\b(dollar|dxy|greenback)\b.*\b(surge|strength|stronger|rally|higher)/i, nq:-1, gc:-3, c:'macro', sv:'Starkare dollar pressar amerikanska bolags utlandsvinster — mild motvind för NQ, och en riskaversionssignal.'},
+  {k:/\b(dollar|dxy|greenback)\b.*\b(weak|falls|slide|lower|drops)/i, nq:1, gc:3, c:'macro', sv:'Svagare dollar → stödjande för amerikanska storbolagsvinster och brukar följas av riskaptit.'},
+  // --- Arbetsmarknad ---
+  {k:/\b(nonfarm|nfp|payrolls|jobs report)\b/i, nq:0, gc:0, c:'macro', sv:'Arbetsmarknadsdata — hög volatilitet i 5m-grafen kring släppet. Undvik entries de första staplarna.'},
+  {k:/\b(jobless claims|unemployment)\b.*\b(rise|higher|surge|increase)/i, nq:-1, gc:2, c:'macro', sv:'Svagare arbetsmarknad → recessionsoro, men också ökad chans till räntesänkning. Dragkamp i indexet.'},
+  {k:/\b(recession|hard landing|slowdown|contraction)\b/i, nq:-3, gc:2, c:'macro', sv:'Recessionsoro → riskaversion. Nasdaq säljs först och hårdast av riskbarometrarna.'},
+  {k:/\b(soft landing|resilient economy|robust growth)\b/i, nq:2, gc:-1, c:'macro', sv:'Mjuklandningsnarrativ → riskaptit upp, gynnsamt för indexet.'},
+  // --- Tech / Nasdaq ---
+  {k:/\b(nvidia|nvda)\b/i, nq:2, gc:0, c:'nq', sv:'Nvidia är den tyngsta enskilda drivaren i Nasdaq-100 — rörelser här slår igenom direkt i NQ.'},
+  {k:/\b(apple|microsoft|amazon|alphabet|google|meta|tesla|broadcom|aapl|msft|amzn|googl|tsla|avgo)\b/i, nq:1, gc:0, c:'nq', sv:'Megacap-nyhet. Dessa bolag väger tungt i indexet — kolla om rörelsen är bolagsspecifik eller bred.'},
+  {k:/\b(ai|artificial intelligence|data ?cent|chips?|semiconductor)\b/i, nq:2, gc:0, c:'nq', sv:'AI-/halvledartemat är motorn i Nasdaq-rallyt. Positiva nyheter här lyfter hela indexet.'},
+  {k:/\b(earnings)\b.*\b(beat|top|surpass|strong)/i, nq:2, gc:0, c:'nq', sv:'Starkare rapport än väntat → stöd för indexet, särskilt om guidningen höjs.'},
+  {k:/\b(earnings)\b.*\b(miss|disappoint|weak|cut guidance|warns)/i, nq:-3, gc:0, c:'nq', sv:'Rapportbesvikelse → risk för sektorbred nedgång i tech.'},
+  {k:/\b(nasdaq|ndx|qqq|tech stocks)\b.*\b(rally|surge|jump|record|higher|gains)/i, nq:2, gc:0, c:'nq', sv:'Nasdaq i styrka — bekräftar köparkontroll, prioritera long-setups i NQ.'},
+  {k:/\b(nasdaq|ndx|qqq|tech stocks)\b.*\b(slide|fall|drop|selloff|tumble|lower)/i, nq:-2, gc:0, c:'nq', sv:'Nasdaq under press — prioritera short-setups tills strukturen vänder.'},
+  {k:/\b(nasdaq|ndx|qqq|s&p|wall street|stock market|futures)\b/i, nq:0, gc:0, c:'nq', sv:'Direkt indexrelaterat — läs mot 5m-strukturen innan du agerar.'},
+  // --- Guld ---
+  {k:/\bgold\b.*\b(record|all-time high|surge|rally|jump|climbs?|higher)/i, nq:0, gc:3, c:'gold', sv:'Guld i styrka — läs det som en signal om realräntor och riskaptit. Guld handlas inte i den här panelen.'},
+  {k:/\bgold\b.*\b(falls?|slide|drop|tumble|lower|retreat|profit-taking)/i, nq:0, gc:-3, c:'gold', sv:'Guld under press — oftast starkare dollar eller stigande realräntor. Läs det som dollarsignal, inte som en affär.'},
+  {k:/\b(central bank).*(gold|bullion)|gold.*(central bank buying|reserves)/i, nq:0, gc:3, c:'gold', sv:'Centralbanksköp av guld — strukturell efterfrågan och en fingervisning om synen på dollarn.'},
+  {k:/\b(etf).*(gold|bullion|inflow|outflow)/i, nq:0, gc:2, c:'gold', sv:'ETF-flöden i guld visar hur institutionellt kapital positionerar sig mellan risk och skydd.'},
+  {k:/\b(gold|xau|bullion|silver|precious metal)/i, nq:0, gc:1, c:'gold', sv:'Guldrelaterat — mest intressant som avläsning av dollarn och realräntorna.'},
+  // --- Geopolitik / risk ---
+  {k:/\b(war|attack|strike|missile|invasion|conflict|escalat)/i, nq:-2, gc:3, c:'macro', sv:'Geopolitisk eskalering → flykt till säkerhet, index ned. Rörelserna är snabba och ofta kortlivade.'},
+  {k:/\b(ceasefire|peace deal|de-escalat|truce)\b/i, nq:2, gc:-2, c:'macro', sv:'Nedtrappning → riskpremien faller tillbaka och risktillgångar lyfter.'},
+  {k:/\b(tariff|trade war|sanction|export control)/i, nq:-2, gc:2, c:'macro', sv:'Handelspolitisk friktion → osäkerhet kring marginaler och leveranskedjor i tech.'},
+  {k:/\b(shutdown|debt ceiling|default)\b/i, nq:-2, gc:2, c:'macro', sv:'Politisk osäkerhet i USA → riskpremie upp och tunnare likviditet i indexet.'},
+  // --- Övrigt makro ---
+  {k:/\b(pmi|ism)\b/i, nq:0, gc:0, c:'macro', sv:'Konjunkturbarometer — påverkar tillväxtförväntningarna och därmed indexriktningen.'},
+  {k:/\b(gdp)\b/i, nq:0, gc:0, c:'macro', sv:'BNP-data. Starkt = riskaptit men högre räntor; svagt = tvärtom.'},
+  {k:/\b(oil|crude|wti|brent|opec)\b/i, nq:-1, gc:1, c:'macro', sv:'Oljepriset styr inflationsförväntningarna — högre olja pressar tech via räntebanan.'},
+  {k:/\b(china|beijing|pboc)\b/i, nq:0, gc:1, c:'macro', sv:'Kina-nyhet — påverkar global tillväxt och halvledarkedjan, alltså tungt i Nasdaq-100.'},
+  {k:/\b(ecb|boj|bank of japan|bank of england)\b/i, nq:0, gc:1, c:'macro', sv:'Annan centralbank i rörelse — slår mot dollarn och därmed indirekt mot amerikanska tillgångar.'},
+  {k:/\b(bitcoin|crypto)\b/i, nq:1, gc:0, c:'macro', sv:'Krypto rör sig ofta i takt med Nasdaq som riskbarometer.'},
+  {k:/\b(vix|volatility)\b.*\b(spike|surge|jump)/i, nq:-2, gc:1, c:'macro', sv:'Volatilitetsspik → minska storlek, bredda stopp. Rörelserna på 5m blir betydligt större.'}
+];
+
+const RISK_EVENTS = [
+  {k:/\b(cpi|inflation report)\b/i, n:'CPI / inflationsdata', imp:'HÖG'},
+  {k:/\b(fomc|rate decision|fed meeting)\b/i, n:'FOMC-besked', imp:'HÖG'},
+  {k:/\bpowell\b/i, n:'Powell talar', imp:'HÖG'},
+  {k:/\b(nonfarm|payrolls|jobs report|nfp)\b/i, n:'Arbetsmarknadsrapport', imp:'HÖG'},
+  {k:/\b(ppi)\b/i, n:'PPI', imp:'MEDEL'},
+  {k:/\b(pce)\b/i, n:'PCE-inflation', imp:'HÖG'},
+  {k:/\b(jobless claims)\b/i, n:'Nyanmälda arbetslösa', imp:'MEDEL'},
+  {k:/\b(ism|pmi)\b/i, n:'ISM / PMI', imp:'MEDEL'},
+  {k:/\b(earnings|results)\b.*\b(nvidia|apple|microsoft|tesla|amazon|meta|alphabet)/i, n:'Megacap-rapport', imp:'HÖG'},
+  {k:/\b(opec)\b/i, n:'OPEC-möte', imp:'MEDEL'},
+  {k:/\b(ecb|boj)\b.*\b(decision|meeting|policy)/i, n:'ECB/BoJ-besked', imp:'MEDEL'}
+];
+
+function analyseHeadline(title, summary){
+  const txt = (title + ' ' + (summary||'')).replace(/\s+/g,' ');
+  let nq=0, gc=0, cats=new Set(), svs=[];
+  for(const r of RULES){
+    if(r.k.test(txt)){
+      nq += r.nq; gc += r.gc; cats.add(r.c);
+      if(svs.length < 2 && r.sv) svs.push(r.sv);
+    }
+  }
+  nq = clamp(nq,-6,6); gc = clamp(gc,-6,6);
+  if(!svs.length) svs.push('Allmän marknadsnyhet utan tydlig riktningseffekt på NQ.');
+  return { nq, gc, cats:[...cats], sv:svs, hot: Math.abs(nq)>=3 || Math.abs(gc)>=3 };
+}
+
+function computeNewsBias(items){
+  let nq=0, gc=0, wsum=0;
+  const now = Date.now();
+  items.slice(0,45).forEach(it=>{
+    const a = it.an || analyseHeadline(it.title, it.desc);
+    it.an = a;
+    const ageH = (now - it.ts)/3.6e6;
+    const w = Math.exp(-ageH/7);              // halveringstid ~5h
+    nq += a.nq*w; gc += a.gc*w; wsum += w;
+  });
+  const norm = v => wsum ? clamp(v/wsum*33, -100, 100) : 0;
+  return { nq: norm(nq), gc: norm(gc) };
+}
+
+/* Vilket håll nyhetsflödet lutar åt, och hur starkt. Under tröskeln är svaret
+   neutralt — då spärras ingenting. */
+const BIAS_TROSKEL = 10;          // under detta är flödet inte riktat nog
+const BIAS_FULLT   = 45;          // här räknas biasen som helt utslagen
+
+function biasLage(poang){
+  const p = nz(poang) ? poang : 0;
+  const styrka = Math.round(clamp(Math.abs(p)/BIAS_FULLT, 0, 1) * 100);
+  const riktning = p >= BIAS_TROSKEL ? 1 : p <= -BIAS_TROSKEL ? -1 : 0;
+  return {
+    poang: p,
+    riktning,                                     // 1 = bara long, −1 = bara short, 0 = båda
+    styrka,                                       // 0–100 %
+    text: riktning > 0 ? 'LONG' : riktning < 0 ? 'SHORT' : 'NEUTRAL'
+  };
+}
+
 /* ==========================================================================
    5. SIGNALMOTOR
    Tre strategifamiljer — trendfortsättning, likviditetssvep och range-brott —
@@ -972,7 +1088,18 @@ function generateSignals(ctx){
     }));
   }
 
-  const ok = S.filter(s => !s.invalid && s.rr >= 0.9 && isFinite(s.entry) && isFinite(s.sl));
+  let ok = S.filter(s => !s.invalid && s.rr >= 0.9 && isFinite(s.entry) && isFinite(s.sl));
+
+  /* Nyhetsflödet bestämmer vilket håll som får handlas. Lutar dagen positivt
+     ges bara långa setups, lutar den negativt bara korta, och är den neutral
+     ges båda. Redan påbörjade affärer sparas undan oavsett håll — de ska få
+     nå sitt mål eller sitt stopp, inte försvinna för att nyheterna vände. */
+  const bias = nz(ctx.biasRiktning) ? ctx.biasRiktning : 0;
+  if(bias !== 0){
+    const onskad = bias > 0 ? 'long' : 'short';
+    ok = ok.filter(s => s.side === onskad || LIVE.has(s.id));
+  }
+
   const near = ok.filter(s => s.dist <= 5*A);        // entry inom rimligt avstånd
   return combine(near.length >= 3 ? near : ok.filter(s => s.dist <= 9*A), A);
 }
@@ -1106,6 +1233,7 @@ export {
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
   INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, rensaDubbletter,
+  RULES, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,
   makeSignal, generateSignals, combine, assignStatus, LIVE, SEDD
