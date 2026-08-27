@@ -999,7 +999,37 @@ function combine(list, A){
 /* ---- status: en ACTIVE, resten väntar ---- */
 /* ACTIVE betyder att affären är påbörjad. Den ligger kvar som ACTIVE tills
    målet eller stoppen nås — inte bara medan priset råkar stå i entryzonen. */
+/* Finns redan en påbörjad affär i samma familj åt samma håll på samma
+   instrument? Då är platsen upptagen tills den nått mål eller stopp. */
+function upptagenAv(s){
+  for(const st of LIVE.values()){
+    if(!st || !st.sig || st.hitTp || st.hitSl) continue;
+    const g = st.sig;
+    if(g.inst === s.inst && g.fam === s.fam && g.side === s.side) return true;
+  }
+  return false;
+}
+
+/* Städar bort dubbletter som redan hunnit uppstå: av flera pågående affärer i
+   samma familj åt samma håll behålls den som triggade först. */
+function rensaDubbletter(){
+  const behall = new Map();
+  const bort = [];
+  for(const [id, st] of LIVE){
+    if(!st || !st.sig || st.hitTp || st.hitSl) continue;
+    const nyckel = st.sig.inst + '|' + st.sig.fam + '|' + st.sig.side;
+    const forra = behall.get(nyckel);
+    if(!forra){ behall.set(nyckel, [id, st]); continue; }
+    if((st.at || 0) < (forra[1].at || 0)){ bort.push(forra[0]); behall.set(nyckel, [id, st]); }
+    else bort.push(id);
+  }
+  bort.forEach(id => LIVE.delete(id));
+  return bort.length;
+}
+
 function assignStatus(sigs, pxByInst){
+  rensaDubbletter();
+
   /* En fylld setup som motorn slutat föreslå — priset har dragit iög eller
      strukturen har ändrats — försvinner ur listan nedan och skulle då aldrig
      få sitt slut. Den här svepningen prövar alla påbörjade affärer mot samma
@@ -1031,7 +1061,14 @@ function assignStatus(sigs, pxByInst){
     // C-setups får aldrig gå aktiva — de är för svaga för att handlas.
     const fargodkand = s.grade === 'A' || s.grade === 'B';
     if(!st && fargodkand && (traff || (fylld && foreDetta === false))){
-      st = { triggered:true, at:Date.now(), entryPx:s.entry, sig:Object.assign({}, s) };
+      // En setup i taget per familj och riktning. Id:t följer entrynivån, så samma
+      // idé får ett nytt id när priset flyttar sig — utan spärren staplades tre
+      // nästan identiska svep-shorts på varandra, både som kort och som positioner,
+      // och risken blev tredubbel på samma tanke.
+      const upptagen = upptagenAv(s);
+      if(!upptagen){
+        st = { triggered:true, at:Date.now(), entryPx:s.entry, sig:Object.assign({}, s) };
+      }
     }
     if(!st) SEDD.set(s.id, fylld);
     if(st){
@@ -1068,7 +1105,7 @@ export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
   INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
-  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage,
+  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, rensaDubbletter,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,
   makeSignal, generateSignals, combine, assignStatus, LIVE, SEDD
