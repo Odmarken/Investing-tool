@@ -343,26 +343,32 @@ const FAM = { trend:'Trendfortsättning', svep:'Likviditetssvep', brott:'Range-b
 const FAM_KORT = { trend:'TREND', svep:'SVEP', brott:'BROTT', ict:'ICT', orb:'ORB' };
 const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
 
-/* Vilka familjer som får öppna riktiga affärer i demokontot.
-   Siffrorna kommer från `npm run trana`: 60 dagars MNQ-historik, 17 184
-   avgjorda setups, uppdelade i fyra lika långa tidsblock.
+/* Vilka familjer som får öppna affärer i demokontot.
 
-     familj   snitt R   block 1   block 2   block 3   block 4   n
-     trend     −0,128    −0,149    −0,101    −0,143    −0,119   9 905
-     brott     −0,091    −0,136    −0,015    −0,039    −0,169   2 190
-     svep      +0,001    +0,003    −0,000    −0,017    +0,020   3 997
-     ict       +0,009    −0,021    +0,111    −0,055    −0,005   1 002
-     orb       −0,033    −0,117    +0,499    −0,145    −0,415     123
+   Först var trend och brott spärrade. Underlaget var mätningen av *alla*
+   setups, där trend låg på −0,128 R över 9 905 fall och förlorade i alla fyra
+   tidsblocken. Det såg entydigt ut.
 
-   Trendfamiljen förlorar i alla fyra blocken på nästan tiotusen setups. Det
-   är inte otur, det är en negativ förväntan, och den får därför inte handlas.
-   Range-brott är negativ i alla fyra blocken den också. Svep och ICT är i
-   praktiken nollresultat men stabila, och ORB är för ung för att döma — den
-   har bara 123 avgjorda setups. Alla familjer visas fortfarande som signaler;
-   spärren gäller vilka demokontot tar.
-   Kör om mätningen efter varje ändring i motorn: siffrorna ovan gäller den
-   motor som fanns när de mättes. */
-const FAM_HANDLAS = { trend:false, svep:true, brott:false, ict:true, orb:true };
+   Det höll inte vid kontrollräkning. Kontot handlar bara grad A och B, och på
+   just den delmängden krymper skillnaderna till brus (60 dagar, fyllda A/B):
+
+     familj   per dag   träff   snitt R
+     trend      47,8     34 %   −0,062
+     brott      21,1     32 %   −0,081
+     ict        13,1     35 %   −0,001
+     svep        2,4     30 %   −0,117
+     orb         2,0     31 %   −0,030
+
+   Svep, som var tillåten, är alltså sämst av alla. Spärren stängde ute 80 % av
+   affärerna utan att det den skyddade mot var mätbart sämre än det den släppte
+   fram — och den hann tacka nej till en trendaffär som nådde sitt mål.
+
+   Ingen familj har positiv förväntan i historiken. Skillnaderna mellan dem är
+   för små för att sortera på. Därför handlas allt igen: det är låtsaspengar,
+   och framåtriktad data på riktiga fyllningar är värd mer än en gissning
+   byggd på 60 dagars backspegel. Sätt en familj till false här om den visar
+   sig förlora på riktigt — då finns det något att luta sig mot. */
+const FAM_HANDLAS = { trend:true, svep:true, brott:true, ict:true, orb:true };
 const FAM_N = Object.keys(FAM).length;
 const GRADE_RANK = { A:0, B:1, C:2 };
 

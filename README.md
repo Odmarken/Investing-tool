@@ -442,11 +442,21 @@ långa tidsblock, snitt-R per setup:
 | ict | +0,009 | −0,021 | +0,111 | −0,055 | −0,005 | 1 002 |
 | orb | −0,033 | −0,117 | +0,499 | −0,145 | −0,415 | 123 |
 
-Trendfamiljen förlorar i alla fyra blocken på nästan tiotusen setups — det är en
-negativ förväntan, inte otur. Range-brott likaså. Därför finns `FAM_HANDLAS` i
-`motor.js`: familjer som mätt förlorar pengar visas fortfarande som signaler, med
-märket **handlas ej**, men demokontot öppnar inga affärer på dem. Spärren gäller
-lika i webbläsaren, i molnfunktionen och i workern.
+Trendfamiljen förlorar i alla fyra blocken på nästan tiotusen setups. Det såg
+entydigt ut, och en spärr (`FAM_HANDLAS` i `motor.js`) stängde trend och brott
+ute från demokontot.
+
+**Den spärren är borttagen igen**, och skälet är värt att komma ihåg. Kontot
+handlar bara grad A och B, och på just den delmängden krymper skillnaderna till
+brus — trend −0,062, brott −0,081, ict −0,001, **svep −0,117**, orb −0,030 R per
+setup. Svep, som var tillåten, var alltså sämst av alla. Spärren stängde ute
+80 procent av affärerna utan att det den skyddade mot var mätbart sämre än det
+den släppte fram, och hann tacka nej till en trendaffär som nådde sitt mål.
+
+Lärdomen: mät på den delmängd som faktiskt handlas, inte på allt motorn
+genererar. `FAM_HANDLAS` finns kvar som mekanism — sätt en familj till `false`
+när det finns framåtriktad data som motiverar det. Spärren verkar lika i
+webbläsaren, i molnfunktionen och i workern.
 
 **Kör om mätningen efter varje ändring i motorn.** Siffrorna gäller den motor som
 fanns när de mättes, och `FAM_HANDLAS` ska följa med.
