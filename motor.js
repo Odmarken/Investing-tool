@@ -1233,7 +1233,7 @@ export {
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
   INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, rensaDubbletter,
-  RULES, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
+  RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,
   makeSignal, generateSignals, combine, assignStatus, LIVE, SEDD
