@@ -27,8 +27,9 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { INSTR, buildContext, generateSignals, DRAG_NAMN } from './motor.js';
 
 const CACHE   = '.staplar-cache.json';
-const FONSTER = 420;      // lika många staplar som sidan räknar på
-const STEG    = 2;        // hur ofta vi frågar motorn (2 = var tionde minut)
+const FONSTER = 1100;     // lika många staplar som sidan räknar på — fyra dygn, så att
+                          // brusbandet har färdiga sessioner att skatta ur
+const STEG    = 3;        // hur ofta vi frågar motorn (3 = var femtonde minut)
 const VANTA   = 60;       // staplar entryn får på sig att fyllas
 const LOPP    = 300;      // staplar affären får på sig att nå mål eller stopp
 const TESTDEL = 0.35;     // sista 35 procenten av tiden är testperiod
@@ -69,7 +70,8 @@ function samlaSetups(bars){
       sedda.set(s.id, {
         x: s.x.concat([s.conf/100]),          // den handsatta konfidensen är ett drag som alla andra
         fran: i, side: s.side, fam: s.fam, trigger: s.trigger,
-        entry: s.entry, sl: s.sl, tp: s.tp, rr: s.rr, grade: s.grade, conf: s.conf
+        entry: s.entry, sl: s.sl, tp: s.tp, rr: s.rr, grade: s.grade, conf: s.conf,
+        stangVid: s.stangVid || null
       });
     }
     if(i % 2000 < STEG) process.stdout.write('\r  spelar upp ' + Math.round((i/bars.length)*100) + '%   ');
@@ -84,7 +86,7 @@ function faciter(setups, bars){
   const ut = [];
   for(const s of setups){
     const dir = s.side === 'long' ? 1 : -1;
-    let fylld = -1, vinst = null;
+    let fylld = -1, vinst = null, delR = null;
     for(let i = s.fran; i < Math.min(bars.length, s.fran + VANTA + LOPP); i++){
       const b = bars[i];
       if(fylld < 0){
@@ -97,10 +99,17 @@ function faciter(setups, bars){
       }
       if(dir > 0 ? b.l <= s.sl : b.h >= s.sl){ vinst = 0; break; }
       if(dir > 0 ? b.h >= s.tp : b.l <= s.tp){ vinst = 1; break; }
+      /* Tidsutgång: momentumaffärerna stängs när sessionen stänger, oavsett var
+         priset står. Utfallet blir då delvis — något mellan −1 och rr. */
+      if(s.stangVid && b.t >= s.stangVid){
+        delR = dir*(b.c - s.entry)/Math.abs(s.entry - s.sl);
+        vinst = delR > 0 ? 1 : 0;
+        break;
+      }
       if(i - fylld > LOPP) break;
     }
     if(fylld < 0 || vinst === null) continue;
-    ut.push({ ...s, y: vinst, R: vinst ? s.rr : -1, slut: fylld });
+    ut.push({ ...s, y: vinst, R: delR !== null ? delR : (vinst ? s.rr : -1), slut: fylld });
   }
   return ut;
 }

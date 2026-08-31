@@ -193,7 +193,7 @@ export async function kontoVarv(logg = () => {}){
   Object.entries(konto.live || {}).forEach(([k,v]) => LIVE.set(k, v));
   Object.entries(konto.sedd || {}).forEach(([k,v]) => SEDD.set(k, v));
 
-  const ctx = buildContext(INST, bars.slice(-420));
+  const ctx = buildContext(INST, bars.slice(-1100));   // fyra dygn: brusbandet behöver färdiga sessioner
   const nb = await nyhetsbias();
   const lage = biasLage(nb.poang);
   ctx.newsBias = nb.poang;

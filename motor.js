@@ -455,8 +455,9 @@ function biasLage(poang){
      C = en familj eller ingen
    ========================================================================== */
 const RISK_MULT = { tight:0.95, normal:1.30, wide:1.75 };
-const FAM = { trend:'Trendfortsättning', svep:'Likviditetssvep', brott:'Range-brott', ict:'ICT-modell', orb:'Öppningsrange' };
-const FAM_KORT = { trend:'TREND', svep:'SVEP', brott:'BROTT', ict:'ICT', orb:'ORB' };
+const FAM = { trend:'Trendfortsättning', svep:'Likviditetssvep', brott:'Range-brott', ict:'ICT-modell',
+              orb:'Öppningsrange', moment:'Intradagsmomentum' };
+const FAM_KORT = { trend:'TREND', svep:'SVEP', brott:'BROTT', ict:'ICT', orb:'ORB', moment:'MOMENT' };
 const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
 
 /* Vilka familjer som får öppna affärer i demokontot.
@@ -484,7 +485,26 @@ const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
    och framåtriktad data på riktiga fyllningar är värd mer än en gissning
    byggd på 60 dagars backspegel. Sätt en familj till false här om den visar
    sig förlora på riktigt — då finns det något att luta sig mot. */
-const FAM_HANDLAS = { trend:true, svep:true, brott:true, ict:true, orb:true };
+/* Vilka familjer som får öppna affärer i demokontot.
+
+   Läxan från förra spärren står kvar: mät på den delmängd som faktiskt handlas
+   (grad A och B), inte på allt motorn genererar. Siffrorna nedan är snitt-R per
+   setup på A/B, 60 dagars MNQ delat i fyra lika långa tidsblock:
+
+     familj   totalt   block 1   block 2   block 3   block 4      n
+     svep     +0,095    +0,257    −0,438    +0,265    +0,513      88
+     orb      +0,042    +0,291    −0,037    −0,553    +0,504      56
+     ict      +0,020    −0,002    +0,001    +0,036    +0,042     635
+     trend    −0,048    −0,151    −0,077    +0,208    −0,159   1 929
+     brott    −0,136    −0,202    −0,081    −0,037    −0,241     909
+     moment   −0,162    −0,047    −0,496    +0,211    −0,332     405
+
+   Range-brott är negativ i alla fyra blocken, i båda mätningarna som gjorts, på
+   nio hundra affärer. Det är det enda som varit stabilt över huvud taget, och
+   familjen stängs därför av. Intradagsmomentum är ny och mäter träff 40 % — bäst
+   av alla — men negativ R: tidsutgången klipper vinnarna medan förlorarna tar hela
+   stoppen. Den visas som signal men handlas inte förrän den mäter positivt. */
+const FAM_HANDLAS = { trend:true, svep:true, brott:false, ict:true, orb:true, moment:false };
 const FAM_N = Object.keys(FAM).length;
 const GRADE_RANK = { A:0, B:1, C:2 };
 
@@ -645,10 +665,85 @@ function orbLage(ctx){
   return { dir, sedan, dubbel, niva: dir > 0 ? OR.h : OR.l, bredd: OR.bredd, riktning: OR.riktning };
 }
 
+/* --------------------------------------------------------------------------
+   Brusbandet — hur långt priset normalt hinner från dagens öppning.
+
+   Idén kommer från den publicerade intradagsmomentum-strategin på ES och NQ
+   (38 % träff, utdelningskvot 2,25, Sharpe 1,67 på 2010–2026). Den mäter hur
+   stor dagens rörelse brukar vara vid den här tiden på dygnet, drar ett band
+   runt öppningskursen, och tar rörelsen först när priset lämnar bandet — då
+   är det inte längre brus utan obalans mellan köpare och säljare.
+
+   Originalet använder fjorton dagars historik per klockslag. Vi har sällan mer
+   än ett par sessioner i fönstret, så bandet skattas i stället ur de senaste
+   fullständiga sessionernas storlek och skalas med roten ur tiden, vilket är
+   den vanliga approximationen: rörelsen växer med √t, inte linjärt.
+   -------------------------------------------------------------------------- */
+const RTH_START = 570, RTH_SLUT = 960;         // 09:30 och 16:00 New York-tid
+
+function brusband(ctx){
+  const bars = ctx.bars, n = bars.length;
+  if(n < 80) return null;
+
+  // Dela upp i sessioner: RTH-staplar per handelsdag.
+  const dagar = new Map();
+  for(let i = 0; i < n; i++){
+    const m = minutesNY(bars[i].t);
+    if(m < RTH_START || m >= RTH_SLUT) continue;
+    const d = dayKeyNY(bars[i].t);
+    if(!dagar.has(d)) dagar.set(d, []);
+    dagar.get(d).push(bars[i]);
+  }
+  const nycklar = [...dagar.keys()].sort();
+  if(!nycklar.length) return null;
+
+  const idag = nycklar[nycklar.length - 1];
+  const iRth = dagar.get(idag);
+  if(!iRth || iRth.length < 3) return null;                 // vänta in de första staplarna
+
+  // Så stor brukar en hel session vara, mätt som |stängning/öppning − 1|.
+  const fardiga = nycklar.slice(0, -1).slice(-4)
+    .map(k => dagar.get(k))
+    .filter(d => d.length >= 40);                           // halva sessioner duger inte
+  let sigma;
+  if(fardiga.length >= 2){
+    sigma = fardiga.reduce((s2, d) => s2 + Math.abs(d[d.length-1].c/d[0].o - 1), 0) / fardiga.length;
+  }else{
+    sigma = (ctx.atr * 9) / ctx.px;                         // grov reserv när historiken är tunn
+  }
+  sigma = clamp(sigma, 0.0015, 0.05);
+
+  const oppning = iRth[0].o;
+  const minuter = minutesNY(bars[n-1].t) - RTH_START;
+  const andel = clamp(minuter/(RTH_SLUT - RTH_START), 0.02, 1);
+  const bredd = oppning * sigma * Math.sqrt(andel);
+
+  return {
+    oppning, sigma, minuter,
+    ovre: oppning + bredd,
+    undre: oppning - bredd,
+    bredd,
+    slutTid: bars[n-1].t + (RTH_SLUT - minutesNY(bars[n-1].t))*60000   // när sessionen stänger
+  };
+}
+
+/* Läget mot bandet: utanför = momentum, innanför = brus. */
+function momentLage(ctx){
+  const m = ctx.minNY;
+  if(m < RTH_START + 45 || m > RTH_SLUT - 15) return null;   // inte i öppningsröran, inte i slutminuterna
+  const b = brusband(ctx);
+  if(!b || !(b.bredd > 0)) return null;
+  const px = ctx.px;
+  const dir = px > b.ovre ? 1 : px < b.undre ? -1 : 0;
+  if(!dir) return null;
+  const over = dir > 0 ? (px - b.ovre)/b.bredd : (b.undre - px)/b.bredd;
+  return { ...b, dir, over };
+}
+
 function familyVotes(ctx){
   const px = ctx.px, A = ctx.atr;
   const vw = nz(ctx.vwap) ? ctx.vwap : px;
-  const v = { trend:0, svep:0, brott:0, ict:0, orb:0 };
+  const v = { trend:0, svep:0, brott:0, ict:0, orb:0, moment:0 };
   const ict = ctx.ict !== undefined ? ctx.ict : (ctx.ict = ictState(ctx));
 
   // 1. Trendfortsättning — EMA-stacken och läget mot VWAP
@@ -702,6 +797,10 @@ function familyVotes(ctx){
   // Vi kräver därför stängning, och bara medan RTH pågår.
   const orb = orbLage(ctx);
   if(orb) v.orb = orb.dir;
+
+  // 6. Intradagsmomentum — priset har lämnat dagens brusband
+  const mo = momentLage(ctx);
+  if(mo) v.moment = mo.dir;
 
   return v;
 }
@@ -895,6 +994,7 @@ function makeSignal(ctx, o){
     fam:o.fam, famName:FAM[o.fam]||'', grade:G.grade, backers:G.backers, backN:G.n, against:G.against,
     side:o.side, name:o.name, entry, sl, tp,
     risk, ptsTp:t, rr, conf:c, why:o.why||[], invalid,
+    stangVid: o.stangVid || null,                  // tidsutgång: stäng här oavsett pris
     kontrakt:storlek.kontrakt, riskUsd:storlek.riskUsd, malUsd:storlek.malUsd,
     riskPerKontrakt:storlek.perKontrakt, overRisk:storlek.overRisk,
     tpBasis:T.basis, tpMacro:T.macro, tpAlign:T.align,
@@ -968,6 +1068,40 @@ function generateSignals(ctx){
         'Stopparna över dagshögsta är målet — svep följt av avvisning är en klassisk fälla.',
         'Kräver att 5m-stapeln stänger tillbaka under nivån innan entry.',
         'VWAP är första riktiga stödet på vägen ned.'
+      ]
+    }));
+  }
+
+  /* ---------- FAMILJ 6 · INTRADAGSMOMENTUM ----------
+     Priset har lämnat det spann dagen brukar hålla sig inom. Stoppen läggs
+     tillbaka vid bandkanten eller VWAP — vänder priset in i bandet igen var
+     rörelsen brus. Affären har dessutom en tidsutgång: den stängs när
+     sessionen stänger, för det är så strategin är mätt. */
+  const mo = momentLage(ctx);
+  if(mo){
+    const upp = mo.dir > 0;
+    const kant = upp ? mo.ovre : mo.undre;
+    const entry = px + (upp ? 0.05*A : -0.05*A);
+    const vwStop = upp ? Math.min(vw, kant) : Math.max(vw, kant);
+    const sl = upp ? Math.min(kant, vwStop) : Math.max(kant, vwStop);
+    let bonus = 0;
+    if(mo.over > 0.5) bonus += 6;                     // rejält utanför bandet
+    if(mo.over < 0.12) bonus -= 5;                    // knappt utanför, lätt att falla tillbaka
+    if((upp && ctx.trend > 20) || (!upp && ctx.trend < -20)) bonus += 5;
+    if(ctx.relVol > 1.2) bonus += 4;
+    S.push(makeSignal(ctx, {
+      fam:'moment', trigger:'stop', side: upp ? 'long' : 'short',
+      name: upp ? 'Intradagsmomentum — ut ur brusbandet uppåt'
+                : 'Intradagsmomentum — ut ur brusbandet nedåt',
+      entry, sl,
+      preferPrice: kant + (upp ? mo.bredd : -mo.bredd),
+      stangVid: mo.slutTid,
+      bonus,
+      why:[
+        'Dagens brusband ligger mellan ' + fmt(mo.undre, ctx.inst.dec) + ' och ' + fmt(mo.ovre, ctx.inst.dec) +
+          ' — det spann marknaden brukar hålla sig inom så här långt in på sessionen.',
+        'Priset är ' + (mo.over*100).toFixed(0) + ' % av en bandbredd utanför kanten, vilket är obalans snarare än brus.',
+        'Stoppen ligger tillbaka vid kanten eller VWAP, och affären stängs vid sessionens slut oavsett var priset står.'
       ]
     }));
   }
@@ -1232,7 +1366,7 @@ export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
   INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
-  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, rensaDubbletter,
+  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, rensaDubbletter, brusband, momentLage,
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,

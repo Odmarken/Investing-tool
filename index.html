@@ -1139,7 +1139,7 @@ function mergeBars(base, feed){
   // Yahoos svans, och de TV-staplar som finns används bara som historik.
   const fardk = newest && (Date.now() - newest) < 11*60000;
   if(fardk) bars = bars.filter(b => b.t <= newest);
-  return { bars: bars.slice(-400), newest, added, fardk, n:(feed||[]).length };
+  return { bars: bars.slice(-1100), newest, added, fardk, n:(feed||[]).length };
 }
 
 /* --------- Simulerad data (fallback, tydligt märkt) --------- */
