@@ -204,6 +204,32 @@ export async function kontoVarv(logg = () => {}){
     { NQ: px }
   );
 
+  /* Kallstart: ett nyss nollställt konto har inget minne av vilka setups som
+     redan är igång, och eftersom ACTIVE kräver att motorn *sett* fyllningen ske
+     skulle kontot stå tomt tills nästa gång priset råkar nudda en entrynivå —
+     ibland timmar. Har kontot varken affärer, positioner eller minne adopteras
+     därför de setups som är igång just nu: priset ligger på fyllningssidan och
+     högst en ATR förbi nivån, alltså en affär som faktiskt löper. Längre bort
+     än så har tåget gått, och den lämnas. */
+  // Bara pågående poster räknas som minne — en avslutad affär ligger kvar en stund
+  // i LIVE och skulle annars blockera adoptionen på ett nyss nollställt konto.
+  const nagotIgang = [...LIVE.values()].some(st => st && st.sig && !st.hitTp && !st.hitSl);
+  const kallstart = !konto.affarer.length && !Object.keys(konto.oppna).length && !nagotIgang;
+  if(kallstart){
+    sigs.forEach(s => {
+      if(s.status === 'ACTIVE' || s.grade === 'C') return;
+      if(FAM_HANDLAS[s.fam] === false) return;
+      const dir = s.side === 'long' ? 1 : -1;
+      const fylld = s.reachSign*(px - s.entry) >= 0;
+      if(!fylld || Math.abs(px - s.entry) > s.atr) return;
+      if(dir*(px - s.sl) <= 0 || dir*(px - s.tp) >= 0) return;   // redan förbi stopp eller mål
+      LIVE.set(s.id, { triggered:true, at: Date.now(), entryPx: s.entry, sig: { ...s } });
+      s.status = 'ACTIVE'; s.statusTxt = 'ACTIVE';
+      s.oppnad = Date.now(); s.entryFyllt = s.entry;
+      logg('adopterar pågående ' + s.grade + ' ' + s.fam + ' ' + s.side);
+    });
+  }
+
   sigs.forEach(s => {
     if(s.status !== 'ACTIVE') return;
     if(s.grade !== 'A' && s.grade !== 'B') return;
@@ -447,6 +473,24 @@ export const api = onRequest(
 
     /* Kontot kräver inloggning, precis som Firestore-reglerna. Sidan skickar
        sin id-token; utan giltig token finns inget att hämta här. */
+    /* Nollställning. Pengarna och historiken går tillbaka till start, men
+       motorns minne av vilka setups som är igång behålls — annars vet kontot
+       inte vad som löper och står tomt tills nästa fyllning råkar inträffa. */
+    if(vag === '/konto/nollstall' && req.method === 'POST'){
+      let b = req.body;
+      if(typeof b === 'string'){ try{ b = JSON.parse(b); }catch{ b = {}; } }
+      const nyckelIn = (b && b.k) || req.query.k;
+      if(!nyckel || nyckelIn !== nyckel){ res.status(401).json({ error: 'fel nyckel' }); return; }
+      const gammalt = await lasKonto();
+      const nytt = tomtKonto();
+      nytt.live = gammalt.live || {};
+      nytt.sedd = gammalt.sedd || {};
+      nytt.pris = gammalt.pris || null;
+      await skrivKonto(nytt);
+      res.json({ ok: true, kapital: nytt.kapital, behallna: Object.keys(nytt.live).length });
+      return;
+    }
+
     if(vag === '/konto'){
       const huvud = String(req.get('authorization') || '');
       const token = huvud.startsWith('Bearer ') ? huvud.slice(7) : '';
@@ -462,6 +506,6 @@ export const api = onRequest(
       return;
     }
 
-    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/webbkonfig', '/api/tick?k=…', '/api/konto'] });
+    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/webbkonfig', '/api/tick?k=…', '/api/konto', '/api/konto/nollstall (POST)'] });
   }
 );

@@ -504,7 +504,12 @@ const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
    familjen stängs därför av. Intradagsmomentum är ny och mäter träff 40 % — bäst
    av alla — men negativ R: tidsutgången klipper vinnarna medan förlorarna tar hela
    stoppen. Den visas som signal men handlas inte förrän den mäter positivt. */
-const FAM_HANDLAS = { trend:true, svep:true, brott:false, ict:true, orb:true, moment:false };
+/* Alla familjer påslagna: kontot ska ta varje aktiv signal panelen visar.
+   Det är ett medvetet val framför mätningen ovan — spärrarna byggde på 60 dagars
+   uppspelning, och kontot är nu i stället ett framåtriktat test av alla sex
+   familjerna på samma villkor. Sätt en familj till false när kontots egen
+   historik motiverar det. */
+const FAM_HANDLAS = { trend:true, svep:true, brott:true, ict:true, orb:true, moment:true };
 const FAM_N = Object.keys(FAM).length;
 const GRADE_RANK = { A:0, B:1, C:2 };
 
