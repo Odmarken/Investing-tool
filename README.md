@@ -23,6 +23,7 @@ för Yahoos fördröjda data.
 | `functions/index.js` | Samma sak på Firebase: cron var 5:e minut, proxy, ingest och Firestore |
 | `firebase-config.js` | Projektets publika nycklar — tomt projectId stänger av Firebase |
 | `firebase.json`, `firestore.rules`, `.firebaserc` | Hosting, regler och projekt |
+| `rulla-ut.js` | Utrullningen till Firebase — rätt paketnamn och en gräns som räcker |
 | `dev-server.js` | Lokal server: serverar sidan, en CORS-proxy och en kopia av workern |
 | `worker.js` | Cloudflare Worker som tar emot TradingView-alerts och serverar staplarna |
 | `wrangler.toml` | Inställningar för utrullning av workern |
@@ -66,9 +67,9 @@ utan att fråga om och om igen.
 4. Logga in och rulla ut:
 
 ```bash
-npx firebase login
-npx firebase functions:secrets:set FEED_KEY     # samma nyckel som TradingView-alertet
-npx firebase deploy
+npx firebase-tools login
+npx firebase-tools functions:secrets:set FEED_KEY   # samma nyckel som TradingView-alertet
+npm run fb:deploy
 ```
 
 `deploy` tar med tre saker: funktionerna (`kontoCron` + `api`), Firestore-reglerna och
@@ -91,7 +92,29 @@ Sidan kan ligga var som helst — Firebase Hosting, GitHub Pages eller `npm star
 `apiBas` i `firebase-config.js` pekar på funktionens fulla adress, så proxyn och kontot
 fungerar från alla tre.
 
-Kontot nollställs med `npx firebase firestore:delete riptide/konto` eller från konsolen.
+Två fällor värda att känna till innan första utrullningen. Paketet heter
+**`firebase-tools`** — `npx firebase` svarar *could not determine executable to*
+*run* om CLI:t inte är globalt installerat. Och utrullningen startar en lokal
+server för att läsa av vilka funktioner som finns; på en långsam maskin hinner
+den inte svara inom sina tio sekunder och deployen faller på *Cannot determine*
+*backend specification*. Båda sakerna sköts av `rulla-ut.js`, som
+`npm run fb:deploy` kallar: den höjer `FUNCTIONS_DISCOVERY_TIMEOUT` och kallar
+rätt paket. Prefixet går inte att skriva i package.json direkt — `npm run` kör
+via cmd.exe på Windows, och cmd förstår inte POSIX-syntaxen `VAR=värde kommando`.
+
+### Nollställa kontot
+
+Pengarna och historiken går tillbaka till 50 000, men motorns minne av vilka
+setups som är igång behålls — annars vet kontot inte vad som löper och står
+tomt tills nästa fyllning råkar inträffa.
+
+```bash
+KEY=$(npx firebase-tools functions:secrets:access FEED_KEY)
+curl -X POST "https://riptide-investing-tool.web.app/api/konto/nollstall?k=$KEY"
+```
+
+`npx firebase-tools firestore:delete riptide/konto` går också, men tar minnet
+med sig och lämnar kontot tomt tills det hunnit adoptera de löpande affärerna.
 
 ## Publik adress (GitHub Pages)
 
