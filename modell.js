@@ -7,21 +7,24 @@
  * den listan slutar modellen gälla, och motorn faller tillbaka på de handsatta
  * poängen tills du tränat om.
  *
- * Modellen förutsäger setupens utfall i R. Den är testad rullande: varje
- * bedömd setup i testperioden fick en modell som bara sett affärer som var
- * avgjorda innan setupen fanns.
+ * Modellen förutsäger setupens utfall i R, netto efter spread, courtage och
+ * slippage. Den är testad rullande på hela handelsdagar: varje bedömd setup i
+ * testperioden fick en modell som bara sett affärer från tidigare dagar.
+ *
+ * test.nolltest är samma geometri med slumpad riktning. Ligger snittR inte
+ * tydligt över den siffran mäter modellen marknadens drift, inte en edge.
  *
  * duger = false betyder att den inte slog dagens poängsättning på testdata.
  * Då används den inte till annat än att visas.
  */
 export const MODELL = {
-  version: 2,
-  tranad: "2026-08-31",
+  version: 3,
+  tranad: "2026-09-02",
   duger: false,
   drag: ["lang","trend","svep","brott","ict","orb","trendriktning","rsiriktning","relvolym","atrprocent","avstand","rr","medhall","mothall","vwapriktning","daglage","daglageriktning","orlage","orbredd","orriktning","orklar","adx","rth","ytterhandel","globex","rthandel","mandag","tisdag","onsdag","torsdag","fredag","killzone","stopporder","konfidens"],
-  medel: [0.485833,0.537667,0.224167,0.132833,0.0665,0.0045,-0.075747,-0.007106,-0.218978,0.096009,0.618861,1.838582,0.283,0.300083,-0.379048,0.543621,-0.068554,-0.161675,3.352781,-0.014269,0.506833,0.472627,0.292667,0.379333,0.328,0.142556,0.198667,0.1765,0.2045,0.2125,0.155167,0.3765,0.171667,0.534363],
-  skala: [0.499799,0.498579,0.417032,0.339395,0.249154,0.066931,0.856218,0.237704,0.758632,0.047731,0.593343,0.663374,0.306415,0.300784,2.637199,0.308985,0.620321,1.269492,3.420745,0.470267,0.499953,0.199876,0.454987,0.485221,0.469485,0.272253,0.398997,0.381245,0.403336,0.409077,0.362063,0.484508,0.37709,0.305486],
-  vikter: [0.014014,-0.003849,0.049112,0.01364,0.014801,0.010794,-0.079863,0.053941,0.013947,-0.00313,0.004396,-0.014261,-0.093897,0.031371,-0.231736,0.006438,0.200471,0.108565,-0.001211,0.043396,-0.018281,-0.011385,0.002191,-0.010736,0.008973,0.015162,-0.018559,0.034956,0.007315,-0.007089,-0.0161,0.010082,-0.059005,0.214408],
-  bias: -0.075585,
-  test: {"n":4159,"fran":"2026-08-06","till":"2026-08-31","snittR":-0.066,"topp25":-0.055,"botten25":-0.091,"traffTopp25":33,"lyft":0.011}
+  medel: [0.509221,0.418648,0.257172,0.039139,0.1625,0.017213,0.342959,0.114019,-0.1573,0.112573,0.774086,1.872061,0.481199,0.186168,0.767836,0.528272,0.210421,0.225575,3.50978,0.056565,0.563934,0.501694,0.359016,0.354303,0.28668,0.176434,0.219672,0.204918,0.207377,0.18668,0.144057,0.40082,0.16168,0.722609],
+  skala: [0.499915,0.493337,0.437075,0.193926,0.368909,0.130065,0.832145,0.236426,0.730513,0.053078,0.64285,0.609595,0.338061,0.276094,2.7921,0.337584,0.644028,1.411554,3.261126,0.514288,0.495896,0.202771,0.479712,0.478302,0.452211,0.289401,0.414024,0.403642,0.405428,0.389655,0.351148,0.490065,0.368157,0.25325],
+  vikter: [-0.113112,0.000599,0.006421,-0.00904,0.023153,0.008665,-0.114088,-0.035288,0.024507,-0.045767,0.042287,-0.068116,-0.098478,0.121529,-0.120497,0.05212,0.199334,-0.005706,-0.093189,0.043729,0.094468,0.010149,-0.041119,-0.002813,0.046595,0.05117,0.082603,0.077702,0.063465,0.071473,0.018921,-0.000795,-0.031626,0.236348],
+  bias: -0.051853,
+  test: {"n":1715,"fran":"2026-08-10","till":"2026-09-02","dagar":21,"snittR":-0.092,"topp25":-0.071,"botten25":-0.177,"traffTopp25":34,"lyft":0.021,"nolltest":-0.072,"kostnadPunkter":0.87}
 };

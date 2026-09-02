@@ -411,55 +411,114 @@ och sedan var femte minut, så du kan prova hela kedjan innan du rullar ut.
 npm run trana
 ```
 
-Riggen hämtar 60 dagars 5-minutersstaplar för MNQ, glider ett 420-staplars fönster
-genom dem och låter **samma motor som sidan använder** generera setups. Varje setup
-följs framåt i tiden: fylls entryn, och nås målet före stoppen? Nås båda i samma
-stapel räknas stoppen. Resultatet blir omkring 17 000 avgjorda setups med facit.
+Riggen hämtar 5-minutersstaplar för MNQ, glider ett 1 100-staplars fönster genom
+dem och låter **samma motor som sidan använder** generera setups. Varje setup
+följs framåt i tiden med de fyllningar man faktiskt får, och kostnaderna dras av.
 
-Sedan tränas en ridge-regression som förutsäger utfallet i R, och den testas
-**rullande**: varje setup i testperioden bedöms av en modell som bara sett affärer
-som redan var avgjorda när setupen dök upp. Ingen dag får se sin egen framtid.
+Staplarna cachas i `.staplar-cache.json` och **cachen växer**: Yahoo ger bara
+60 dagar bakåt, men det som redan hämtats sparas. Kör riggen en gång i månaden
+så finns det ett år om ett år — det är den enda gratisvägen förbi att 60 dagar
+bara är ett enda marknadsklimat. Datasetet cachas i `.setups-cache.json` och
+slängs automatiskt så snart `motor.js` ändras, för gamla setups är då en mätning
+av en motor som inte finns längre. Båda filerna är gitignorerade.
 
-Staplarna och datasetet cachas i `.staplar-cache.json` och `.setups-cache.json`
-(båda gitignorerade), så en omkörning tar sekunder i stället för minuter.
+### Vad riggen räknar med
 
-### Vad mätningen visade
+| | |
+|---|---|
+| Limitorder | Nivån måste **handlas igenom**, inte bara nuddas. En limit som berörs med en tick hamnar längst bak i kön och fylls sällan. |
+| Stopporder | Blir marknadsorder när nivån nås. Öppnar stapeln redan bortom nivån är det öppningskursen som gäller, plus en tick slippage. Det gäller ORB, brott, moment och varje utstoppning. |
+| Kostnad | Spread (en tick) + courtage (1,24 $ tur och retur) ≈ 0,87 punkter per affär. |
+| R | Räknas mot den risk affären dimensionerades på. En sämre fyllning än nivån syns som förlorad R, vilket är precis vad den kostar — kontrakten är redan köpta på det gamla stoppavståndet. |
+| Testdelning | Vid ett **dygnsskifte**, inte mitt i en session. Sista 35 procenten av handelsdagarna är test, och varje testsetup bedöms av en modell som bara sett affärer från tidigare dagar. |
+| Standardfel | Räknas på antalet **handelsdagar**, inte på antalet setups. Tusentals överlappande fönster ur samma stapelserie är inte tusentals oberoende observationer, och det är där de flesta backtester ljuger. |
 
-Modellen **underkändes av sitt eget test**. Dess bästa fjärdedel gick sämre än
-dess sämsta — den lärde sig samband i juli som vände i augusti. Samma sak hände
-med logistisk regression på träffprocent, med hårdare regularisering, med kortare
-minne och med mindre dragmängder. `modell.js` skrivs därför med `duger: false`,
-och då rör den ingenting: sidan använder de handsatta poängen precis som förut.
+### Nolltestet
 
-Det som däremot höll var mätningen av familjerna. Datasetet delat i fyra lika
-långa tidsblock, snitt-R per setup:
+Varje körning jämför motorn mot samma geometri med **slumpad riktning**: samma
+stapel, samma riskavstånd, samma R:R, men entry vid stängning och myntkast om
+hållet. Utan den referenspunkten går det inte att skilja "modellen fungerar"
+från "marknaden gick upp i juli".
 
-| familj | snitt R | block 1 | block 2 | block 3 | block 4 | n |
-|---|---|---|---|---|---|---|
-| trend | −0,128 | −0,149 | −0,101 | −0,143 | −0,119 | 9 905 |
-| brott | −0,091 | −0,136 | −0,015 | −0,039 | −0,169 | 2 190 |
-| svep | +0,001 | +0,003 | −0,000 | −0,017 | +0,020 | 3 997 |
-| ict | +0,009 | −0,021 | +0,111 | −0,055 | −0,005 | 1 002 |
-| orb | −0,033 | −0,117 | +0,499 | −0,145 | −0,415 | 123 |
+Ligger motorn inte tydligt över nolltestet mäter den marknadens drift, inte en
+edge — och då är all finjustering av poäng och mål brus ovanpå ingenting.
+Siffran sparas i `modell.js` som `test.nolltest`.
 
-Trendfamiljen förlorar i alla fyra blocken på nästan tiotusen setups. Det såg
-entydigt ut, och en spärr (`FAM_HANDLAS` i `motor.js`) stängde trend och brott
-ute från demokontot.
+### Riktningen ensam
 
-**Den spärren är borttagen igen**, och skälet är värt att komma ihåg. Kontot
-handlar bara grad A och B, och på just den delmängden krymper skillnaderna till
-brus — trend −0,062, brott −0,081, ict −0,001, **svep −0,117**, orb −0,030 R per
-setup. Svep, som var tillåten, var alltså sämst av alla. Spärren stängde ute
-80 procent av affärerna utan att det den skyddade mot var mätbart sämre än det
-den släppte fram, och hann tacka nej till en trendaffär som nådde sitt mål.
+Målsökningen är motorns egen kod, och `rr` är både ett drag i modellen och en
+produkt av den. Riggen mäter därför också riktningen utan någon exitlogik alls:
+hur långt gick priset åt det håll signalen pekade, mätt i riskavstånd, tolv
+staplar framåt? Jämförelsen är samma setups med riktningarna omkastade, plus en
+driftkontroll ("alltid long" / "alltid short") så att en fallande period inte
+förväxlas med information.
 
-Lärdomen: mät på den delmängd som faktiskt handlas, inte på allt motorn
-genererar. `FAM_HANDLAS` finns kvar som mekanism — sätt en familj till `false`
-när det finns framåtriktad data som motiverar det. Spärren verkar lika i
-webbläsaren, i molnfunktionen och i workern.
+Mätningen görs från **fyllningsstapeln**, inte signalstapeln. En limitorder
+fylls bara när priset går emot den, och eftersom bara fyllda setups har facit
+skulle den senare referensen ge varje long en inbyggd nackdel som inte har med
+riktningsvalet att göra.
+
+Bär riktningen ingen information hjälper ingen måljustering i världen.
+
+### Vad mätningen visar just nu
+
+62 handelsdagar, 4 880 avgjorda setups, netto efter kostnader:
+
+| | n | träff | snitt R |
+|---|---|---|---|
+| slumpad riktning (nolltest) | 4 844 | 35 % | −0,072 |
+| **motorn som den är** | 4 880 | 37 % | **−0,052** |
+
+Motorn ligger marginellt över nolltestet. Med ett standardfel på ±0,05 R per dag
+och 21 dagar i testperioden är det inte en edge — det är ett oavgjort.
+
+Per familj: trend −0,021 · ict −0,021 · svep −0,027 · orb −0,120 ·
+brott −0,179 · moment −0,225. De tre översta går inte att skilja från varandra
+eller från noll.
+
+Graderingen sorterar fortfarande inte: **A −0,131, B +0,003, C −0,023**. Antalet
+familjer som röstar åt samma håll säger ingenting om utfallet, vilket är väntat —
+sex familjer som alla läser samma EMA-stack och samma VWAP är inte sex oberoende
+röster, det är en röst räknad sex gånger.
+
+Riktningen ensam: motorn +0,037 mot omkastad +0,033. Skillnaden är +0,004 med
+t ≈ 0,02. Riktningsvalet bär alltså **noll** information över nästa timme.
+
+Modellen **underkänns av sitt eget test** och `modell.js` skrivs med
+`duger: false`. Då rör den ingenting: sidan använder de handsatta poängen precis
+som förut.
 
 **Kör om mätningen efter varje ändring i motorn.** Siffrorna gäller den motor som
-fanns när de mättes, och `FAM_HANDLAS` ska följa med.
+fanns när de mättes, och riggen slänger datasetet själv när `motor.js` ändras.
+
+### Det motorn inte ger signal på
+
+Familjerna trend, svep och brott lade tidigare in **båda hållen varje stapel** och
+lät en minuspoäng sköta urvalet. Resultatet var 272 setups per handelsdag, jämnt
+fördelade över alla 24 timmar, där trendfamiljen ensam stod för 55 procent av allt
+och för den sämsta avkastningen. Numera lägger varje familj bara det håll den
+faktiskt röstat på, och range-brottet mäts mot den box rösten hittade i stället
+för mot en box ingen kontrollerat. Det ger 83 setups per dag i stället, och
+*ingen setup alls* är nu ett giltigt svar — panelen visar "Inga giltiga setups
+just nu" och det är meningen.
+
+Limitordrar måste dessutom ha kvar minst `MOTORCFG.minPullback` ATR att gå
+(0,25 som standard). Förr fylldes 64 procent av alla setups redan på nästa
+stapel: korten lovade en pullback till EMA21 och la i praktiken en marknadsorder.
+Kravet gäller bara limits — en stopporder *ska* fyllas när nivån bryts, och
+ärligheten ligger där i fyllningen i stället.
+
+### Det som fortfarande inte är mätt
+
+**Nyhetsspärren.** Skarpt läge låter dagens rubriker stänga av ena hållet
+(`MOTORCFG.nyhetsSparr`), men historiska rubriker finns inte sparade, så
+uppspelningen kör med bias 0 och båda hållen öppna. Riggen rapporterar long och
+short var för sig som det närmaste vi kommer. Sätt `nyhetsSparr: false` för att
+köra motorn utan en spärr som aldrig testats mot facit.
+
+**Den halvfärdiga stapeln.** Skarpt läge räknar på det femminutersfack som just
+byggs; uppspelningen räknar på stängda staplar. Det är en skillnad mellan träning
+och verklighet som inte går att mäta bort med den här riggen.
 
 ### ORB — familjen med publicerad statistik bakom sig
 
@@ -475,8 +534,11 @@ Femte familjen är öppningsrangen 09:30–10:00 New York-tid, byggd på en stud
   är vid eller hopklämd, och för att uppåtbrott historiskt är 8–10 procentenheter
   starkare än nedåtbrott
 
-Den har bara 123 avgjorda setups på 60 dagar och är därför inte dömd åt något håll
-ännu — men den mäts automatiskt vid varje `npm run trana`.
+Den har bara 84 avgjorda setups på 62 dagar och är därför inte dömd åt något håll
+ännu — men den mäts automatiskt vid varje `npm run trana`. Det är också den enda
+familjen med ett dokumenterat underliggande fenomen bakom sig, vilket gör den
+till den rimligaste kandidaten att få bära ensam om man vill ha en familj över
+noll innan man lägger till nästa.
 
 ---
 

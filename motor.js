@@ -8,7 +8,18 @@
  */
 
 /* ---------- inställningar motorn läser (sätts av den som använder den) ---------- */
-export const MOTORCFG = { minPts: 50, maxPts: 400, risk: 'normal' };
+export const MOTORCFG = {
+  minPts: 50, maxPts: 400, risk: 'normal',
+  /* Nyhetsspärren stänger av ena hållet när dagens rubriker lutar. Den är på
+     skarpt, men går inte att mäta i trana.mjs — historiska rubriker finns inte
+     sparade — så den är utbrytbar för den som vill köra motorn omätt-fri. */
+  nyhetsSparr: true,
+  /* Hur långt en väntande entry minst måste ha kvar att gå, i ATR. Under det
+     är ordern en marknadsorder i förklädnad: förr fylldes 64 % av alla setups
+     redan på nästa stapel, trots att korten lovade en pullback. Gäller bara
+     limitordrar — stopporder ska fyllas när nivån bryts. 0 = gamla beteendet. */
+  minPullback: 0.25
+};
 
 /* ---------- små hjälpare ---------- */
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
@@ -462,53 +473,29 @@ const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
 
 /* Vilka familjer som får öppna affärer i demokontot.
 
-   Först var trend och brott spärrade. Underlaget var mätningen av *alla*
-   setups, där trend låg på −0,128 R över 9 905 fall och förlorade i alla fyra
-   tidsblocken. Det såg entydigt ut.
+   Två spärrar har suttit här och båda togs bort igen, för de byggde på
+   familjeskillnader som inte höll vid kontrollräkning. Mätningen efter att
+   riggen börjat räkna netto — spread, courtage och slippage — och efter att
+   familjerna slutat lägga signaler åt båda hållen varje stapel:
 
-   Det höll inte vid kontrollräkning. Kontot handlar bara grad A och B, och på
-   just den delmängden krymper skillnaderna till brus (60 dagar, fyllda A/B):
+     familj      n    träff   snitt R
+     trend    2 043    36 %   −0,021
+     ict        793    35 %   −0,021
+     svep     1 255    37 %   −0,027
+     orb         84    38 %   −0,120
+     brott      191    39 %   −0,179
+     moment     514    37 %   −0,225
 
-     familj   per dag   träff   snitt R
-     trend      47,8     34 %   −0,062
-     brott      21,1     32 %   −0,081
-     ict        13,1     35 %   −0,001
-     svep        2,4     30 %   −0,117
-     orb         2,0     31 %   −0,030
+   Ingen familj har positiv förväntan, och med 62 dagars historik och ett
+   standardfel på ±0,05 R per dag går de tre översta inte att skilja från
+   varandra eller från noll. Kontot handlar därför fortfarande allt: det är
+   låtsaspengar, och framåtriktad data på riktiga fyllningar är värd mer än en
+   rangordning som byter plats varje gång underlaget byts ut. Sätt en familj
+   till false när kontots egen historik motiverar det — inte den här tabellen.
 
-   Svep, som var tillåten, är alltså sämst av alla. Spärren stängde ute 80 % av
-   affärerna utan att det den skyddade mot var mätbart sämre än det den släppte
-   fram — och den hann tacka nej till en trendaffär som nådde sitt mål.
-
-   Ingen familj har positiv förväntan i historiken. Skillnaderna mellan dem är
-   för små för att sortera på. Därför handlas allt igen: det är låtsaspengar,
-   och framåtriktad data på riktiga fyllningar är värd mer än en gissning
-   byggd på 60 dagars backspegel. Sätt en familj till false här om den visar
-   sig förlora på riktigt — då finns det något att luta sig mot. */
-/* Vilka familjer som får öppna affärer i demokontot.
-
-   Läxan från förra spärren står kvar: mät på den delmängd som faktiskt handlas
-   (grad A och B), inte på allt motorn genererar. Siffrorna nedan är snitt-R per
-   setup på A/B, 60 dagars MNQ delat i fyra lika långa tidsblock:
-
-     familj   totalt   block 1   block 2   block 3   block 4      n
-     svep     +0,095    +0,257    −0,438    +0,265    +0,513      88
-     orb      +0,042    +0,291    −0,037    −0,553    +0,504      56
-     ict      +0,020    −0,002    +0,001    +0,036    +0,042     635
-     trend    −0,048    −0,151    −0,077    +0,208    −0,159   1 929
-     brott    −0,136    −0,202    −0,081    −0,037    −0,241     909
-     moment   −0,162    −0,047    −0,496    +0,211    −0,332     405
-
-   Range-brott är negativ i alla fyra blocken, i båda mätningarna som gjorts, på
-   nio hundra affärer. Det är det enda som varit stabilt över huvud taget, och
-   familjen stängs därför av. Intradagsmomentum är ny och mäter träff 40 % — bäst
-   av alla — men negativ R: tidsutgången klipper vinnarna medan förlorarna tar hela
-   stoppen. Den visas som signal men handlas inte förrän den mäter positivt. */
-/* Alla familjer påslagna: kontot ska ta varje aktiv signal panelen visar.
-   Det är ett medvetet val framför mätningen ovan — spärrarna byggde på 60 dagars
-   uppspelning, och kontot är nu i stället ett framåtriktat test av alla sex
-   familjerna på samma villkor. Sätt en familj till false när kontots egen
-   historik motiverar det. */
+   Nolltestet i trana.mjs är referenspunkten som avgör om siffrorna ovan
+   betyder något över huvud taget. Ligger motorn inte tydligt över det mäter
+   den marknadens drift, inte en edge. */
 const FAM_HANDLAS = { trend:true, svep:true, brott:true, ict:true, orb:true, moment:true };
 const FAM_N = Object.keys(FAM).length;
 const GRADE_RANK = { A:0, B:1, C:2 };
@@ -787,8 +774,8 @@ function familyVotes(ctx){
     for(const bx of boxes){
       const hgt = bx.h - bx.l;
       if(hgt < 0.8*A || hgt > 2.6*A) continue;      // smalare = brus, bredare = trendben
-      if(px > bx.h + 0.25*A && c20.some(c => c <= bx.h)){ v.brott = 1; break; }
-      if(px < bx.l - 0.25*A && c20.some(c => c >= bx.l)){ v.brott = -1; break; }
+      if(px > bx.h + 0.25*A && c20.some(c => c <= bx.h)){ v.brott = 1; ctx.brottBox = bx; break; }
+      if(px < bx.l - 0.25*A && c20.some(c => c >= bx.l)){ v.brott = -1; ctx.brottBox = bx; break; }
     }
   }
 
@@ -830,8 +817,13 @@ function moveBounds(ctx){
 }
 
 /* ---- Målsökning: tekniska nivåer viktade mot makroläget ---- */
-function sessionReachFactor(){
-  const {wd,h,m} = nyParts();
+/* Tiden tas från stapeln signalen räknas på, inte från väggklockan. Förr stod
+   det nyParts() utan argument, alltså new Date(): uppspelad historik i
+   trana.mjs fick den klocktid träningen råkade startas på — samma faktor för
+   alla setups i hela körningen — medan skarpt läge fick den riktiga. Målen i
+   mätningen var därför inte de mål motorn sätter. */
+function sessionReachFactor(nar){
+  const {wd,h,m} = nyParts(nar);
   const mins = h*60+m;
   if(wd==='Sat' || wd==='Sun') return 0.75;
   if(mins >= 570 && mins < 960){                 // RTH
@@ -892,7 +884,7 @@ function pickTarget(ctx, side, entry, sl, o){
   reach *= (1 + align*0.40);
 
   // 3. Hur mycket tid är kvar av sessionen
-  const tf = sessionReachFactor();
+  const tf = sessionReachFactor(ctx.bars[ctx.i].t);
   reach *= tf;
   reach = clamp(reach, b.min, b.max);
 
@@ -952,9 +944,21 @@ function makeSignal(ctx, o){
   const reachSign = (trigger === 'stop') ? dir : -dir;
   const reached = reachSign*(ctx.px - entry) >= 0;
   const gap = Math.abs(ctx.px - entry);
+  /* Hur långt entryn har kvar att gå åt det håll ordern väntar på. Noll eller
+     mindre betyder att priset redan är där.
+
+     För en limitorder är det ett fel: kortet lovar en pullback, och fylls den
+     direkt är det en marknadsorder i förklädnad. Kravet gäller därför bara
+     limits. En stopporder är tvärtom byggd för att priset redan brutit — ORB
+     kräver till och med en stängd stapel utanför kanten innan den finns. Där
+     ligger ärligheten i stället i fyllningen: trana.mjs fyller en stopporder
+     till det sämre av nivån och nästa stapels öppning, plus slippage, i
+     stället för att låtsas att man fick nivån. */
+  const framfor = -reachSign*(ctx.px - entry);
 
   const invalid = (dir*(ctx.px - sl) <= 0)
                || (dir*(ctx.px - tp) >= 0)
+               || (!LIVE.has(id) && trigger === 'limit' && framfor < (MOTORCFG.minPullback || 0)*ctx.atr)
                || (reached && gap > 0.75*ctx.atr && !LIVE.has(id));
 
   const rr = t/risk;
@@ -1003,7 +1007,7 @@ function makeSignal(ctx, o){
     kontrakt:storlek.kontrakt, riskUsd:storlek.riskUsd, malUsd:storlek.malUsd,
     riskPerKontrakt:storlek.perKontrakt, overRisk:storlek.overRisk,
     tpBasis:T.basis, tpMacro:T.macro, tpAlign:T.align,
-    dist, atr:ctx.atr, bars:ctx.bars, ctxPx:ctx.px, status:'VÄNTAR'
+    dist, framfor, atr:ctx.atr, bars:ctx.bars, ctxPx:ctx.px, status:'VÄNTAR'
   };
 }
 
@@ -1017,30 +1021,32 @@ function generateSignals(ctx){
   const e21 = nz(ctx.e21) ? ctx.e21 : px;
   const T = ctx.today, P = ctx.prev, OR = ctx.or;
 
-  /* ---------- FAMILJ 1 · TRENDFORTSÄTTNING ---------- */
-  {
+  /* ---------- FAMILJ 1 · TRENDFORTSÄTTNING ----------
+     Bara det håll familjen faktiskt röstat på. Förr lades båda hållen varje
+     stapel, med en minuspoäng på det som gick mot strukturen — resultatet var
+     att trendfamiljen ensam stod för 55 % av alla setups och för den sämsta
+     avkastningen av alla sex. Röstar familjen inte finns ingen trendsetup. */
+  if(ctx.votes.trend > 0){
     const entry = clamp(Math.max(e21, vw - 0.2*A), px - 1.8*A, px + 0.35*A);
     S.push(makeSignal(ctx, {
       fam:'trend', trigger:'limit', side:'long', name:'Trendfortsättning — pullback till EMA21 / VWAP',
       entry, sl: Math.min(entry - rm*A, swLo - 0.25*A),
-      bonus: up ? 8 : -12,
+      bonus: 8,
       why:[
-        up ? 'EMA-stacken är positiv (9 > 21 > 50) och priset handlas över VWAP — köparna har kontrollen.'
-           : 'Strukturen är inte renodlat positiv — detta är en motrörelse-setup med lägre vikt.',
+        'EMA-stacken är positiv (9 > 21 > 50) och priset handlas över VWAP — köparna har kontrollen.',
         'Köpet läggs i pullbacken mot EMA21/VWAP i stället för att jaga rörelsen.',
         'Stoppen sitter under senaste swinglow så att setupen är tekniskt falsifierbar.'
       ]
     }));
   }
-  {
+  if(ctx.votes.trend < 0){
     const entry = clamp(Math.min(e21, vw + 0.2*A), px - 0.35*A, px + 1.8*A);
     S.push(makeSignal(ctx, {
       fam:'trend', trigger:'limit', side:'short', name:'Trendfortsättning — studs upp till EMA21 / VWAP',
       entry, sl: Math.max(entry + rm*A, swHi + 0.25*A),
-      bonus: dn ? 8 : -12,
+      bonus: 8,
       why:[
-        dn ? 'EMA-stacken är negativ och priset ligger under VWAP — säljarna styr.'
-           : 'Trenden stödjer inte fullt ut; behandla som avlastningsaffär mot motstånd.',
+        'EMA-stacken är negativ och priset ligger under VWAP — säljarna styr.',
         'Säljet tas i studsen mot EMA21/VWAP där utbudet historiskt kommit in.',
         'Stoppen ligger ovanför senaste swinghigh.'
       ]
@@ -1050,7 +1056,7 @@ function generateSignals(ctx){
   /* ---------- FAMILJ 2 · LIKVIDITETSSVEP / VÄNDNING ---------- */
   const lowRef  = P ? Math.min(P.l, T?T.l:P.l) : (T?T.l:px-4*A);
   const highRef = P ? Math.max(P.h, T?T.h:P.h) : (T?T.h:px+4*A);
-  {
+  if(ctx.votes.svep > 0){
     const entry = lowRef + 0.30*A;
     S.push(makeSignal(ctx, {
       fam:'svep', trigger:'limit', side:'long', name:'Likviditetssvep under dagslägsta + reclaim',
@@ -1063,7 +1069,7 @@ function generateSignals(ctx){
       ]
     }));
   }
-  {
+  if(ctx.votes.svep < 0){
     const entry = highRef - 0.30*A;
     S.push(makeSignal(ctx, {
       fam:'svep', trigger:'limit', side:'short', name:'Likviditetssvep över dagshögsta + avvisning',
@@ -1150,10 +1156,13 @@ function generateSignals(ctx){
     }));
   }
 
-  /* ---------- FAMILJ 3 · RANGE-BROTT / MOMENTUM ---------- */
-  const box = rangeBox(ctx);
+  /* ---------- FAMILJ 3 · RANGE-BROTT / MOMENTUM ----------
+     Mot den box rösten faktiskt hittade, och bara åt det håll den bröts. Förr
+     lades båda sidorna varje stapel mot en box ingen hade kontrollerat — och
+     volymkravet som står i motiveringen fanns bara i rösten, inte i ordern. */
+  const box = ctx.brottBox || rangeBox(ctx);
   const boxH = box.h, boxL = box.l;
-  {
+  if(ctx.votes.brott > 0){
     const entry = boxH + 0.12*A;
     S.push(makeSignal(ctx, {
       fam:'brott', trigger:'stop', side:'long', name: OR ? 'Brott av öppningsrange (ORB) uppåt' : 'Brott av konsolideringsbox uppåt',
@@ -1168,7 +1177,7 @@ function generateSignals(ctx){
       ]
     }));
   }
-  {
+  if(ctx.votes.brott < 0){
     const entry = boxL - 0.12*A;
     S.push(makeSignal(ctx, {
       fam:'brott', trigger:'stop', side:'short', name: OR ? 'Brott av öppningsrange (ORB) nedåt' : 'Brott av konsolideringsbox nedåt',
@@ -1233,7 +1242,7 @@ function generateSignals(ctx){
      ges bara långa setups, lutar den negativt bara korta, och är den neutral
      ges båda. Redan påbörjade affärer sparas undan oavsett håll — de ska få
      nå sitt mål eller sitt stopp, inte försvinna för att nyheterna vände. */
-  const bias = nz(ctx.biasRiktning) ? ctx.biasRiktning : 0;
+  const bias = (MOTORCFG.nyhetsSparr !== false && nz(ctx.biasRiktning)) ? ctx.biasRiktning : 0;
   if(bias !== 0){
     const onskad = bias > 0 ? 'long' : 'short';
     ok = ok.filter(s => s.side === onskad || LIVE.has(s.id));
