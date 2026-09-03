@@ -1796,8 +1796,11 @@ function rationaleHTML(s){
     `<span class="why">${esc(s.why.slice(1).join(' '))}</span>`;
 }
 
-/* Ett klick fäller ut kortet. Valet sparas per signal-id, annars skulle
-   uppdateringen var femte sekund slå igen det man just öppnat. */
+/* Ett klick fäller ut kortet, ett till fäller ihop det. Valet sparas per
+   signal-id, annars skulle uppdateringen var femte sekund slå igen det man
+   just öppnat. Förr fällde bara rubrikraden ihop ett öppet kort, så att text
+   kunde markeras i brödtexten — men då gjorde klick i texten ingenting alls.
+   Nu räknas hela kortet, och en markering som just gjorts lämnas i fred. */
 function kopplaSignalKlick(){
   const el = $('#sigList');
   if(!el || el.dataset.klick) return;
@@ -1805,7 +1808,9 @@ function kopplaSignalKlick(){
   el.addEventListener('click', e => {
     const kort = e.target.closest('.sig');
     if(!kort || !kort.dataset.sig) return;
-    if(kort.classList.contains('oppen') && !e.target.closest('.sig-top')) return;  // låt text markeras
+    if(e.target.closest('a, button')) return;                            // länkar och knappar sköter sig själva
+    const markering = window.getSelection && window.getSelection().toString();
+    if(kort.classList.contains('oppen') && markering) return;            // man drog för att markera text
     const id = kort.dataset.sig;
     if(STATE.oppnaSignaler.has(id)) STATE.oppnaSignaler.delete(id);
     else STATE.oppnaSignaler.add(id);
