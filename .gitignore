@@ -9,3 +9,4 @@ functions/node_modules/
 .staplar-cache.json
 .setups-cache.json
 functions/modell.js
+.matning/

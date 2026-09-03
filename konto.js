@@ -104,6 +104,7 @@ export async function kontoTick(env, loggRad){
       entry: s.entryFyllt || s.entry, sl: s.sl, tp: s.tp, risk: s.risk,
       kontrakt: s.kontrakt || konto.kontrakt || 1, oppnad: s.oppnad || Date.now(),
       kollad: bars[bars.length - 1].t,
+      nyckel: s.nyckel, stangVid: s.stangVid || null,
       marginal: (s.kontrakt || konto.kontrakt || 1)*MARGINAL_PER_KONTRAKT
     };
     logg('öppnar ' + s.grade + ' ' + s.side + ' @ ' + s.entry.toFixed(2));
@@ -125,6 +126,7 @@ export async function kontoTick(env, loggRad){
       if(dir > 0 ? px <= pos.sl : px >= pos.sl){ exit = pos.sl; hur = 'stopp'; }
       else if(dir > 0 ? px >= pos.tp : px <= pos.tp){ exit = pos.tp; hur = 'mål'; }
     }
+    if(exit === null && pos.stangVid && Date.now() >= pos.stangVid){ exit = px; hur = 'tid'; }   // dagens slut
     if(exit === null) return;
 
     const punkter = dir*(exit - pos.entry);

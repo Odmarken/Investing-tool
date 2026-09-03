@@ -15,7 +15,8 @@
     "fb:deploy": "node rulla-ut.js",
     "fb:functions": "node rulla-ut.js --only functions",
     "fb:nyckel": "npx firebase-tools functions:secrets:set FEED_KEY",
-    "fb:tick": "npx firebase-tools functions:log --only kontoCron"
+    "fb:tick": "npx firebase-tools functions:log --only kontoCron",
+    "mat": "node matning-fonster.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -257,6 +257,7 @@ export async function kontoVarv(logg = () => {}){
       entry: s.entryFyllt || s.entry, sl: s.sl, tp: s.tp, risk: s.risk,
       kontrakt: s.kontrakt || konto.kontrakt || 1, oppnad: s.oppnad || Date.now(),
       kollad: bars[bars.length - 1].t,
+      nyckel: s.nyckel, stangVid: s.stangVid || null,     // idén, och när dagen är slut
       marginal: (s.kontrakt || konto.kontrakt || 1)*MARGINAL_PER_KONTRAKT
     };
     logg('öppnar ' + s.grade + ' ' + s.side + ' × ' + (s.kontrakt || 1) + ' @ ' + s.entry.toFixed(2));
@@ -277,6 +278,10 @@ export async function kontoVarv(logg = () => {}){
       if(dir > 0 ? px <= pos.sl : px >= pos.sl){ exit = pos.sl; hur = 'stopp'; }
       else if(dir > 0 ? px >= pos.tp : px <= pos.tp){ exit = pos.tp; hur = 'mål'; }
     }
+    /* Dagens slut: allt som är öppet stängs till gällande pris. Det här har
+       aldrig funnits i kontot förut — momentfamiljens tidsutgång hanterades
+       bara av mätriggen, så kontot höll affärer riggen hade stängt. */
+    if(exit === null && pos.stangVid && Date.now() >= pos.stangVid){ exit = px; hur = 'tid'; }
     if(exit === null) return;
 
     const punkter = dir*(exit - pos.entry);
@@ -292,11 +297,16 @@ export async function kontoVarv(logg = () => {}){
     /* Motorns egen minnespost ska också veta att affären är slut. Annars
        ligger den kvar som pågående, och sidor som läser kontot skulle visa
        ett kort som ACTIVE i evighet. */
-    const st = LIVE.get(id);
+    /* LIVE nycklas på idén, positionen på affärs-id:t. Gamla positioner utan
+       nyckel letas upp på affärs-id:t i stället. */
+    const par = [...LIVE.entries()].find(([k, v]) => v && (k === pos.nyckel ? v.handelsId === id : (v.handelsId === id || k === id)));
+    const st = par ? par[1] : null;
     if(st && !st.hitTp && !st.hitSl){
-      if(hur === 'mål') st.hitTp = true; else st.hitSl = true;
+      if(hur === 'tid'){ st.tid = true; if(punkter >= 0) st.hitTp = true; else st.hitSl = true; }
+      else if(hur === 'mål') st.hitTp = true; else st.hitSl = true;
       st.slutAt = nar;
-      LIVE.set(id, st);
+      st.slutStapel = nar;      // karensen räknar från stapeln affären stängdes på
+      LIVE.set(par[0], st);
     }
     logg('stänger ' + pos.grade + ' på ' + hur + ' · ' + Math.round(dollar) + ' $');
   });

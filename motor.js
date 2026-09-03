@@ -27,7 +27,35 @@ export const MOTORCFG = {
      en handlingsbar setup 12 gånger mot 3. Priset är sex extra gradbyten på
      väntande kort. Trögheten dämpade alltså inte brus — den dämpade bort
      backare, och graden avgör om setupen får gå aktiv. Därför av. */
-  rostTroghet: false
+  rostTroghet: false,
+  /* Fast mål i R, eller null för att söka målet bland tekniska nivåer.
+
+     Ett tag stod det 1 här. Underlaget var att 1R gav samma medel som de
+     tekniska målen med halva variansen — mätt på fyllningar som visade sig
+     ha look-ahead, vilket gav korta mål en falsk träffprocent. Med fyllning
+     mot ordern som faktiskt låg ute, US-fönstret, 63 dagar:
+
+       tekniska mål   480 affärer   45 %   +0,127 R   t = 1,80
+       1R             584           53 %   +0,044     t = 0,81
+       1,5R           500           45 %   +0,038     t = 0,62
+
+     De tekniska målen vinner på allt utom drawdown. Därför null. Ingen av
+     raderna är skild från noll på 48 dagar — det är fortfarande ett oavgjort. */
+  malR: null,
+  /* Sidan räknar på en stapel som fortfarande byggs; cronen och riggen på
+     stängda. Fyllningar prövas mot ordern som lades vid senaste *stängda*
+     stapel, så sidan måste tala om att dess sista stapel inte är stängd. */
+  formandeStapel: false,
+  /* Handelsfönster i svensk tid, minuter efter midnatt. Före fran och efter
+     sistaEntry ges inga nya signaler; pågående affärer får löpa till till, då
+     allt som är öppet stängs oavsett var priset står. En daytrader ska vara
+     platt när kvällen är slut. Cronen går var femte minut, så 22:40 är vad
+     "platt före 22:45" betyder i praktiken. null = dygnet runt. */
+  fonster: { fran: 8*60, sistaEntry: 22*60, till: 22*60 + 40 },
+  /* Karens i staplar innan en avslutad idé får fyllas igen. Sex är en praktisk
+     spärr mot att samma idé fylls om var femte minut, inte ett uppmätt värde:
+     med ärliga fyllningar var karens 0 och 36 oskiljbara (t 1,08 mot 0,93). */
+  karens: 6
 };
 
 /* ---------- små hjälpare ---------- */
@@ -85,7 +113,7 @@ const SYMS = Object.keys(INSTR);          // enda stället som avgör vilka inst
    ligger den tätt under swinglowen blir de fler. Vinsten får bli vad R:R ger.
    Ett kontrakt är golvet: är stoppen så vid att ens ett MNQ riskerar mer än
    taket flaggas det i stället för att affären räknas bort. */
-const MAX_RISK = 750;
+const MAX_RISK = 700;
 
 function positionsStorlek(inst, riskPunkter, malPunkter, maxRisk = MAX_RISK){
   const pt = (INSTR[inst] && INSTR[inst].ptValue) || 2;
@@ -150,6 +178,21 @@ function tidNY(ms){
   return v;
 }
 function dayKeyNY(ms){ return tidNY(ms).dag; }
+
+/* Svensk tid, för handelsfönstret. Minuter efter midnatt, och tidsstämpeln för
+   ett givet klockslag samma svenska dag som ms. Räknat via Intl så att sommar-
+   och vintertid blir rätt utan egen tabell. */
+function minutesSthlm(ms){
+  const p = new Intl.DateTimeFormat('en-US', { timeZone:'Europe/Stockholm', hour12:false,
+    hour:'2-digit', minute:'2-digit' }).formatToParts(new Date(ms));
+  const o = {}; p.forEach(x => o[x.type] = x.value);
+  return (+o.hour % 24)*60 + (+o.minute);
+}
+function sthlmKlockslag(ms, min){
+  const d = new Date(ms); d.setUTCSeconds(0, 0);
+  const midnatt = d.getTime() - minutesSthlm(d.getTime())*60000;
+  return midnatt + min*60000;
+}
 function minutesNY(ms){ return tidNY(ms).min; }
 function weekdayNY(ms){ return tidNY(ms).vd; }
 
@@ -505,6 +548,19 @@ const FAM_KEY = k => Object.keys(FAM).find(x => FAM[x] === k) || '';
    Nolltestet i trana.mjs är referenspunkten som avgör om siffrorna ovan
    betyder något över huvud taget. Ligger motorn inte tydligt över det mäter
    den marknadens drift, inte en edge. */
+/* Kontot handlar alla familjer.
+
+   Ett tag stod stoppfamiljerna avstängda här. Underlaget var att motorns
+   egna fyllningar visade en edge i limitpriset — +0,110 R på nivån mot
+   −0,034 med marknadsorder — och att brott, ORB och moment går in på
+   stopporder och därför inte kunde ha den. Det höll inte. Edgen var ett
+   look-ahead-fel i fyllningen: spannet prövades mot en nivå räknad på samma
+   stapels stängning. Med fyllning mot ordern som faktiskt låg ute mäter limit
+   +0,036 R (t = 0,55) och stopp +0,055 (t = 0,76) i US-fönstret. Oskiljbara,
+   och båda oskiljbara från noll.
+
+   Så kontot tar allt igen, och samlar data på lika villkor. Sätt en familj
+   till false när kontots egen historik motiverar det — inte en simulering. */
 const FAM_HANDLAS = { trend:true, svep:true, brott:true, ict:true, orb:true, moment:true };
 const FAM_N = Object.keys(FAM).length;
 const GRADE_RANK = { A:0, B:1, C:2 };
@@ -849,6 +905,8 @@ function gradeFor(ctx, side){
 const LIVE = new Map();     // nyckel -> {triggered, hitTp, hitSl, at, entryPx, handelsId, sig}
 const SEDD = new Map();     // nyckel -> låg priset före entryn förra gången vi tittade?
 const PABRADET = new Map(); // nyckel -> stapeltiden då idén senast fanns som giltig setup
+const VILANDE  = new Map(); // nyckel -> ordern som låg ute i marknaden efter senaste stängda stapel
+const SENASTE_BARS = new Map(); // inst -> staplarna motorn senast räknade på, för kort utan egen serie
 
 function moveBounds(ctx){
   if(ctx.inst.key === 'NQ') return { min: MOTORCFG.minPts, max: MOTORCFG.maxPts };
@@ -974,10 +1032,26 @@ function makeSignal(ctx, o){
   risk = clamp(risk, ctx.atr*0.55, ctx.atr*3.2);
   sl = entry - dir*risk;
 
-  // ---- ETT mål, valt ur tekniska nivåer och viktat mot makroläget ----
-  const T = pickTarget(ctx, o.side, entry, sl, o);
-  let t = clamp(Math.abs(T.tp - entry), b.min, b.max);
+  // ---- ETT mål: fast i R, eller valt ur tekniska nivåer och viktat mot makroläget ----
+  let T, t;
+  if(nz(MOTORCFG.malR) && MOTORCFG.malR > 0){
+    t = risk*MOTORCFG.malR;
+    T = { tp: entry + dir*t, align: 0, conf: false,
+          basis: 'fast ' + MOTORCFG.malR + 'R — ' + fmt(t, ctx.inst.dec) + ' punkter, lika långt som stoppen',
+          macro: 'Målet är fast i R. Mätt på motorns egna fyllningar gav det samma medel som de tekniska målen med halva variansen.' };
+  }else{
+    T = pickTarget(ctx, o.side, entry, sl, o);
+    t = clamp(Math.abs(T.tp - entry), b.min, b.max);
+  }
   const tp = entry + dir*t;
+
+  /* Tidsstängning. Momentfamiljen har sin egen (sessionens slut); handelsfönstret
+     lägger sin ovanpå, och den tidigaste gäller. */
+  let stangVid = o.stangVid || null;
+  if(MOTORCFG.fonster){
+    const slut = sthlmKlockslag(ctx.bars[ctx.i].t, MOTORCFG.fonster.till);
+    stangVid = stangVid ? Math.min(stangVid, slut) : slut;
+  }
 
   /* Identiteten är instrumentet, familjen och hållet — inte entrypriset.
 
@@ -1023,6 +1097,17 @@ function makeSignal(ctx, o){
      stället för att låtsas att man fick nivån. */
   const framfor = -reachSign*(ctx.px - entry);
 
+  /* Målet måste ligga bortom dagens pris, inte bara bortom fyllningen.
+
+     Det ser ut som ett fel för en limitorder — köper man dippen vid 98,5 med
+     mål 99,1 medan priset står i 100 ligger målet bortom fyllningen, och borde
+     det inte räcka? Regeln togs bort på det argumentet och mättes: fyllningarna
+     föll från 321 till 275 i US-fönstret och R per dag från 1,06 till 0,68.
+     Utan regeln vinner djupa ingångar konfluensvalet i combine, fylls sällan
+     och ger inte mer per affär. Med regeln väljs de affärer där det räcker att
+     pullbacken retraceras. Det är ett urval, inte en giltighetskontroll, och
+     det är ett bra urval. Stoppen prövas av det uppenbara skälet: har priset
+     redan passerat den finns ingen affär. */
   const invalid = (dir*(ctx.px - sl) <= 0)
                || (dir*(ctx.px - tp) >= 0)
                || (fardsk && trigger === 'limit' && framfor < (MOTORCFG.minPullback || 0)*ctx.atr)
@@ -1070,7 +1155,7 @@ function makeSignal(ctx, o){
     fam:o.fam, famName:FAM[o.fam]||'', grade:G.grade, backers:G.backers, backN:G.n, against:G.against,
     side:o.side, name:o.name, entry, sl, tp,
     risk, ptsTp:t, rr, conf:c, why:o.why||[], invalid,
-    stangVid: o.stangVid || null,                  // tidsutgång: stäng här oavsett pris
+    stangVid,                                      // tidsutgång: stäng här oavsett pris
     kontrakt:storlek.kontrakt, riskUsd:storlek.riskUsd, malUsd:storlek.malUsd,
     riskPerKontrakt:storlek.perKontrakt, overRisk:storlek.overRisk,
     tpBasis:T.basis, tpMacro:T.macro, tpAlign:T.align,
@@ -1080,7 +1165,19 @@ function makeSignal(ctx, o){
 
 function generateSignals(ctx){
   const S = [], rm = RISK_MULT[MOTORCFG.risk] || 1.3, A = ctx.atr, px = ctx.px;
-  ctx.votes = familyVotes(ctx);                    // vad de tre familjerna säger just nu
+  ctx.votes = familyVotes(ctx);                    // vad familjerna säger just nu
+  SENASTE_BARS.set(ctx.inst.key, ctx.bars);        // så att en återinlagd affär vet vilken stapel det är
+  /* Utanför handelsfönstret föds inga nya setups, och ordrar som låg ute dras
+     tillbaka — en order lagd 21:55 ska inte fyllas på en nattstapel. Pågående
+     affärer lever i LIVE och läggs tillbaka av assignStatus tills de stängs.
+     Rösterna räknas ändå, så panelen visar var marknaden står. */
+  if(MOTORCFG.fonster){
+    const mS = minutesSthlm(ctx.bars[ctx.i].t);
+    if(mS < MOTORCFG.fonster.fran || mS >= MOTORCFG.fonster.sistaEntry){
+      for(const k of [...VILANDE.keys()]) if(k.startsWith(ctx.inst.key + '|')) VILANDE.delete(k);
+      return [];
+    }
+  }
   const up = ctx.trend > 12, dn = ctx.trend < -12;
   const swLo = ctx.recentLo.length ? last(ctx.recentLo).p : (ctx.today ? ctx.today.l : px - 3*A);
   const swHi = ctx.recentHi.length ? last(ctx.recentHi).p : (ctx.today ? ctx.today.h : px + 3*A);
@@ -1386,55 +1483,120 @@ function assignStatus(sigs, pxByInst){
      dygn senare. Nu läggs den tillbaka som ett kort, ritat ur ögonblicksbilden
      från fyllningen — det är den affär som faktiskt löper. */
   const tillbaka = [];
-  const farskaBars = sigs.length ? sigs[0].bars : null;
   LIVE.forEach((st, nyckel) => {
     if(iListan.has(nyckel) || !st || !st.sig || st.hitTp || st.hitSl) return;
     if(!nz(pxByInst[st.sig.inst])) return;
-    tillbaka.push(Object.assign({}, st.sig, { invalid:false, foraldralos:true, bars: farskaBars }));
+    /* Kortet får dagens staplar — från listan om den har några, annars från
+       vad motorn senast räknade på. Utan dem skulle tidsstängningen ta
+       väggklockan för "nu", och i en uppspelning ligger den i framtiden. */
+    const bars = sigs.length ? sigs[0].bars : (SENASTE_BARS.get(st.sig.inst) || null);
+    tillbaka.push(Object.assign({}, st.sig, { invalid:false, foraldralos:true, bars }));
   });
   if(tillbaka.length) sigs = sigs.concat(tillbaka);
+
+  /* En order lever bara så länge idén står på brädet. Försvinner familjens
+     röst dras ordern — så gör man i verkligheten, och så vet motorn att varje
+     fyllning den ser hände på den senaste stapeln. Förr låg ordern kvar,
+     fyllningen upptäcktes flera staplar för sent, och stopparna däremellan
+     hoppades över. Korsad mot riggens facit gav det +0,32 R där riggen såg
+     −0,12 på samma order. */
+  const kvar = new Set(sigs.map(s => s.nyckel));
+  for(const k of [...VILANDE.keys()]) if(!kvar.has(k)) VILANDE.delete(k);
 
   sigs.forEach(s => {
     const px = pxByInst[s.inst];
     if(!nz(px)) return;
     const dir = s.side === 'long' ? 1 : -1;
-    let st = LIVE.get(s.nyckel);
+    const gammal = LIVE.get(s.nyckel);
+    let st = gammal;
+    /* Dagens nivåer, undanlagda innan FRYS kan skriva över dem. Står en gammal,
+       avslutad affär kvar i LIVE under karensen visar kortet hennes nivåer —
+       men ordern som ska ligga ute i morgon är dagens. Sparades den efter FRYS
+       blev den gamla entryn ny vilande order, "fylldes" direkt eftersom priset
+       lämnat den för länge sedan, och stoppades på samma stapel. */
+    const farsk = { side: s.side, trigger: s.trigger, invalid: !!s.invalid,
+      entry: s.entry, sl: s.sl, tp: s.tp, risk: s.risk, ptsTp: s.ptsTp, rr: s.rr, grade: s.grade,
+      backers: s.backers, backN: s.backN, against: s.against, conf: s.conf, ai: s.ai, ev: s.ev, x: s.x,
+      stangVid: s.stangVid, kontrakt: s.kontrakt, riskUsd: s.riskUsd, malUsd: s.malUsd,
+      riskPerKontrakt: s.riskPerKontrakt, overRisk: s.overRisk, name: s.name, fam: s.fam, famName: s.famName,
+      why: s.why, also: s.also, tpBasis: s.tpBasis, tpMacro: s.tpMacro, tpAlign: s.tpAlign, reachSign: s.reachSign };
 
     const traff = Math.abs(px - s.entry) <= s.atr*0.05;   // priset står i praktiken på nivån
     const fylld = s.reachSign*(px - s.entry) >= 0;        // priset ligger på fyllningssidan
     const foreDetta = SEDD.get(s.nyckel);
 
-    /* Stapelns hela spann, inte bara dess stängning.
+    /* Fyllningen prövas mot ordern som faktiskt låg ute, inte mot dagens nivå.
 
-       Det här var den enskilt största skillnaden mellan mätriggen och skarpt
-       läge. trana.mjs fyller en limit när stapelns lägsta går under nivån och
-       hittar tusentals affärer; motorn jämförde bara mot stängningen och
-       hittade tre på sjuhundra varv. En order som nuddas mitt i en
-       femminutersstapel och studsar tillbaka fylls i verkligheten — den låg
-       ju i boken — men var osynlig här, och kontot stod stilla.
+       Nivåerna räknas om på varje stängd stapel. Ordern som låg i marknaden
+       under stapel N är den som lades när stapel N−1 stängde — och det är den
+       stapel N:s spann ska prövas mot. Att pröva spannet mot nivån räknad på
+       stapel N:s egen stängning är look-ahead: i en upptrend ligger EMA21 under
+       stängningen och stapelns lägsta under EMA21, så man "köper" på en nivå
+       man redan vet att stapeln stängde över. Så byggt mätte motorn +0,15 R på
+       sina egna fyllningar; riggen, som lägger ordern först och väntar sedan,
+       mätte −0,06 på samma period. Skillnaden var felet.
 
-       Bara för idéer som redan låg på brädet. En nyfödd setup får inte fyllas
-       på ett spann som handlades innan ordern fanns. */
+       VILANDE bär ordern från senaste stängda stapel. Den prövas mot varje
+       stapel som kommit efter den — i cronen exakt en, på sidan den som byggs
+       — och en limit måste handlas igenom med en tick, precis som i riggen.
+       Fylls den är det ORDERNS nivåer som fryses, inte dagens. */
     const stapel = (s.bars && s.bars.length) ? s.bars[s.bars.length-1] : null;
-    const rortVid = (!s.nyfodd && stapel)
-      ? (s.trigger === 'stop'
-          ? (dir > 0 ? stapel.h >= s.entry : stapel.l <= s.entry)
-          : (dir > 0 ? stapel.l <= s.entry : stapel.h >= s.entry))
-      : false;
+    const order = VILANDE.get(s.nyckel);
+    const tick = (INSTR[s.inst] && INSTR[s.inst].tick) || 0.25;
+    let rortVid = false, kFyll = -1, fillPx = 0;
+    if(order && s.bars && order.side === s.side && order.trigger === s.trigger){
+      /* Äldsta först, högst tre staplar bakåt: cronen ser en, sidan den som
+         byggs. Fyllningen är den första stapeln som når nivån. En stopporder
+         blir marknadsorder: öppnar stapeln redan bortom nivån är det
+         öppningen som gäller, plus en tick — samma regel som riggen. */
+      for(let k = Math.max(0, s.bars.length-3); k < s.bars.length; k++){
+        const b = s.bars[k];
+        if(!(b.t > order.t)) continue;
+        if(order.trigger === 'stop'){
+          if(dir > 0 ? b.h >= order.entry : b.l <= order.entry){
+            rortVid = true; kFyll = k; fillPx = (dir > 0 ? Math.max(order.entry, b.o) : Math.min(order.entry, b.o)) + dir*tick; break; }
+        }else if(dir > 0 ? b.l <= order.entry - tick : b.h >= order.entry + tick){
+          rortVid = true; kFyll = k; fillPx = order.entry; break; }
+      }
+    }
 
     /* Eftersom en fylld affär låses som ACTIVE tills mål eller stopp krävs en
        riktig träff: priset står på nivån, eller har gått igenom den medan vi
        tittade. Att bara ligga nära räcker inte, och en omladdning fyller inte
        gamla nivåer. C-setups får aldrig gå aktiva — de är för svaga. */
-    if(!st && !s.invalid && (s.grade === 'A' || s.grade === 'B') && (traff || rortVid || (fylld && foreDetta === false))){
+    /* En avslutad affär spärrar idén i MOTORCFG.karens staplar, sedan är platsen
+       ledig och nästa fyllning skriver över posten. Utan karens fylldes samma
+       idé igen på stapeln efter en utstoppning, och de affärerna förlorade. */
+    const avslutad = !!(gammal && (gammal.hitTp || gammal.hitSl));
+    const nuT = stapel ? stapel.t : Date.now();
+    const karensKvar = avslutad && gammal.slutStapel && (nuT - gammal.slutStapel) < (MOTORCFG.karens || 0)*300000;
+    const ledig = !gammal || (avslutad && !karensKvar);
+    if(ledig && rortVid && !order.invalid && (order.grade === 'A' || order.grade === 'B')){
       const at = Date.now();
-      const handelsId = s.nyckel + '@' + at;
-      const frusen = Object.assign({}, s, { id: handelsId, oppnad: at, entryFyllt: s.entry });
+      /* Det är ordern som fylls — dess entry, stopp, mål och grad — inte det
+         kort som just räknats fram. Kortet får sedan ordern's nivåer via FRYS. */
+      FRYS.forEach(k => { if(order[k] !== undefined) s[k] = order[k]; });
+      s.entry = fillPx;                               // det pris man faktiskt fick
+      /* Affärs-id:t bär fyllningsstapelns tid, inte klockans: deterministiskt,
+         och en stapel kan bara fylla en idé en gång. */
+      const fyllStapel = s.bars[kFyll];
+      const handelsId = s.nyckel + '@' + fyllStapel.t;
+      const frusen = Object.assign({}, s, { id: handelsId, oppnad: at, entryFyllt: fillPx });
       delete frusen.bars;
-      st = { triggered:true, at, handelsId, entryPx: s.entry, sig: frusen };
+      st = { triggered:true, at, handelsId, entryPx: fillPx, sig: frusen };
       LIVE.set(s.nyckel, st);
+      /* Affären döms från fyllningsstapeln och framåt, stapel för stapel, med
+         stoppen först. Fylldes den på en tidigare stapel än den senaste får
+         staplarna däremellan inte hoppas över. */
+      for(let k = kFyll; k < s.bars.length && !st.hitTp && !st.hitSl; k++){
+        const b = s.bars[k];
+        if(dir > 0 ? b.l <= s.sl : b.h >= s.sl){ st.hitSl = true; st.slutAt = Date.now(); st.slutStapel = b.t; }
+        else if(dir > 0 ? b.h >= s.tp : b.l <= s.tp){ st.hitTp = true; st.slutAt = Date.now(); st.slutStapel = b.t; }
+        else if(s.stangVid && b.t >= s.stangVid){ st.tid = true; st.slutAt = Date.now(); st.slutStapel = b.t;
+          if(dir*(b.c - s.entry) >= 0) st.hitTp = true; else st.hitSl = true; }
+      }
     }
-    if(!st) SEDD.set(s.nyckel, fylld);
+    if(!gammal || avslutad) SEDD.set(s.nyckel, fylld);   // väntande idé: minns var priset låg
 
     if(st){
       /* Nivåerna fryses vid fyllningen. Entry, stopp och mål räknas om varje
@@ -1445,12 +1607,24 @@ function assignStatus(sigs, pxByInst){
          fyrtiofemte minut, mitt i en löpande affär. */
       FRYS.forEach(k => { if(st.sig[k] !== undefined) s[k] = st.sig[k]; });
       if(!st.hitTp && !st.hitSl){
-        if(dir*(px - s.tp) >= 0){ st.hitTp = true; st.slutAt = Date.now(); }
-        else if(dir*(px - s.sl) <= 0){ st.hitSl = true; st.slutAt = Date.now(); }
+        /* Stoppen och målet prövas mot stapelns hela spann, inte bara mot
+           stängningen — samma regel som fyllningen, samma som kontot och
+           riggen. Nås båda i samma stapel räknas stoppen. Tiden är stapelns,
+           så uppspelning och skarpt läge dömer likadant. */
+        const nu = stapel ? stapel.t : Date.now();
+        const traffSl = stapel ? (dir > 0 ? stapel.l <= s.sl : stapel.h >= s.sl) : (dir*(px - s.sl) <= 0);
+        const traffTp = stapel ? (dir > 0 ? stapel.h >= s.tp : stapel.l <= s.tp) : (dir*(px - s.tp) >= 0);
+        if(traffSl){ st.hitSl = true; st.slutAt = Date.now(); st.slutStapel = nu; }
+        else if(traffTp){ st.hitTp = true; st.slutAt = Date.now(); st.slutStapel = nu; }
+        else if(s.stangVid && nu >= s.stangVid){
+          st.tid = true; st.slutAt = Date.now(); st.slutStapel = nu;
+          if(dir*(px - s.entry) >= 0) st.hitTp = true; else st.hitSl = true;
+        }
       }
     }
 
-    if(st && st.hitTp)       { s.status='TP'; s.statusTxt='MÅL NÅTT'; }
+    if(st && st.tid)         { s.status = st.hitTp ? 'TP' : 'SL'; s.statusTxt = 'STÄNGD VID DAGENS SLUT'; }
+    else if(st && st.hitTp)  { s.status='TP'; s.statusTxt='MÅL NÅTT'; }
     else if(st && st.hitSl)  { s.status='SL'; s.statusTxt='STOPP UT'; }
     else if(st)              { s.status='ACTIVE'; s.statusTxt='ACTIVE'; }   // ligger kvar tills mål eller stopp
     else if(Math.abs(px - s.entry) <= s.atr*1.0) { s.status='NÄRA'; s.statusTxt='NÄRA'; }
@@ -1460,6 +1634,15 @@ function assignStatus(sigs, pxByInst){
       ? (s.side==='long' ? 'bryter upp genom' : 'bryter ned genom')
       : (s.side==='long' ? 'faller tillbaka till' : 'stiger tillbaka till');
 
+    /* Ordern som ligger ute till nästa varv: dagens nivåer, stämplade med
+       senaste stängda stapel. En påbörjad affär har ingen vilande order. */
+    if(!st || (st.hitTp || st.hitSl)){
+      const stangd = s.bars && s.bars.length >= 2
+        ? s.bars[s.bars.length - (MOTORCFG.formandeStapel ? 2 : 1)] : stapel;
+      if(stangd && !s.foraldralos) VILANDE.set(s.nyckel, Object.assign({ t: stangd.t }, farsk));
+    }else{
+      VILANDE.delete(s.nyckel);
+    }
     s.dist       = Math.abs(px - s.entry);
     s.oppnad     = st ? st.at : null;
     s.entryFyllt = st ? st.entryPx : null;
@@ -1475,7 +1658,7 @@ function assignStatus(sigs, pxByInst){
 /* ---------- vad som delas ut ---------- */
 export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
-  ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
+  ema, rsi, atr, dayKeyNY, minutesNY, minutesSthlm, sthlmKlockslag, sessionVWAP, swings, buildContext,
   INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, brusband, momentLage,
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,

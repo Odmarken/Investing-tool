@@ -899,6 +899,10 @@ const {
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL,
   LIVE, SEDD, MOTORCFG
 } = MOTOR;
+/* Sidan räknar på en stapel som fortfarande byggs. Motorn måste veta det för att
+   pröva fyllningar mot ordern som lades vid senaste STÄNGDA stapel — annars
+   skulle den ta den halvfärdiga stapeln för stängd och lägga ordern på fel tid. */
+MOTORCFG.formandeStapel = true;
 /* ==========================================================================
    0. KONFIGURATION
    ========================================================================== */
@@ -2873,6 +2877,7 @@ function demoTick(){
       id: sig.id, inst: sig.inst, side: sig.side, grade: sig.grade,
       namn: sig.name, entry: sig.entryFyllt || sig.entry, sl: sig.sl, tp: sig.tp,
       kontrakt: antal, oppnad: sig.oppnad || Date.now(), risk: sig.risk,
+      nyckel: sig.nyckel, stangVid: sig.stangVid || null,   // idén, och när dagen är slut
       // stapeln som pågick när vi fylldes; först nästa stapel får avgöra på högsta/lägsta
       kollad: (STATE.ctx[sig.inst] && STATE.ctx[sig.inst].bars.length)
                 ? STATE.ctx[sig.inst].bars[STATE.ctx[sig.inst].bars.length - 1].t
@@ -2908,6 +2913,7 @@ function demoTick(){
       if(dir > 0 ? px <= pos.sl : px >= pos.sl){ exit = pos.sl; hur = 'stopp'; }
       else if(dir > 0 ? px >= pos.tp : px <= pos.tp){ exit = pos.tp; hur = 'mål'; }
     }
+    if(exit === null && pos.stangVid && Date.now() >= pos.stangVid){ exit = c.px; hur = 'tid'; }   // dagens slut
     if(exit === null) return;
 
     const punkter = dir*(exit - pos.entry);
@@ -3088,7 +3094,7 @@ function renderDemo(){
         '<b class="' + (a.side === 'long' ? 'pos' : 'neg') + '">' + (a.side === 'long' ? 'LONG' : 'SHORT') + '</b>' +
         '<span>' + a.grade + '</span>' +
         '<span class="namn dim">' + esc(a.namn || '') + '</span>' +
-        '<span class="' + (a.hur === 'mål' ? 'pos' : 'neg') + '">' + a.hur + '</span>' +
+        '<span class="' + (a.dollar >= 0 ? 'pos' : 'neg') + '">' + (a.hur === 'tid' ? 'dagens slut' : a.hur) + '</span>' +
         '<b class="' + (a.dollar >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(a.dollar, 0) + ' $</b>' +
       '</div>').join('') + '</div>'
     : '';
@@ -3350,7 +3356,7 @@ async function loadNews(){
    setups. Nu sparas den, och molnets egen bild vägs in när kontot kommer.
    -------------------------------------------------------------------------- */
 const LIVE_NYCKEL = 'riptide.live.v1';
-const LIVE_KVAR   = 1800000;      // avslutade affärer visas en halvtimme till
+const LIVE_KVAR   = Math.max(1800000, (MOTORCFG.karens || 0)*300000);   // avslutade affärer visas en halvtimme till — minst så länge karensen håller idén spärrad
 const LIVE_MAXALD = 36*3600e3;    // äldre än så är inte intressant att väcka
 
 function liveSpara(){
