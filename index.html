@@ -3385,7 +3385,7 @@ function liveFranMolnet(k){
   const avslutade = new Set((k.affarer || []).map(a => a.id));
   Object.entries(k.live || {}).forEach(([id, st]) => {
     if(!st || !st.sig) return;
-    if(avslutade.has(id)) return;
+    if(avslutade.has(st.handelsId || id)) return;   // kontot bokför affärs-id, LIVE nycklas på idén
     if(st.slutAt && nu - st.slutAt > LIVE_KVAR) return;
     if(!st.slutAt && nu - (st.at || 0) > LIVE_MAXALD) return;   // bortglömd, inte pågående
     const egen = LIVE.get(id);
@@ -3445,11 +3445,11 @@ function buildAllSignals(){
   const byGrade = (a,b) => (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf);
   const nqAll = nq ? generateSignals(nq).sort(byGrade) : [];
   // En setup som redan är fylld ska aldrig konkurrera om plats i listan.
-  const igang = nqAll.filter(x => LIVE.has(x.id));
-  const ovriga = nqAll.filter(x => !LIVE.has(x.id));
+  const igang = nqAll.filter(x => LIVE.has(x.nyckel));
+  const ovriga = nqAll.filter(x => !LIVE.has(x.nyckel));
   const sig = igang.concat(ovriga.slice(0, Math.max(3, 6 - igang.length)));
   // en påbörjad affär ska synas tills den är avslutad, även om motorn slutat föreslå den
-  const idn = new Set(sig.map(x => x.id));
+  const idn = new Set(sig.map(x => x.nyckel));
   LIVE.forEach((st, id) => {
     if(!st.sig || idn.has(id)) return;
     if(st.slutAt && Date.now() - st.slutAt > LIVE_KVAR){ LIVE.delete(id); return; }   // släpp efter 30 min

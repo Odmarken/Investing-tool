@@ -18,7 +18,16 @@ export const MOTORCFG = {
      är ordern en marknadsorder i förklädnad: förr fylldes 64 % av alla setups
      redan på nästa stapel, trots att korten lovade en pullback. Gäller bara
      limitordrar — stopporder ska fyllas när nivån bryts. 0 = gamla beteendet. */
-  minPullback: 0.25
+  minPullback: 0.25,
+  /* En familjeröst räknas först när den stått kvar över ett stapelskifte.
+     Dämpar gradblinkandet, men kostar: en dämpad röst är en backare mindre,
+     och graden avgör om setupen får gå aktiv. Mät båda vägarna innan du
+     bestämmer dig. */
+  /* Mätt på 700 varv: avstängd ger 61 A och 84 B mot 43 och 70, och priset når
+     en handlingsbar setup 12 gånger mot 3. Priset är sex extra gradbyten på
+     väntande kort. Trögheten dämpade alltså inte brus — den dämpade bort
+     backare, och graden avgör om setupen får gå aktiv. Därför av. */
+  rostTroghet: false
 };
 
 /* ---------- små hjälpare ---------- */
@@ -794,7 +803,37 @@ function familyVotes(ctx){
   const mo = momentLage(ctx);
   if(mo) v.moment = mo.dir;
 
-  return v;
+  return trogaRoster(ctx, v);
+}
+
+/* Rösternas tröghet.
+
+   Familjerösterna vänder på hårda trösklar — trend > 12, priset över VWAP, en
+   stapel utanför kanten. En marknad som skvalpar kring en tröskel får dem att
+   blinka, och eftersom graden räknas om ur rösterna varje stapel blinkade den
+   med: uppmätt ett gradbyte var fyrtiofemte minut, A→B och tillbaka igen. Det
+   är inte information, det är en tröskel som darrar. Värre är att graden
+   avgör om setupen får gå aktiv alls, så en blinkning till C i fel ögonblick
+   kostade fyllningen.
+
+   En röst räknas därför först när den stått kvar över ett stapelskifte. Noll
+   räknas alltid direkt: att sluta rösta ska gå fort, att börja ska kosta en
+   stapel. Minnet hänger på stapelns tid och inte på antalet anrop, så sidan
+   som räknar om var femte sekund och cronen som räknar var femte minut får
+   samma svar. Backar tiden — en uppspelning börjar om — nollställs minnet. */
+const ROSTMINNE = new Map();     // inst -> { t, nu, forra }
+
+function trogaRoster(ctx, ra){
+  if(MOTORCFG.rostTroghet === false) return ra;
+  const k = ctx.inst.key, t = ctx.bars[ctx.i].t;
+  let m = ROSTMINNE.get(k);
+  if(!m || t < m.t) m = { t: 0, nu: {}, forra: {} };
+  if(t !== m.t) m = { t, nu: Object.assign({}, ra), forra: m.nu };
+  else m = { t, nu: Object.assign({}, ra), forra: m.forra };
+  ROSTMINNE.set(k, m);
+  const ut = {};
+  Object.keys(ra).forEach(f => { ut[f] = (ra[f] !== 0 && m.forra[f] === ra[f]) ? ra[f] : 0; });
+  return ut;
 }
 
 function gradeFor(ctx, side){
@@ -807,8 +846,9 @@ function gradeFor(ctx, side){
     backers, against, n: backers.length
   };
 }
-const LIVE = new Map();   // id -> {triggered, hitTp, hitSl, at, entryPx, sig}
-const SEDD = new Map();   // id -> låg priset före entryn förra gången vi tittade?
+const LIVE = new Map();     // nyckel -> {triggered, hitTp, hitSl, at, entryPx, handelsId, sig}
+const SEDD = new Map();     // nyckel -> låg priset före entryn förra gången vi tittade?
+const PABRADET = new Map(); // nyckel -> stapeltiden då idén senast fanns som giltig setup
 
 function moveBounds(ctx){
   if(ctx.inst.key === 'NQ') return { min: MOTORCFG.minPts, max: MOTORCFG.maxPts };
@@ -939,7 +979,34 @@ function makeSignal(ctx, o){
   let t = clamp(Math.abs(T.tp - entry), b.min, b.max);
   const tp = entry + dir*t;
 
-  const id = ctx.inst.key + '-' + o.fam + '-' + o.side + '-' + Math.round(entry*10);
+  /* Identiteten är instrumentet, familjen och hållet — inte entrypriset.
+
+     Förr stod entrynivån i id:t (Math.round(entry*10)), och eftersom entryn
+     räknas om ur EMA21 och VWAP varje stapel vandrade den i median 2,8 punkter
+     per varv. Id:t byter vid 0,05 punkter, så 81 % av varven fick samma idé ett
+     nytt id: kortet såg ut som en ny signal, det gamla försvann, och låg en
+     fyllning i LIVE under det gamla id:t blev den föräldralös — osynlig för
+     panelen och för kontot, men fullt kapabel att låsa familjeplatsen.
+
+     Nyckeln är stabil medan setupen väntar. Först när den fylls får affären ett
+     eget id med fyllningstiden i, så att en avslutad affär inte spärrar nästa
+     i samma familj (kontot nycklar både positioner och historik på id). */
+  const nyckel = ctx.inst.key + '|' + o.fam + '|' + o.side;
+  const levande = LIVE.get(nyckel);
+  /* Pullbackkravet är en födelseregel, inte ett överlevnadsvillkor.
+
+     Meningen är att en limitorder inte ska födas med entryn redan vid priset —
+     då är den en marknadsorder i förklädnad. Men som villkor varje varv blev
+     den förödande: setupen ogiltigförklarades i samma stund priset närmade sig
+     entryn, alltså precis innan den kunde fyllas. Uppspelat blev det 2 fyllda
+     affärer på 700 varv, och kontot stod stilla.
+
+     Nu gäller kravet bara när idén är ny. Har familjen och hållet legat på
+     brädet de senaste staplarna är setupen redan född och får bli approchad. */
+  const pa = PABRADET.get(nyckel);
+  const spann = ctx.i > 0 ? (ctx.bars[ctx.i].t - ctx.bars[ctx.i-1].t) : 3e5;
+  const fardsk = !levande && !(pa && ctx.bars[ctx.i].t - pa <= 3*spann);
+  const id = (levande && levande.handelsId) ? levande.handelsId : nyckel;
   const trigger = o.trigger || 'limit';
   const reachSign = (trigger === 'stop') ? dir : -dir;
   const reached = reachSign*(ctx.px - entry) >= 0;
@@ -958,8 +1025,8 @@ function makeSignal(ctx, o){
 
   const invalid = (dir*(ctx.px - sl) <= 0)
                || (dir*(ctx.px - tp) >= 0)
-               || (!LIVE.has(id) && trigger === 'limit' && framfor < (MOTORCFG.minPullback || 0)*ctx.atr)
-               || (reached && gap > 0.75*ctx.atr && !LIVE.has(id));
+               || (fardsk && trigger === 'limit' && framfor < (MOTORCFG.minPullback || 0)*ctx.atr)
+               || (reached && gap > 0.75*ctx.atr && !levande);
 
   const rr = t/risk;
   const dist = gap;
@@ -997,7 +1064,7 @@ function makeSignal(ctx, o){
   const ev = p === null ? null : p*rr - (1-p);
 
   return {
-    id, trigger, reachSign, inst:ctx.inst.key, instLabel:ctx.inst.label,
+    id, nyckel, trigger, reachSign, inst:ctx.inst.key, instLabel:ctx.inst.label,
     x, ai: p === null ? null : Math.round(p*100), ev,
     dec:ctx.inst.dec, unit:ctx.inst.unit,
     fam:o.fam, famName:FAM[o.fam]||'', grade:G.grade, backers:G.backers, backN:G.n, against:G.against,
@@ -1007,7 +1074,7 @@ function makeSignal(ctx, o){
     kontrakt:storlek.kontrakt, riskUsd:storlek.riskUsd, malUsd:storlek.malUsd,
     riskPerKontrakt:storlek.perKontrakt, overRisk:storlek.overRisk,
     tpBasis:T.basis, tpMacro:T.macro, tpAlign:T.align,
-    dist, framfor, atr:ctx.atr, bars:ctx.bars, ctxPx:ctx.px, status:'VÄNTAR'
+    dist, framfor, nyfodd: fardsk, atr:ctx.atr, bars:ctx.bars, ctxPx:ctx.px, status:'VÄNTAR'
   };
 }
 
@@ -1249,7 +1316,20 @@ function generateSignals(ctx){
   }
 
   const near = ok.filter(s => s.dist <= 5*A);        // entry inom rimligt avstånd
-  return combine(near.length >= 3 ? near : ok.filter(s => s.dist <= 9*A), A);
+  const ut = combine(near.length >= 3 ? near : ok.filter(s => s.dist <= 9*A), A);
+
+  /* Bokför vilka idéer som stod på brädet den här stapeln. makeSignal läser
+     det nästa varv och låter bli att kräva pullbackavstånd av en setup som
+     redan är påbörjad — kravet är en födelseregel, inte ett överlevnadsvillkor.
+
+     Skrivningen ligger här och inte i assignStatus med flit: mätriggen kallar
+     bara generateSignals, och låg bokföringen i assignStatus skulle varenda
+     setup i uppspelningen räknas som nyfödd. Riggen hade då mätt en strängare
+     motor än den som körs, vilket är precis den sortens glipa den finns för
+     att stänga. */
+  const nu = ctx.bars[ctx.i].t;
+  ut.forEach(s => PABRADET.set(s.nyckel, nu));
+  return ut;
 }
 
 /* Två familjer som vill in på samma nivå åt samma håll är en setup, inte två.
@@ -1257,7 +1337,10 @@ function generateSignals(ctx){
 function combine(list, A){
   const out = [];
   list.slice().sort((a,b)=> b.conf - a.conf).forEach(s=>{
-    const host = out.find(h => h.side === s.side && Math.abs(h.entry - s.entry) <= 0.55*A);
+    /* 0,55 ATR var för snålt: på MNQ är det elva punkter, och uppmätt låg två
+       kort åt samma håll i median 1,03 ATR isär — alltså två ingångar i samma
+       idé, båda visade. 1,2 ATR slår ihop dem till ett kort med bådas skäl. */
+    const host = out.find(h => h.side === s.side && Math.abs(h.entry - s.entry) <= 1.2*A);
     if(!host){ out.push(s); return; }
     if(host.fam !== s.fam){
       host.also = host.also || [];
@@ -1271,83 +1354,96 @@ function combine(list, A){
   return out;
 }
 
-/* ---- status: en ACTIVE, resten väntar ---- */
-/* ACTIVE betyder att affären är påbörjad. Den ligger kvar som ACTIVE tills
-   målet eller stoppen nås — inte bara medan priset råkar stå i entryzonen. */
-/* Finns redan en påbörjad affär i samma familj åt samma håll på samma
-   instrument? Då är platsen upptagen tills den nått mål eller stopp. */
-function upptagenAv(s){
-  for(const st of LIVE.values()){
-    if(!st || !st.sig || st.hitTp || st.hitSl) continue;
-    const g = st.sig;
-    if(g.inst === s.inst && g.fam === s.fam && g.side === s.side) return true;
-  }
-  return false;
-}
+/* ---- status: en affär per familj och håll ----
+   ACTIVE betyder att affären är påbörjad. Den ligger kvar som ACTIVE tills
+   målet eller stoppen nås — inte bara medan priset råkar stå i entryzonen.
 
-/* Städar bort dubbletter som redan hunnit uppstå: av flera pågående affärer i
-   samma familj åt samma håll behålls den som triggade först. */
-function rensaDubbletter(){
-  const behall = new Map();
-  const bort = [];
-  for(const [id, st] of LIVE){
-    if(!st || !st.sig || st.hitTp || st.hitSl) continue;
-    const nyckel = st.sig.inst + '|' + st.sig.fam + '|' + st.sig.side;
-    const forra = behall.get(nyckel);
-    if(!forra){ behall.set(nyckel, [id, st]); continue; }
-    if((st.at || 0) < (forra[1].at || 0)){ bort.push(forra[0]); behall.set(nyckel, [id, st]); }
-    else bort.push(id);
-  }
-  bort.forEach(id => LIVE.delete(id));
-  return bort.length;
-}
+   Nycklarna i LIVE och SEDD är inst|familj|håll, så det ryms per definition
+   bara en påbörjad affär per idé. Därför är upptagenAv och rensaDubbletter
+   borta: de fanns för att id:t följde entrypriset, och samma idé kunde då
+   ligga i LIVE i flera exemplar med olika nivåer.
+
+   Den stabila nyckeln lagar också fyllningsavläsningen. SEDD minns om priset
+   låg på fyllningssidan förra varvet, och det är så en fyllning mellan två
+   avläsningar upptäcks. Förr byttes nyckeln varje varv, så minnet var alltid
+   tomt och det enda som kunde utlösa en fyllning var att priset råkade stå
+   inom 0,05 ATR — en punkt — i just det ögonblick cronen tittade. */
+
+/* Fält som fryses när affären fylls. Resten — status, orealiserat, avstånd —
+   räknas om varje varv. bars följer medvetet inte med: staplarna är 84 kB per
+   signal, och LIVE skrivs till Firestore där dokumentet tar slut vid 1 MiB. */
+const FRYS = ['id','entry','sl','tp','risk','ptsTp','rr','trigger','reachSign',
+  'grade','backers','backN','against','conf','ai','ev','x','stangVid',
+  'kontrakt','riskUsd','malUsd','riskPerKontrakt','overRisk',
+  'name','fam','famName','side','why','also','tpBasis','tpMacro','tpAlign'];
 
 function assignStatus(sigs, pxByInst){
-  rensaDubbletter();
+  const iListan = new Set(sigs.map(s => s.nyckel));
 
-  /* En fylld setup som motorn slutat föreslå — priset har dragit iög eller
-     strukturen har ändrats — försvinner ur listan nedan och skulle då aldrig
-     få sitt slut. Den här svepningen prövar alla påbörjade affärer mot samma
-     mål och stopp som när de togs, precis som kontot gör med sina positioner. */
-  const iListan = new Set(sigs.map(s => s.id));
-  LIVE.forEach((st, id) => {
-    if(iListan.has(id) || !st || !st.sig || st.hitTp || st.hitSl) return;
-    const g = st.sig, px = pxByInst[g.inst];
-    if(!nz(px)) return;
-    const dir = g.side === 'long' ? 1 : -1;
-    if(dir*(px - g.tp) >= 0){ st.hitTp = true; st.slutAt = Date.now(); }
-    else if(dir*(px - g.sl) <= 0){ st.hitSl = true; st.slutAt = Date.now(); }
+  /* En påbörjad affär vars familj slutat rösta faller ur listan ovan. Förr blev
+     den osynlig: kortet försvann ur panelen medan positionen levde vidare i
+     kontot, och posten låste ändå familjeplatsen tills den åldrades bort ett
+     dygn senare. Nu läggs den tillbaka som ett kort, ritat ur ögonblicksbilden
+     från fyllningen — det är den affär som faktiskt löper. */
+  const tillbaka = [];
+  const farskaBars = sigs.length ? sigs[0].bars : null;
+  LIVE.forEach((st, nyckel) => {
+    if(iListan.has(nyckel) || !st || !st.sig || st.hitTp || st.hitSl) return;
+    if(!nz(pxByInst[st.sig.inst])) return;
+    tillbaka.push(Object.assign({}, st.sig, { invalid:false, foraldralos:true, bars: farskaBars }));
   });
+  if(tillbaka.length) sigs = sigs.concat(tillbaka);
 
-  sigs.forEach(s=>{
+  sigs.forEach(s => {
     const px = pxByInst[s.inst];
-    const dir = s.side==='long' ? 1 : -1;
-    const zone = s.atr*0.30;
-    let st = LIVE.get(s.id);
+    if(!nz(px)) return;
+    const dir = s.side === 'long' ? 1 : -1;
+    let st = LIVE.get(s.nyckel);
 
-    const inZone = Math.abs(px - s.entry) <= zone;
-    const traff  = Math.abs(px - s.entry) <= s.atr*0.05;  // priset står i praktiken på nivån
-    const fylld  = s.reachSign*(px - s.entry) >= 0;       // priset ligger på fyllningssidan
-    const foreDetta = SEDD.get(s.id);
+    const traff = Math.abs(px - s.entry) <= s.atr*0.05;   // priset står i praktiken på nivån
+    const fylld = s.reachSign*(px - s.entry) >= 0;        // priset ligger på fyllningssidan
+    const foreDetta = SEDD.get(s.nyckel);
 
-    // Eftersom en fylld affär låses som ACTIVE tills mål eller stopp krävs en riktig
-    // träff: priset står på nivån, eller har gått igenom den medan vi tittade.
-    // Att bara ligga nära räcker inte, och en omladdning fyller inte gamla nivåer.
-    // C-setups får aldrig gå aktiva — de är för svaga för att handlas.
-    const fargodkand = s.grade === 'A' || s.grade === 'B';
-    if(!st && fargodkand && (traff || (fylld && foreDetta === false))){
-      // En setup i taget per familj och riktning. Id:t följer entrynivån, så samma
-      // idé får ett nytt id när priset flyttar sig — utan spärren staplades tre
-      // nästan identiska svep-shorts på varandra, både som kort och som positioner,
-      // och risken blev tredubbel på samma tanke.
-      const upptagen = upptagenAv(s);
-      if(!upptagen){
-        st = { triggered:true, at:Date.now(), entryPx:s.entry, sig:Object.assign({}, s) };
-      }
+    /* Stapelns hela spann, inte bara dess stängning.
+
+       Det här var den enskilt största skillnaden mellan mätriggen och skarpt
+       läge. trana.mjs fyller en limit när stapelns lägsta går under nivån och
+       hittar tusentals affärer; motorn jämförde bara mot stängningen och
+       hittade tre på sjuhundra varv. En order som nuddas mitt i en
+       femminutersstapel och studsar tillbaka fylls i verkligheten — den låg
+       ju i boken — men var osynlig här, och kontot stod stilla.
+
+       Bara för idéer som redan låg på brädet. En nyfödd setup får inte fyllas
+       på ett spann som handlades innan ordern fanns. */
+    const stapel = (s.bars && s.bars.length) ? s.bars[s.bars.length-1] : null;
+    const rortVid = (!s.nyfodd && stapel)
+      ? (s.trigger === 'stop'
+          ? (dir > 0 ? stapel.h >= s.entry : stapel.l <= s.entry)
+          : (dir > 0 ? stapel.l <= s.entry : stapel.h >= s.entry))
+      : false;
+
+    /* Eftersom en fylld affär låses som ACTIVE tills mål eller stopp krävs en
+       riktig träff: priset står på nivån, eller har gått igenom den medan vi
+       tittade. Att bara ligga nära räcker inte, och en omladdning fyller inte
+       gamla nivåer. C-setups får aldrig gå aktiva — de är för svaga. */
+    if(!st && !s.invalid && (s.grade === 'A' || s.grade === 'B') && (traff || rortVid || (fylld && foreDetta === false))){
+      const at = Date.now();
+      const handelsId = s.nyckel + '@' + at;
+      const frusen = Object.assign({}, s, { id: handelsId, oppnad: at, entryFyllt: s.entry });
+      delete frusen.bars;
+      st = { triggered:true, at, handelsId, entryPx: s.entry, sig: frusen };
+      LIVE.set(s.nyckel, st);
     }
-    if(!st) SEDD.set(s.id, fylld);
+    if(!st) SEDD.set(s.nyckel, fylld);
+
     if(st){
-      LIVE.set(s.id, st);
+      /* Nivåerna fryses vid fyllningen. Entry, stopp och mål räknas om varje
+         stapel så länge setupen väntar, men i samma stund affären är igång är
+         det de nivåer den togs på som gäller — annars visar kortet en annan
+         affär än den kontot handlar. Graden fryses av samma skäl: den räknas om
+         ur familjeröster varje stapel och blinkade förr mellan A och B var
+         fyrtiofemte minut, mitt i en löpande affär. */
+      FRYS.forEach(k => { if(st.sig[k] !== undefined) s[k] = st.sig[k]; });
       if(!st.hitTp && !st.hitSl){
         if(dir*(px - s.tp) >= 0){ st.hitTp = true; st.slutAt = Date.now(); }
         else if(dir*(px - s.sl) <= 0){ st.hitSl = true; st.slutAt = Date.now(); }
@@ -1364,6 +1460,7 @@ function assignStatus(sigs, pxByInst){
       ? (s.side==='long' ? 'bryter upp genom' : 'bryter ned genom')
       : (s.side==='long' ? 'faller tillbaka till' : 'stiger tillbaka till');
 
+    s.dist       = Math.abs(px - s.entry);
     s.oppnad     = st ? st.at : null;
     s.entryFyllt = st ? st.entryPx : null;
     s.openPnl    = (st && s.status === 'ACTIVE') ? dir*(px - s.entry) : null;
@@ -1380,7 +1477,7 @@ export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
   INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
-  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, rensaDubbletter, brusband, momentLage,
+  adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, brusband, momentLage,
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, sessionReachFactor, targetCandidates, pickTarget,

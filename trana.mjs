@@ -117,8 +117,13 @@ function samlaSetups(bars){
     let sigs;
     try{ sigs = generateSignals(ctx); }catch(e){ continue; }
     for(const s of sigs){
-      if(s.invalid || sedda.has(s.id)) continue;
-      sedda.set(s.id, {
+      /* Motorns id är numera stabilt per familj och håll — det är hela poängen
+         med det. Här behövs motsatsen: varje distinkt kandidat ska mätas, och
+         samma idé med entryn på en ny nivå är en ny kandidat. Därför nyckeln
+         plus nivån, alltså precis det motorns id brukade vara. */
+      const prov = s.nyckel + '@' + Math.round(s.entry*10);
+      if(s.invalid || sedda.has(prov)) continue;
+      sedda.set(prov, {
         x: s.x.concat([s.conf/100]),          // den handsatta konfidensen är ett drag som alla andra
         fran: i, side: s.side, fam: s.fam, trigger: s.trigger,
         entry: s.entry, sl: s.sl, tp: s.tp, rr: s.rr, grade: s.grade, conf: s.conf,
@@ -230,10 +235,13 @@ const alladagar = new Set(bars.map(b => dagNY(b.t)));
 console.log('period: ' + dagNY(bars[0].t) + ' → ' + dagNY(bars[bars.length-1].t) +
             ' · ' + alladagar.size + ' handelsdagar');
 
-/* Datasetet cachas bara så länge motorn är oförändrad. Byggs en familj om,
-   ändras en spärr eller flyttas en entry är gamla setups en mätning av en
-   motor som inte finns längre. */
-const MOTORSUM = createHash('sha1').update(readFileSync('motor.js')).digest('hex').slice(0,12);
+/* Datasetet cachas bara så länge motorn *och riggen* är oförändrade. Byggs en
+   familj om, ändras en spärr eller flyttas en entry är gamla setups en mätning
+   av en motor som inte finns längre — och ändras riggens egen urvals- eller
+   facitlogik mäter de gamla raderna något annat än de nya. Båda filerna går
+   därför in i summan. */
+const MOTORSUM = createHash('sha1')
+  .update(readFileSync('motor.js')).update(readFileSync('trana.mjs')).digest('hex').slice(0,12);
 const DATACACHE = '.setups-cache.json';
 let data;
 if(existsSync(DATACACHE)){

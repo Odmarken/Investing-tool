@@ -221,7 +221,7 @@ export async function kontoVarv(logg = () => {}){
      stänga den — och ändå räckte den förut för att slå av kallstarten. Ett
      nyss nollställt konto stod då stilla i upp till ett dygn, tills posten
      åldrades bort av gallringen längre ned. */
-  const iListan = new Set(sigs.map(s => s.id));
+  const iListan = new Set(sigs.map(s => s.nyckel));
   const pagaende = [...LIVE.entries()].filter(([, st]) => st && st.sig && !st.hitTp && !st.hitSl);
   const nagotIgang = pagaende.some(([id]) => iListan.has(id));
   const foraldralosa = pagaende.length - pagaende.filter(([id]) => iListan.has(id)).length;
@@ -235,9 +235,14 @@ export async function kontoVarv(logg = () => {}){
       const fylld = s.reachSign*(px - s.entry) >= 0;
       if(!fylld || Math.abs(px - s.entry) > s.atr) return;
       if(dir*(px - s.sl) <= 0 || dir*(px - s.tp) >= 0) return;   // redan förbi stopp eller mål
-      LIVE.set(s.id, { triggered:true, at: Date.now(), entryPx: s.entry, sig: { ...s } });
+      const at = Date.now();
+      const handelsId = s.nyckel + '@' + at;
+      const frusen = Object.assign({}, s, { id: handelsId, oppnad: at, entryFyllt: s.entry });
+      delete frusen.bars;                                   // 84 kB staplar hör inte hemma i Firestore
+      LIVE.set(s.nyckel, { triggered:true, at, handelsId, entryPx: s.entry, sig: frusen });
+      s.id = handelsId;
       s.status = 'ACTIVE'; s.statusTxt = 'ACTIVE';
-      s.oppnad = Date.now(); s.entryFyllt = s.entry;
+      s.oppnad = at; s.entryFyllt = s.entry;
       logg('adopterar pågående ' + s.grade + ' ' + s.fam + ' ' + s.side);
     });
   }
