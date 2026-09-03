@@ -211,10 +211,22 @@ export async function kontoVarv(logg = () => {}){
      därför de setups som är igång just nu: priset ligger på fyllningssidan och
      högst en ATR förbi nivån, alltså en affär som faktiskt löper. Längre bort
      än så har tåget gått, och den lämnas. */
-  // Bara pågående poster räknas som minne — en avslutad affär ligger kvar en stund
-  // i LIVE och skulle annars blockera adoptionen på ett nyss nollställt konto.
-  const nagotIgang = [...LIVE.values()].some(st => st && st.sig && !st.hitTp && !st.hitSl);
+  /* Bara pågående poster som motorn fortfarande känns vid räknas som minne.
+
+     En avslutad affär ligger kvar en stund i LIVE. Efter en motorändring kan
+     där dessutom ligga föräldralösa poster: id:t följer entrynivån, så en
+     ombyggd familj ger nya id:n och den gamla posten hör inte ihop med någon
+     signal längre. assignStatus sveper en sådan post efter mål och stopp men
+     lägger aldrig tillbaka den i listan, så kontot kan varken öppna eller
+     stänga den — och ändå räckte den förut för att slå av kallstarten. Ett
+     nyss nollställt konto stod då stilla i upp till ett dygn, tills posten
+     åldrades bort av gallringen längre ned. */
+  const iListan = new Set(sigs.map(s => s.id));
+  const pagaende = [...LIVE.entries()].filter(([, st]) => st && st.sig && !st.hitTp && !st.hitSl);
+  const nagotIgang = pagaende.some(([id]) => iListan.has(id));
+  const foraldralosa = pagaende.length - pagaende.filter(([id]) => iListan.has(id)).length;
   const kallstart = !konto.affarer.length && !Object.keys(konto.oppna).length && !nagotIgang;
+  if(kallstart && foraldralosa) logg('bortser från ' + foraldralosa + ' föräldralös post utan signal');
   if(kallstart){
     sigs.forEach(s => {
       if(s.status === 'ACTIVE' || s.grade === 'C') return;
