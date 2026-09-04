@@ -423,6 +423,20 @@ console.log('\nlyft i bästa fjärdedelen: ' + lyft.toFixed(3) + ' R · spridnin
 console.log(duger ? 'MODELLEN DUGER — den får styra sorteringen.'
                   : 'MODELLEN DUGER INTE — den skrivs med duger:false och rör inte signalerna.');
 
+/* Träff per familj och grad, netto, ur hela populationen. Det här är vad kortet
+   visar i stället för konf: konf var en checklista som toppade på 93 för 40 %
+   av alla setups och pekade åt fel håll (92–99: 36 % träff, 0–54: 42 %). En
+   uppmätt träffprocent med antalet bredvid är det ärligaste som går att säga
+   om en setup innan den tas. Räknas på allt, inte bara testperioden — det är
+   en beskrivning av historiken, inte en prediktion som ska valideras. */
+const traffTabell = {};
+for(const o of data){
+  const k = o.fam + '|' + o.grade;
+  const t = traffTabell[k] || (traffTabell[k] = { n: 0, vinst: 0, R: 0 });
+  t.n++; if(o.y) t.vinst++; t.R += o.R;
+}
+for(const k in traffTabell){ const t = traffTabell[k]; traffTabell[k] = { n: t.n, traff: Math.round(t.vinst/t.n*100), R: +(t.R/t.n).toFixed(3) }; }
+
 /* Slutmodellen tränas på allt, men betygsätts av testet ovan. */
 const slutlig = passa(data.slice(-MINNE));
 const test_ = {
@@ -467,6 +481,7 @@ export const MODELL = {
   skala: ${JSON.stringify(slutlig.skala.map(v => +v.toFixed(6)))},
   vikter: ${JSON.stringify(slutlig.vikter.map(v => +v.toFixed(6)))},
   bias: ${+slutlig.bias.toFixed(6)},
+  traff: ${JSON.stringify(traffTabell)},
   test: ${JSON.stringify(test_)}
 };
 `;

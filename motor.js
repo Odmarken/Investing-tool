@@ -1157,11 +1157,16 @@ function makeSignal(ctx, o){
   // ev = förväntat utfall i R om affären tas (p*rr − (1−p)*1).
   const x = drag(ctx, o, rr, dist, G);
   const p = aiSannolikhet(x);
+  /* Uppmätt träff för familjen och graden, ur riggens senaste körning. Det är
+     det kortet visar. Konfidensen räknas fortfarande — den är ett drag i
+     modellen — men den var en checklista, inte en sannolikhet, och pekade åt
+     fel håll. null tills riggen körts med den här versionen. */
+  const traff = (MODELL && MODELL.traff && MODELL.traff[o.fam + '|' + G.grade]) || null;
   const ev = p === null ? null : p*rr - (1-p);
 
   return {
     id, nyckel, trigger, reachSign, inst:ctx.inst.key, instLabel:ctx.inst.label,
-    x, ai: p === null ? null : Math.round(p*100), ev,
+    x, ai: p === null ? null : Math.round(p*100), ev, traff,
     dec:ctx.inst.dec, unit:ctx.inst.unit,
     fam:o.fam, famName:FAM[o.fam]||'', grade:G.grade, backers:G.backers, backN:G.n, against:G.against,
     side:o.side, name:o.name, entry, sl, tp,
@@ -1481,7 +1486,7 @@ function combine(list, A){
    räknas om varje varv. bars följer medvetet inte med: staplarna är 84 kB per
    signal, och LIVE skrivs till Firestore där dokumentet tar slut vid 1 MiB. */
 const FRYS = ['id','entry','sl','tp','risk','ptsTp','rr','trigger','reachSign',
-  'grade','backers','backN','against','conf','ai','ev','x','stangVid',
+  'grade','backers','backN','against','conf','ai','ev','x','traff','stangVid',
   'kontrakt','riskUsd','malUsd','riskPerKontrakt','overRisk',
   'name','fam','famName','side','why','also','tpBasis','tpMacro','tpAlign'];
 
