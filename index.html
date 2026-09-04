@@ -1174,8 +1174,15 @@ function demoBars(inst, n=260){
 
 /* Den setup som graf och sammanfattning ska peka på: en pågående affär först,
    annars den närmaste kandidaten. */
+/* Panelen visar bara de grader kontot får ta (MOTORCFG.grader). En påbörjad
+   eller avslutad affär visas alltid, oavsett grad — den ska inte kunna
+   försvinna ur sikte för att inställningen ändrats efter fyllningen. */
+function synligGrad(s){
+  return handlasGrad(s.grade) || s.status === 'ACTIVE' || s.status === 'TP' || s.status === 'SL';
+}
+
 function fokusSignal(inst){
-  const urval = STATE.signals.filter(s => !inst || s.inst === inst);
+  const urval = STATE.signals.filter(s => (!inst || s.inst === inst) && synligGrad(s));
   const aktiv = urval.filter(s => s.status === 'ACTIVE')
                      .sort((a,b)=> (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf))[0];
   if(aktiv) return aktiv;
@@ -1820,15 +1827,17 @@ function kopplaSignalKlick(){
 
 function renderSignals(){
   const el = $('#sigList');
-  let list = STATE.signals.slice();
+  let list = STATE.signals.filter(synligGrad);
   if(STATE.sigFilter === 'A' || STATE.sigFilter === 'B' || STATE.sigFilter === 'C'){
     list = list.filter(s => s.grade === STATE.sigFilter);
   }else if(STATE.sigFilter !== 'all'){
     list = list.filter(s => s.inst === STATE.sigFilter);
   }
   if(!list.length){
+    const dold = (STATE.sigFilter === 'B' || STATE.sigFilter === 'C') && !handlasGrad(STATE.sigFilter);
     el.innerHTML = '<div class="empty">' +
-      (STATE.sigFilter === 'A' ? 'Ingen A-setup just nu — minst tre av fem strategier måste peka åt samma håll.'
+      (dold ? STATE.sigFilter + '-setups visas inte — kontot handlar bara ' + (MOTORCFG.grader || []).join(' och ') + ' (MOTORCFG.grader i motor.js).'
+     : STATE.sigFilter === 'A' ? 'Ingen A-setup just nu — minst tre av sex strategier måste peka åt samma håll.'
      : STATE.sigFilter === 'B' ? 'Ingen B-setup just nu.'
      : 'Inga giltiga setups just nu.') + '</div>';
     return;
