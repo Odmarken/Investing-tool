@@ -3085,7 +3085,10 @@ function renderDemo(){
   KONTO.affarer.forEach(a => { kap = a.kapitalEfter; kurva.push(kap); });
   drawEquity($('#demoChart'), kurva);
 
-  $('#demoGrades').innerHTML = ['A','B'].map(gr => {
+  /* En ruta per grad kontot får ta — samma inställning som styr panelen och
+     öppningarna. Historiken nedanför visar alla affärer oavsett grad: de är
+     riktiga pengar i kurvan, och en logg som gömmer dem skulle ljuga om saldot. */
+  $('#demoGrades').innerHTML = (MOTORCFG.grader || ['A','B']).map(gr => {
     const t = KONTO.affarer.filter(x => x.grade === gr);
     const v = t.filter(x => x.dollar > 0).length;
     const sum = t.reduce((a,b) => a + b.dollar, 0);
@@ -3132,8 +3135,8 @@ function renderDemo(){
     'räknas därför ut för varje setup: sitter stoppen långt bort, bakom ett stöd eller en swinglow, blir kontrakten färre, ' +
     'och sitter den tätt blir de fler — kostnaden om stoppen tas blir densamma. Vinsten får bli vad R:R ger. ' +
     'Ett kontrakt är ' + demoPunktVarde('NQ') + ' $ per punkt. När en setup går aktiv läggs hela braketten ' +
-    'automatiskt — fyllning, stopp och mål — och positionen hålls tills ett av dem nås. Bara <b>A och B</b> handlas; ' +
-    'C-setups är för svaga och tas inte. Marginalen räknas som ' + MARGINAL_PER_KONTRAKT + ' $ per kontrakt, vilket ' +
+    'automatiskt — fyllning, stopp och mål — och positionen hålls tills ett av dem nås. Bara <b>' +
+    (MOTORCFG.grader || ['A','B']).join(' och ') + '</b> handlas (MOTORCFG.grader i motor.js); övriga grader visas inte och tas inte. Marginalen räknas som ' + MARGINAL_PER_KONTRAKT + ' $ per kontrakt, vilket ' +
     'är ungefär vad en mäklare tar i dagmarginal för mikroterminen — den siffran är ett antagande, inte hämtad ' +
     'någonstans ifrån. Exponeringen är kontraktens fulla värde, alltså pris × ' + demoPunktVarde('NQ') + ' × antal.<br>' +
     'Utfallet avgörs på 5-minutersstaplarnas högsta och lägsta, och alla staplar som passerat sedan förra kollen ' +
