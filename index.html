@@ -230,6 +230,16 @@ header.topbar{
 .sig.oppen .sig-mer{display:block}
 .sig .vik{margin-left:auto;color:var(--muted);font-size:11px;line-height:1;transition:transform .15s}
 .sig.oppen .vik{transform:rotate(180deg)}
+.pablo-knapp{display:none;margin-left:auto;font:800 9.5px/1 var(--mono);letter-spacing:.9px;text-transform:uppercase;color:var(--accent);
+  background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.35);border-radius:6px;padding:4px 8px;cursor:pointer}
+.sig.oppen .pablo-knapp{display:inline-block}
+.sig.oppen .pablo-knapp + .vik{margin-left:8px}
+.pablo-knapp:hover{background:rgba(0,229,255,.16)}
+#pablo .box{width:min(720px,100%)}
+#pablo .pablo-text{font-size:13px;line-height:1.65;white-space:pre-wrap;color:var(--text);padding:14px 16px 18px;min-height:120px;cursor:pointer}
+#pablo .pablo-text .mark{display:inline-block;width:7px;height:14px;background:var(--accent);vertical-align:-2px;margin-left:2px;animation:pabloBlink .8s steps(1) infinite}
+@keyframes pabloBlink{50%{opacity:0}}
+#pablo .pablo-fot{font-size:10px;color:var(--muted);padding:0 16px 14px}
 .sig-namn{font-size:10.5px;color:var(--text-2);margin:5px 0 6px;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
 .sig.oppen .sig-namn{white-space:normal}
@@ -1815,6 +1825,8 @@ function kopplaSignalKlick(){
   el.addEventListener('click', e => {
     const kort = e.target.closest('.sig');
     if(!kort || !kort.dataset.sig) return;
+    const pk = e.target.closest('.pablo-knapp');
+    if(pk){ const sig = STATE.signals.find(x => x.id === kort.dataset.sig); if(sig) visaPablo(sig); return; }
     if(e.target.closest('a, button')) return;                            // länkar och knappar sköter sig själva
     const markering = window.getSelection && window.getSelection().toString();
     if(kort.classList.contains('oppen') && markering) return;            // man drog för att markera text
@@ -1845,6 +1857,151 @@ function traffHtml(s){
   return `<div class="conf" title="${esc(rad.join(' '))}"><i class="dim" style="font-style:normal;font-size:9px;letter-spacing:.8px">KONF</i>
           <div class="confbar ${cCls}"><i style="width:${s.conf}%"></i></div>
           <b class="mono" style="font-size:11px">${s.conf}%</b></div>`;
+}
+
+/* ==========================================================================
+   PABLO — en lokal berättare. Ingen API, ingen modell som gissar: den läser
+   det motorn redan vet om setupen och marknadsläget, riggens uppmätta träff
+   för familjen och graden, kontots egna affärer och nyhetsbiasen, och skriver
+   ihop det till en bedömning med det som talar för och det som talar emot.
+   Den är ärlig om vad siffrorna bär: inget enskilt drag har förutsagt
+   utfallet i det här projektet, och det står i slutet varje gång.
+   ========================================================================== */
+function pabloText(s){
+  const c = STATE.ctx[s.inst] || {};
+  const lang = s.side === 'long';
+  const A = c.atr || s.atr || 1;
+  const px = nz(c.px) ? c.px : s.ctxPx;
+  const nu = Date.now();
+  const kl = ms => new Intl.DateTimeFormat('sv-SE', { timeZone:'Europe/Stockholm', hour:'2-digit', minute:'2-digit' }).format(new Date(ms));
+  const namn = k => FAM[k] || k;
+  const plus = [], minus = [], rader = [];
+
+  /* 1. vad det är */
+  const bak = (s.backers || []).map(namn), emot = (s.against || []).map(namn);
+  rader.push('Det här är en ' + (s.famName || s.fam).toLowerCase() + ' ' + (lang ? 'lång' : 'kort') + ' i grad ' + s.grade +
+    (bak.length ? ' — ' + bak.length + ' av ' + FAM_N + ' familjer pekar åt samma håll (' + bak.join(', ').toLowerCase() + ')' : '') +
+    (emot.length ? ', och ' + emot.join(', ').toLowerCase() + ' pekar emot' : '') + '.');
+  if(bak.length >= 3) minus.push('Familjerna läser samma EMA-stack och samma VWAP, så ' + bak.length + ' röster är i praktiken en röst räknad ' + bak.length + ' gånger. Mätt har graden aldrig sorterat utfallet.');
+  if(emot.length) minus.push(emot.join(' och ') + ' säger emot riktningen.');
+
+  /* 2. vad mätningen säger */
+  const T = MODELL && MODELL.traff ? MODELL.traff : null;
+  if(T){
+    const egen = T[s.fam + '|' + s.grade];
+    let gN = 0, gV = 0, gR = 0, aN = 0, aV = 0;
+    for(const k in T){ const t = T[k]; aN += t.n; aV += t.traff*t.n/100; if(k.endsWith('|' + s.grade)){ gN += t.n; gV += t.traff*t.n/100; gR += t.R*t.n; } }
+    if(egen){
+      rader.push('Riggen har ' + egen.n + ' ' + (s.famName || s.fam).toLowerCase() + '-setups i grad ' + s.grade + ' i historiken: ' +
+        egen.traff + ' % nådde målet, snitt ' + fmtSigned(egen.R, 2) + ' R netto.' +
+        (gN ? ' Grad ' + s.grade + ' i alla familjer: ' + Math.round(gV/gN*100) + ' %, snitt ' + fmtSigned(gR/gN, 2) + ' R.' : '') +
+        (aN ? ' Allt sammantaget: ' + Math.round(aV/aN*100) + ' %.' : ''));
+      if(egen.R > 0.03) plus.push('Just den här familjen och graden ligger över noll i riggen (' + fmtSigned(egen.R, 2) + ' R på ' + egen.n + ').');
+      else if(egen.R < -0.05) minus.push('Familjen och graden ligger under noll i riggen (' + fmtSigned(egen.R, 2) + ' R på ' + egen.n + ').');
+      if(egen.n < 100) minus.push('Bara ' + egen.n + ' setups i underlaget — siffran är osäker.');
+    }else{
+      rader.push('Riggen har ingen rad för ' + s.fam + ' i grad ' + s.grade + ' än.');
+    }
+  }else{
+    rader.push('Riggens träfftabell saknas — kör npm run trana så fylls den.');
+  }
+  const egna = (KONTO.affarer || []).filter(a => a.nyckel && a.nyckel.split('|')[1] === s.fam);
+  const egnaG = egna.filter(a => a.grade === s.grade);
+  if(egna.length){
+    const v = egnaG.filter(a => a.dollar > 0).length, sum = egnaG.reduce((x, a) => x + a.dollar, 0);
+    rader.push('Kontot har tagit ' + egna.length + ' ' + (s.famName || s.fam).toLowerCase() + '-affärer' + (egnaG.length ? ', ' + egnaG.length + ' i grad ' + s.grade + ': ' + v + ' av ' + egnaG.length + ' gick hem, ' + fmtSigned(sum, 0) + ' $' : '') + '.');
+    if(egnaG.length >= 4 && v/egnaG.length >= 0.6) plus.push('Kontots egen historik i familjen och graden är positiv.');
+    if(egnaG.length >= 4 && v/egnaG.length <= 0.3) minus.push('Kontots egen historik i familjen och graden är svag.');
+  }
+
+  /* 3. läget just nu */
+  const lage = [];
+  if(nz(c.trend)){
+    const med = (c.trend > 12 && lang) || (c.trend < -12 && !lang), mot = (c.trend > 12 && !lang) || (c.trend < -12 && lang);
+    lage.push('trendpoängen är ' + fmtSigned(Math.round(c.trend), 0) + (med ? ' — i medvind' : mot ? ' — i motvind' : ' — neutral'));
+    if(med) plus.push('EMA-stacken och VWAP-läget går åt affärens håll.');
+    if(mot) minus.push('Affären går mot trendpoängen; det är en motrörelse.');
+  }
+  if(nz(c.vwap) && nz(px)){ const over = px > c.vwap; lage.push('priset ' + (over ? 'över' : 'under') + ' VWAP med ' + fmt(Math.abs(px - c.vwap), 1) + ' p');
+    if((over && !lang) || (!over && lang)) plus.push('Entryn ligger på rätt sida VWAP för en återgång.'); }
+  if(nz(c.rsi)){ lage.push('RSI ' + Math.round(c.rsi)); if(lang && c.rsi > 70) minus.push('RSI över 70 — man köper i ett redan sträckt läge.'); if(!lang && c.rsi < 30) minus.push('RSI under 30 — man säljer i ett redan sträckt läge.'); }
+  if(nz(c.adx)){ lage.push('ADX ' + Math.round(c.adx)); if(c.adx < 18) minus.push('ADX under 18: marknaden trendar inte, brott och fortsättningar tenderar att falla tillbaka.'); }
+  if(nz(c.relVol)){ lage.push('volymen ' + Math.round(c.relVol*100) + ' % av normal'); if(c.relVol < 0.6) minus.push('Tunn volym — rörelser på låg volym är oftare falska.'); if(c.relVol > 1.4) plus.push('Volymen är med.'); }
+  const tBar = c.bars && c.bars.length ? c.bars[c.bars.length-1].t : nu;
+  const kz = ictKillzone(tBar);
+  const sess = sessionState(tBar);
+  lage.push(sess.t.toLowerCase() + (kz ? ', ' + kz + '-killzonen' : ''));
+  if(sess.k === 'rth') plus.push('Kassan är öppen — det är där volymen och rörelserna finns.');
+  if(sess.k === 'globex') minus.push('Nattsession: tunt, och kontot handlar ändå inte utanför fönstret.');
+  if(c.today && c.today.h > c.today.l){ const spann = (c.today.h - c.today.l)/A; lage.push('dagens spann ' + spann.toFixed(1) + ' ATR'); if(spann < 2.5) minus.push('Smal dag hittills — uppmätt den sämsta dagstypen för motorn.'); }
+  rader.push('Just nu: ' + lage.join(', ') + '.');
+  const nb = STATE.newsBias && nz(STATE.newsBias.nq) ? STATE.newsBias.nq : 0;
+  if(Math.abs(nb) >= 10){ const med = (nb > 0) === lang; rader.push('Nyhetsflödet lutar ' + (nb > 0 ? 'positivt' : 'negativt') + ' (' + fmtSigned(Math.round(nb), 0) + '), ' + (med ? 'åt affärens håll' : 'mot affären') + ' — men spärren är aldrig mätt mot facit.'); if(!med) minus.push('Nyhetsbiasen går emot.'); }
+
+  /* 4. geometrin */
+  const rr = nz(s.rr) ? s.rr : 0, riskA = s.risk/A, malA = s.ptsTp/A;
+  rader.push('Geometrin: stoppen ' + fmt(s.risk, 1) + ' p bort (' + riskA.toFixed(1) + ' ATR), målet ' + fmt(s.ptsTp, 1) + ' p (' + malA.toFixed(1) + ' ATR), R:R ' + rr.toFixed(2) + '. ' +
+    s.kontrakt + ' kontrakt ger ' + Math.round(s.riskUsd) + ' $ i risk och ' + Math.round(s.malUsd) + ' $ vid målet.' + (s.tpBasis ? ' Målet: ' + s.tpBasis + '.' : ''));
+  if(riskA < 0.7) minus.push('Stoppen är tajt (' + riskA.toFixed(1) + ' ATR) — brus räcker för att ta den.');
+  if(rr >= 2) plus.push('R:R över 2: en träff på tre räcker till noll.');
+  if(rr < 1.2) minus.push('R:R under 1,2: träffen måste vara hög för att bära kostnaderna.');
+  if(s.overRisk) minus.push('Ett enda kontrakt riskerar mer än taket.');
+  if(s.stangVid && s.stangVid > nu){
+    const min = Math.round((s.stangVid - nu)/60000), stapl = Math.floor(min/5);
+    rader.push('Stängs senast ' + kl(s.stangVid) + ', om ' + min + ' minuter (' + stapl + ' staplar).');
+    if(malA > stapl/12 + 0.5) minus.push('Målet ligger ' + malA.toFixed(1) + ' ATR bort med ' + stapl + ' staplar kvar — tidsstängning är troligare än målet.');
+  }
+
+  /* 5. om den är igång */
+  if(s.status === 'ACTIVE' && nz(s.openPnl)){
+    const R = s.risk ? s.openPnl/s.risk : 0;
+    rader.push('Affären är igång sedan ' + (s.oppnad ? kl(s.oppnad) : '?') + ', fylld på ' + fmt(s.entryFyllt || s.entry, 2) + ', och ligger ' + fmtSigned(R, 2) + ' R (' + fmtSigned(s.openPnl, 1) + ' p). ' +
+      fmt(s.kvarMal, 1) + ' p kvar till målet, ' + fmt(s.kvarStopp, 1) + ' p till stoppen.');
+    if(R < -0.5) minus.push('Den ligger redan mer än en halv R back.');
+    if(R > 0.5) plus.push('Den har gått mer än en halv R åt rätt håll.');
+  }else if(s.status === 'TP' || s.status === 'SL'){
+    rader.push('Affären är avslutad: ' + (s.statusTxt || s.status).toLowerCase() + '.');
+  }else{
+    rader.push('Den väntar på fyllning: priset ' + s.needTxt + ' ' + fmt(s.entry, 2) + ', ' + fmt(s.dist, 1) + ' p bort (' + (s.dist/A).toFixed(1) + ' ATR).');
+    if(s.dist/A > 2) minus.push('Entryn ligger långt från priset — den kanske aldrig fylls, och gör den det har läget hunnit ändras.');
+  }
+
+  /* 6. bedömningen */
+  rader.push('');
+  rader.push('Talar för:' + (plus.length ? NL + plus.map(x => '  + ' + x).join(NL) : ' inte mycket utöver att setupen finns.'));
+  rader.push('Talar emot:' + (minus.length ? NL + minus.map(x => '  − ' + x).join(NL) : ' inget jag hittar.'));
+  rader.push('');
+  const netto = plus.length - minus.length;
+  rader.push('Pablos bedömning: ' + (netto >= 2 ? 'en av de bättre setuparna på brädet, på pappret.'
+    : netto <= -2 ? 'svag. Graden ser fin ut men det mesta under den talar emot.'
+    : 'ett myntkast med förtecken. Ta den om du tar alla — inte för att den är A.'));
+  rader.push('Och det ärliga: inget av det här har förutsagt utfallet på egen hand — inte ett av motorns 34 drag har |t| > 2 på 63 dagar, och kontot mäter noll i alla fönster. Det ovan är en läsning av läget, inte en sannolikhet.');
+  return rader.join(NL);
+}
+
+let PABLO_TIMER = null;
+function visaPablo(s){
+  let el = $('#pablo');
+  if(!el){
+    el = document.createElement('div'); el.className = 'modal'; el.id = 'pablo';
+    el.innerHTML = '<div class="box"><div class="ph"><span class="accent"></span><h2>Pablo</h2><span class="right"><button class="btn" id="pabloStang">✕ Stäng</button></span></div>' +
+      '<div class="pablo-text"></div><div class="pablo-fot">Lokal läsning av det motorn vet — ingen API, ingen prediktion. Klicka i texten för att hoppa till slutet.</div></div>';
+    document.body.appendChild(el);
+    const stang = () => { el.classList.remove('show'); if(PABLO_TIMER) clearInterval(PABLO_TIMER); };
+    $('#pabloStang').onclick = stang;
+    el.addEventListener('click', e => { if(e.target === el) stang(); });
+    document.addEventListener('keydown', e => { if(e.key === 'Escape' && el.classList.contains('show')) stang(); });
+  }
+  const box = el.querySelector('.pablo-text');
+  const text = pabloText(s);
+  el.querySelector('h2').textContent = 'Pablo · ' + (s.famName || s.fam) + ' ' + (s.side === 'long' ? 'lång' : 'kort') + ' · ' + s.grade;
+  el.classList.add('show');
+  if(PABLO_TIMER) clearInterval(PABLO_TIMER);
+  let i = 0;
+  const rita = () => { box.innerHTML = esc(text.slice(0, i)) + (i < text.length ? '<span class="mark"></span>' : ''); };
+  rita();
+  PABLO_TIMER = setInterval(() => { i = Math.min(text.length, i + (text[i] === NL ? 1 : 2)); rita(); if(i >= text.length){ clearInterval(PABLO_TIMER); PABLO_TIMER = null; } }, 14);
+  box.onclick = () => { if(PABLO_TIMER){ clearInterval(PABLO_TIMER); PABLO_TIMER = null; } i = text.length; rita(); };
 }
 
 function renderSignals(){
@@ -1896,6 +2053,7 @@ function renderSignals(){
         <span class="sig-dir ${s.side}">${dirTxt}</span>
         ${FAM_HANDLAS[s.fam] === false ? '<span class="ejhandlas" title="Familjen ' + esc(s.famName) + ' hade negativ förväntan i mätningen på 60 dagar — demokontot öppnar inga affärer på den">handlas ej</span>' : ''}
         <span class="status ${stCls}"><span class="d"></span>${esc(s.statusTxt||s.status)}</span>
+        <button class="pablo-knapp" type="button" title="Pablo läser igenom allt motorn vet om den här setupen och skriver en bedömning">Pablo</button>
         <span class="vik">▾</span>
       </div>
       <div class="sig-namn">${esc(s.name)}</div>
