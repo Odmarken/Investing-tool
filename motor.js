@@ -55,7 +55,14 @@ export const MOTORCFG = {
   /* Karens i staplar innan en avslutad idé får fyllas igen. Sex är en praktisk
      spärr mot att samma idé fylls om var femte minut, inte ett uppmätt värde:
      med ärliga fyllningar var karens 0 och 36 oskiljbara (t 1,08 mot 0,93). */
-  karens: 6
+  karens: 6,
+  /* Vilka grader kontot får ta. Satt till bara A på begäran, mot mätningen:
+     med ärliga fyllningar över 63 dagar är A den sämsta graden (08–22:
+     A −0,099 R, t = −1,39, 18 av 48 plusdagar; B +0,015) och i populationen
+     ligger A −0,127 under B −0,052 under C −0,025. Antalet familjer som
+     röstar åt samma håll har aldrig förutsagt utfallet i det här projektet.
+     ['A','B'] ger tillbaka det gamla urvalet och dubbla datainsamlingen. */
+  grader: ['A']
 };
 
 /* ---------- små hjälpare ---------- */
@@ -114,6 +121,10 @@ const SYMS = Object.keys(INSTR);          // enda stället som avgör vilka inst
    Ett kontrakt är golvet: är stoppen så vid att ens ett MNQ riskerar mer än
    taket flaggas det i stället för att affären räknas bort. */
 const MAX_RISK = 700;
+
+/* Får en setup av den här graden handlas? Ett ställe för regeln, så att
+   sidan, molnet, workern och motorns egen fyllning aldrig tycker olika. */
+function handlasGrad(g){ return (MOTORCFG.grader || ['A','B']).includes(g); }
 
 function positionsStorlek(inst, riskPunkter, malPunkter, maxRisk = MAX_RISK){
   const pt = (INSTR[inst] && INSTR[inst].ptValue) || 2;
@@ -1571,7 +1582,7 @@ function assignStatus(sigs, pxByInst){
     const nuT = stapel ? stapel.t : Date.now();
     const karensKvar = avslutad && gammal.slutStapel && (nuT - gammal.slutStapel) < (MOTORCFG.karens || 0)*300000;
     const ledig = !gammal || (avslutad && !karensKvar);
-    if(ledig && rortVid && !order.invalid && (order.grade === 'A' || order.grade === 'B')){
+    if(ledig && rortVid && !order.invalid && handlasGrad(order.grade)){
       const at = Date.now();
       /* Det är ordern som fylls — dess entry, stopp, mål och grad — inte det
          kort som just räknats fram. Kortet får sedan ordern's nivåer via FRYS. */
@@ -1659,7 +1670,7 @@ function assignStatus(sigs, pxByInst){
 export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, minutesSthlm, sthlmKlockslag, sessionVWAP, swings, buildContext,
-  INSTR, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
+  INSTR, RISK_MULT, MAX_RISK, positionsStorlek, handlasGrad, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, brusband, momentLage,
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,

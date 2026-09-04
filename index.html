@@ -893,7 +893,7 @@ import * as MOTOR from './motor.js';
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
-  INSTR, SYMS, RISK_MULT, MAX_RISK, positionsStorlek, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
+  INSTR, SYMS, RISK_MULT, MAX_RISK, positionsStorlek, handlasGrad, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
   moveBounds, pickTarget, makeSignal, generateSignals, combine, assignStatus, MODELL,
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL,
@@ -2870,7 +2870,7 @@ function demoTick(){
 
   STATE.signals.forEach(sig => {
     if(sig.status !== 'ACTIVE') return;
-    if(sig.grade !== 'A' && sig.grade !== 'B') return;     // C handlas inte
+    if(!handlasGrad(sig.grade)) return;                      // MOTORCFG.grader avgör
     if(FAM_HANDLAS[sig.fam] === false) return;             // familjen är mätt förlustbringande
     if(KONTO.oppna[sig.id]) return;
     if(KONTO.affarer.some(a => a.id === sig.id)) return;    // redan avslutad

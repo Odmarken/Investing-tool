@@ -19,7 +19,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
 import {
-  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS,
+  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS, handlasGrad,
   computeNewsBias, biasLage
 } from './motor.js';
 
@@ -249,7 +249,7 @@ export async function kontoVarv(logg = () => {}){
 
   sigs.forEach(s => {
     if(s.status !== 'ACTIVE') return;
-    if(s.grade !== 'A' && s.grade !== 'B') return;
+    if(!handlasGrad(s.grade)) return;
     if(FAM_HANDLAS[s.fam] === false) return;               // mätt förlustbringande familj
     if(konto.oppna[s.id] || konto.affarer.some(a => a.id === s.id)) return;
     konto.oppna[s.id] = {
