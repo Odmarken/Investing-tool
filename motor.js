@@ -1076,7 +1076,7 @@ function makeSignal(ctx, o){
      Nyckeln är stabil medan setupen väntar. Först när den fylls får affären ett
      eget id med fyllningstiden i, så att en avslutad affär inte spärrar nästa
      i samma familj (kontot nycklar både positioner och historik på id). */
-  const nyckel = ctx.inst.key + '|' + o.fam + '|' + o.side;
+  const nyckel = ctx.inst.key + '|' + o.fam + '|' + o.side + (o.variant ? '|' + o.variant : '');
   const levande = LIVE.get(nyckel);
   /* Pullbackkravet är en födelseregel, inte ett överlevnadsvillkor.
 
@@ -1400,7 +1400,7 @@ function generateSignals(ctx){
     const long = px < vw;
     const entry = px + (long ? -0.25*A : 0.25*A);
     S.push(makeSignal(ctx, {
-      fam:'svep', trigger:'limit', side: long?'long':'short', name:'Återgång till VWAP — priset är utsträckt',
+      fam:'svep', variant:'vwap', trigger:'limit', side: long?'long':'short', name:'Återgång till VWAP — priset är utsträckt',
       entry, sl: long ? entry - rm*1.15*A : entry + rm*1.15*A,
       preferPrice: vw, bonus: 3,
       why:[
@@ -1511,8 +1511,27 @@ function assignStatus(sigs, pxByInst){
      fyllningen upptäcktes flera staplar för sent, och stopparna däremellan
      hoppades över. Korsad mot riggens facit gav det +0,32 R där riggen såg
      −0,12 på samma order. */
+  /* En order vars idé lämnat brädet dras — men först prövas stapeln som just
+     stängt mot den, för ordern låg i marknaden under den stapeln. Cronen ser
+     bara var femte minut: nådde priset nivån 15:02 och släppte rösten 15:04
+     var det en riktig fyllning, och sidan, som tittar var femte sekund, hade
+     redan bokat den. Att dra ordern oprövad gav ett aktivt kort på sidan utan
+     position i kontot. Ordern får därför ett tillfälligt kort så att den går
+     genom samma fyllningsprövning som alla andra; fylls den inte försvinner
+     kortet igen och ordern med det. */
   const kvar = new Set(sigs.map(s => s.nyckel));
-  for(const k of [...VILANDE.keys()]) if(!kvar.has(k)) VILANDE.delete(k);
+  const provas = [];
+  for(const [k, o] of VILANDE){
+    if(kvar.has(k)) continue;
+    /* Löper det redan en affär på idén — till exempel en som molnet fyllt och
+       sidan just tagit emot — finns inget att pröva: ordern är överspelad. */
+    const lop = LIVE.get(k);
+    if(lop && lop.sig && !lop.hitTp && !lop.hitSl){ VILANDE.delete(k); continue; }
+    const bars = SENASTE_BARS.get(o.inst) || null;
+    if(bars && nz(pxByInst[o.inst])) provas.push(Object.assign({}, o, { bars, provkort: true }));
+    else VILANDE.delete(k);
+  }
+  if(provas.length) sigs = sigs.concat(provas);
 
   sigs.forEach(s => {
     const px = pxByInst[s.inst];
@@ -1525,7 +1544,7 @@ function assignStatus(sigs, pxByInst){
        men ordern som ska ligga ute i morgon är dagens. Sparades den efter FRYS
        blev den gamla entryn ny vilande order, "fylldes" direkt eftersom priset
        lämnat den för länge sedan, och stoppades på samma stapel. */
-    const farsk = { side: s.side, trigger: s.trigger, invalid: !!s.invalid,
+    const farsk = { nyckel: s.nyckel, inst: s.inst, atr: s.atr, side: s.side, trigger: s.trigger, invalid: !!s.invalid,
       entry: s.entry, sl: s.sl, tp: s.tp, risk: s.risk, ptsTp: s.ptsTp, rr: s.rr, grade: s.grade,
       backers: s.backers, backN: s.backN, against: s.against, conf: s.conf, ai: s.ai, ev: s.ev, x: s.x,
       stangVid: s.stangVid, kontrakt: s.kontrakt, riskUsd: s.riskUsd, malUsd: s.malUsd,
@@ -1662,6 +1681,10 @@ function assignStatus(sigs, pxByInst){
     s.kvarStopp  = Math.abs(px - s.sl);
     s.restRR     = s.kvarStopp > 0 ? s.kvarMal/s.kvarStopp : null;
   });
+  /* Provkorten: ett som fyllts är nu en riktig affär i LIVE och får stå kvar
+     som kort; ett som inte fyllts tas bort, och dess order dras. */
+  sigs = sigs.filter(s => !s.provkort || LIVE.has(s.nyckel) && LIVE.get(s.nyckel).handelsId === s.id);
+  for(const k of [...VILANDE.keys()]) if(!kvar.has(k)) VILANDE.delete(k);
   return sigs;
 }
 
