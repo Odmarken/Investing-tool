@@ -1825,24 +1825,26 @@ function kopplaSignalKlick(){
   });
 }
 
-/* Uppmätt träff i stället för konf.
+/* KONF som förut — bar och en siffra — med den uppmätta träffen i bakgrunden.
 
-   Konf var en checklista som toppade på 93 för 40 % av alla setups och pekade
-   åt fel håll: 92–99 gav 36 % träff, 0–54 gav 42 %. Den räknas fortfarande —
-   modellen använder den som drag — men visas inte. I stället: familjens och
-   gradens träff ur riggens senaste körning, med antalet bredvid, och kontots
-   egna avslutade affärer i samma familj och grad. Båda är mätta, ingen är
-   en prediktion. Saknas riggens tabell (modell.js inte omkörd) visas bara
-   kontots egen rad. */
+   Konf är en checklista (börja på 44, plus för medvind, RSI, volym, grad,
+   klipp vid 93) och inte en sannolikhet; mätt pekar den åt fel håll. Men den
+   är lätt att läsa, och det är den man vill se på kortet. Det mätta ligger
+   därför i verktygstipset: familjens och gradens träff ur riggen, med antal
+   och snitt-R, och kontots egna avslutade affärer i samma familj och grad. */
 function traffHtml(s){
+  const cCls = s.conf >= 68 ? 'hi' : s.conf < 45 ? 'lo' : '';
   const t = s.traff;
   const egna = (KONTO.affarer || []).filter(a => a.nyckel && a.nyckel.split('|')[1] === s.fam && a.grade === s.grade);
   const vinst = egna.filter(a => a.dollar > 0).length;
-  const bar = t ? `<div class="confbar ${t.traff >= 40 ? 'hi' : t.traff < 33 ? 'lo' : ''}"><i style="width:${t.traff}%"></i></div>` : '';
-  const rigg = t ? `<b class="mono" style="font-size:11px">${t.traff} %</b><i class="dim" style="font-style:normal;font-size:9px">${t.n} setups · ${fmtSigned(t.R, 2)} R</i>`
-                 : '<i class="dim" style="font-style:normal;font-size:9px">ej mätt — kör npm run trana</i>';
-  const konto = egna.length ? `<i class="dim" style="font-style:normal;font-size:9px;margin-left:6px">kontot ${vinst} av ${egna.length}</i>` : '';
-  return `<div class="conf" title="Uppmätt träff för ${s.famName || s.fam} · grad ${s.grade}, netto, ur riggens senaste körning — inte en sannolikhet för just den här affären"><i class="dim" style="font-style:normal;font-size:9px;letter-spacing:.8px">TRÄFF</i>${bar}${rigg}${konto}</div>`;
+  const rad = [];
+  rad.push('Konf är en checklista, inte en sannolikhet.');
+  if(t) rad.push('Uppmätt för ' + (s.famName || s.fam) + ' · grad ' + s.grade + ': ' + t.traff + ' % träff på ' + t.n + ' setups, snitt ' + fmtSigned(t.R, 2) + ' R (riggen, netto).');
+  else  rad.push('Ingen uppmätt träff än — kör npm run trana.');
+  if(egna.length) rad.push('Kontot: ' + vinst + ' av ' + egna.length + ' i samma familj och grad.');
+  return `<div class="conf" title="${esc(rad.join(' '))}"><i class="dim" style="font-style:normal;font-size:9px;letter-spacing:.8px">KONF</i>
+          <div class="confbar ${cCls}"><i style="width:${s.conf}%"></i></div>
+          <b class="mono" style="font-size:11px">${s.conf}%</b></div>`;
 }
 
 function renderSignals(){
