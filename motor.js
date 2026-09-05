@@ -427,6 +427,23 @@ function aiSannolikhet(x){
    olika. Därför ligger de här, i den fil båda delar.
    ========================================================================== */
 const RULES = [
+  /* --- Krypto --- poängen kr gäller kryptoläget; nq och gc lämnas på noll så
+     att en kryptorubrik inte flyttar Nasdaq-biasen. Kategorin 'krypto' bär
+     filterknappen. Reglerna är skrivna för rubrikspråket hos CoinDesk,
+     Cointelegraph och Decrypt. */
+  {k:/\b(etf)\b.*\b(inflow|inflows|record|approv|approved|launch)/i, nq:0, gc:0, kr:3, c:'krypto', sv:'ETF-inflöden eller godkännande → institutionellt kapital in i spot. Historiskt den starkaste enskilda medvinden för BTC.'},
+  {k:/\b(etf)\b.*\b(outflow|outflows|redemption|delay|reject)/i, nq:0, gc:0, kr:-3, c:'krypto', sv:'ETF-utflöden eller avslag → institutionellt kapital ut. Tryck på spot, särskilt BTC och ETH.'},
+  {k:/\b(hack|hacked|exploit|drained|stolen|breach)\b/i, nq:0, gc:0, kr:-3, c:'krypto', sv:'Hack eller exploit → riskaversion i hela sektorn, altcoins faller mer än BTC. Rörelserna kommer snabbt.'},
+  {k:/\b(sec|lawsuit|sues|charged|indict|subpoena|crackdown|ban|banned)\b/i, nq:0, gc:0, kr:-2, c:'krypto', sv:'Regulatoriskt tryck → osäkerhet om tillgång till marknaden. Negativt, mest för de mindre coinsen.'},
+  {k:/\b(approval|approves|approved|regulat\w* clarity|license|licensed|greenlight)\b/i, nq:0, gc:0, kr:2, c:'krypto', sv:'Regulatorisk klarhet eller licens → lägre risk för sektorn. Positivt över tid, ofta måttligt i 5m.'},
+  {k:/\b(liquidat\w*)\b/i, nq:0, gc:0, kr:-2, c:'krypto', sv:'Likvidationer → tvångsförsäljning i derivaten driver spot. Ofta överskjutande rörelser som delvis återtas.'},
+  {k:/\b(all[- ]time high|ath|record high|new high)\b/i, nq:0, gc:0, kr:2, c:'krypto', sv:'Nya toppar → momentum och FOMO; trendfortsättningar bär, men svepen över gamla toppar blir vanligare.'},
+  {k:/\b(bankrupt|insolven\w*|halts? withdrawals|collapse|depeg)\b/i, nq:0, gc:0, kr:-3, c:'krypto', sv:'Insolvens, stoppade uttag eller depeg → smittorisk i sektorn. Historiskt de djupaste och snabbaste fallen.'},
+  {k:/\b(whale|whales)\b.*\b(buy|buys|accumulat|bought)/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Stora köp på kedjan → efterfrågesignal. Svag men riktad.'},
+  {k:/\b(whale|whales)\b.*\b(sell|sells|dump|moved|transfer)/i, nq:0, gc:0, kr:-1, c:'krypto', sv:'Stora flyttar eller försäljningar → utbudssignal. Svag men riktad.'},
+  {k:/\b(halving|upgrade|mainnet|hard fork|dencun|pectra)\b/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Protokollhändelse → uppmärksamhet och positionering. Ofta "köp ryktet, sälj nyheten".'},
+  {k:/\b(stablecoin|tether|usdt|usdc)\b.*\b(supply|mint|minted|inflow)/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Växande stablecoin-utbud → torrt pulver på börserna. Stödjande för hela sektorn.'},
+  {k:/\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|dogecoin|doge|shiba|pepe|memecoin|altcoin|crypto|defi|blockchain)\b/i, nq:0, gc:0, kr:0, c:'krypto', sv:'Kryptonyhet utan tydlig riktningseffekt i sig.'},
   // --- Inflation ---
   {k:/\b(cpi|inflation)\b.*\b(hotter|higher|beats|above|rises|jump|accelerat)/i, nq:-3, gc:-1, c:'macro', sv:'Hetare inflation än väntat → högre räntebana och press på tillväxtaktier. Tyngst i de längsta techcaseen.'},
   {k:/\b(cpi|inflation)\b.*\b(cool|softer|lower|below|eases|slow|miss)/i, nq:3, gc:2, c:'macro', sv:'Svalare inflation → marknaden prisar in mjukare Fed. Lägre realräntor lyfter värderingen på tillväxtbolag, alltså medvind för NQ.'},
@@ -492,30 +509,30 @@ const RISK_EVENTS = [
 
 function analyseHeadline(title, summary){
   const txt = (title + ' ' + (summary||'')).replace(/\s+/g,' ');
-  let nq=0, gc=0, cats=new Set(), svs=[];
+  let nq=0, gc=0, kr=0, cats=new Set(), svs=[];
   for(const r of RULES){
     if(r.k.test(txt)){
-      nq += r.nq; gc += r.gc; cats.add(r.c);
+      nq += r.nq; gc += r.gc; kr += (r.kr || 0); cats.add(r.c);
       if(svs.length < 2 && r.sv) svs.push(r.sv);
     }
   }
-  nq = clamp(nq,-6,6); gc = clamp(gc,-6,6);
-  if(!svs.length) svs.push('Allmän marknadsnyhet utan tydlig riktningseffekt på NQ.');
-  return { nq, gc, cats:[...cats], sv:svs, hot: Math.abs(nq)>=3 || Math.abs(gc)>=3 };
+  nq = clamp(nq,-6,6); gc = clamp(gc,-6,6); kr = clamp(kr,-6,6);
+  if(!svs.length) svs.push('Allmän marknadsnyhet utan tydlig riktningseffekt.');
+  return { nq, gc, kr, cats:[...cats], sv:svs, hot: Math.abs(nq)>=3 || Math.abs(gc)>=3 || Math.abs(kr)>=3 };
 }
 
 function computeNewsBias(items){
-  let nq=0, gc=0, wsum=0;
+  let nq=0, gc=0, kr=0, wsum=0;
   const now = Date.now();
   items.slice(0,45).forEach(it=>{
     const a = it.an || analyseHeadline(it.title, it.desc);
     it.an = a;
     const ageH = (now - it.ts)/3.6e6;
     const w = Math.exp(-ageH/7);              // halveringstid ~5h
-    nq += a.nq*w; gc += a.gc*w; wsum += w;
+    nq += a.nq*w; gc += a.gc*w; kr += (a.kr || 0)*w; wsum += w;
   });
   const norm = v => wsum ? clamp(v/wsum*33, -100, 100) : 0;
-  return { nq: norm(nq), gc: norm(gc) };
+  return { nq: norm(nq), gc: norm(gc), kr: norm(kr) };
 }
 
 /* Vilket håll nyhetsflödet lutar åt, och hur starkt. Under tröskeln är svaret

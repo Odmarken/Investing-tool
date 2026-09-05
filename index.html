@@ -129,8 +129,8 @@ body.krypto{
 }
 /* Nasdaq-delarna finns inte i kryptoläget: bias, nyhetsbias, kalender,
    riskhändelser, Sverige och TradingView-feeden. */
-body.krypto .bias-wrap, body.krypto #nyBias, body.krypto #feedPill,
-body.krypto #kalPanel, body.krypto #riskPanel, body.krypto #sePanel{display:none !important}
+body.krypto #feedPill, body.krypto #kalender,
+body.krypto #riskPanel, body.krypto #sePanel{display:none !important}
 body.krypto .btn.primary{background:linear-gradient(180deg,#155C36,#0E2A1E);border-color:#2A8F5C;color:#B7F5C8}
 body.krypto .ph .accent{background:#FFD60A}
 body.krypto #demoSektion{display:none !important}
@@ -665,7 +665,7 @@ footer b{color:var(--muted)}
 
   <!-- ============ VÄNSTER: INTERNATIONELLT ============ -->
   <div class="col col-side">
-    <div class="panel" id="kalPanel">
+    <div class="panel">
       <div class="ph">
         <span class="accent"></span><h2>Internationellt flöde</h2>
         <span class="right"><span id="newsCount">0</span> nyheter · <span id="newsAge">–</span></span>
@@ -1289,6 +1289,7 @@ function tillLage(lage, tyst){
   try{ localStorage.setItem('riptide.lage', STATE.lage); }catch(e){}
   document.body.classList.toggle('krypto', STATE.lage === 'krypto');
   const b = $('#btnKrypto'); if(b){ b.classList.toggle('on', STATE.lage === 'krypto'); b.textContent = STATE.lage === 'krypto' ? '◈ Nasdaq' : '◈ Crypto'; }
+  const nf = $('[data-nf="nq"]'); if(nf) nf.textContent = STATE.lage === 'krypto' ? 'Krypto' : 'Nasdaq';
   const sub = $('.sub'); if(sub) sub.textContent = STATE.lage === 'krypto'
     ? 'Krypto · BTC ETH SOL XRP DOGE SHIB PEPE · Realtidsanalys · 5 min · Dygnet runt'
     : 'MNQ · Micro Nasdaq-100 · Realtidsanalys · 5 min · Day trades';
@@ -1654,7 +1655,7 @@ function biasWord(b){
 
 function buildBias(key){
   const c = STATE.ctx[key]; if(!c) return 0;
-  const nb = key==='NQ' ? STATE.newsBias.nq : STATE.newsBias.gc;
+  const nb = key==='NQ' ? STATE.newsBias.nq : grupp(INSTR[key]) === 'crypto' ? (STATE.newsBias.kr || 0) : STATE.newsBias.gc;
   let b = c.trend*0.62 + nb*0.28;
   b += (c.rsi - 50) * 0.35;
   if(nz(c.vwap)) b += (c.px > c.vwap ? 6 : -6);
@@ -1673,10 +1674,9 @@ function makeSummary(){
 
   const tech = `Tekniskt är 5m-strukturen i ${n.inst.kort || 'NQ'} <b>${trendWord(n.trend)}</b> — priset ligger ${n.px>n.vwap?'över':'under'} VWAP (${fmt(n.vwap,1)}) och EMA21 står i ${fmt(n.e21,1)}. RSI ${Math.round(n.rsi)}${n.rsi>70?' (överköpt — akta jaganden)':n.rsi<30?' (översålt — leta reclaim, inte fritt fall)':''}. Relativ volym ${n.relVol.toFixed(2)}x.`;
 
-  const flow = STATE.lage === 'krypto'
-    ? `Kryptoflödet visas till vänster (${STATE.news.length} rubriker) — ingen bias räknas på det, och inga spärrar följer av det.`
-    : STATE.news.length
-    ? `Nyhetsflödet lutar ${STATE.newsBias.nq>10?'positivt':STATE.newsBias.nq<-10?'negativt':'neutralt'} för Nasdaq (${STATE.news.length} rubriker analyserade).`
+  const nbFlow = STATE.lage === 'krypto' ? (STATE.newsBias.kr || 0) : STATE.newsBias.nq;
+  const flow = STATE.news.length
+    ? `Nyhetsflödet lutar ${nbFlow>10?'positivt':nbFlow<-10?'negativt':'neutralt'} för ${STATE.lage === 'krypto' ? 'krypto' : 'Nasdaq'} (${STATE.news.length} rubriker analyserade).`
     : 'Inga nyhetsflöden kunde läsas in just nu — analysen bygger enbart på pris och struktur.';
 
   const plan = (()=>{
@@ -1703,7 +1703,8 @@ function makeSummary(){
     : '';
 
   const warn = ss.k==='closed'
-    ? '<b style="color:var(--amber)">Marknaden är stängd</b> — nivåerna gäller som förberedelse inför nästa session.'
+    ? (STATE.lage === 'krypto' ? '<b style="color:var(--amber)">Krypto handlas dygnet runt</b> — ingen stängning; nivåerna gäller nu.'
+                                 : '<b style="color:var(--amber)">Marknaden är stängd</b> — nivåerna gäller som förberedelse inför nästa session.')
     : (ss.k==='globex' ? 'Nattsessionen har tunn likviditet: räkna med falska brott och håll storleken nere.' : '');
 
   let html = `<span class="lead">${lead}</span><br><br>${tech}<br><br>${flow} ${plan}`;
@@ -1749,6 +1750,7 @@ function newsHTML(it, sv=false){
   it.an = a;
   const chips = [];
   if(a.nq) chips.push(`<span class="impact ${a.nq>0?'up':'dn'}">NQ ${a.nq>0?'▲':'▼'}${Math.abs(a.nq)}</span>`);
+  if(a.kr) chips.push(`<span class="impact ${a.kr>0?'up':'dn'}">BTC ${a.kr>0?'▲':'▼'}${Math.abs(a.kr)}</span>`);
   if(!chips.length) chips.push('<span class="impact nu">NEUTRAL</span>');
 
   const styrka = Math.abs(a.nq) >= 3 ? 'stark' : Math.abs(a.nq) === 2 ? 'tydlig' : Math.abs(a.nq) === 1 ? 'svag' : 'ingen';
@@ -1801,7 +1803,7 @@ function nyhetAterstall(el){
 function renderNews(){
   const el = $('#newsList'), f = STATE.newsFilter;
   let list = STATE.news;
-  if(f==='nq')    list = list.filter(x=>x.an && x.an.cats.includes('nq'));
+  if(f==='nq')    list = list.filter(x=>x.an && x.an.cats.includes(STATE.lage === 'krypto' ? 'krypto' : 'nq'));
   if(f==='gold')  list = list.filter(x=>x.an && x.an.cats.includes('gold'));
   if(f==='macro') list = list.filter(x=>x.an && x.an.cats.includes('macro'));
   if(f==='hot')   list = list.filter(x=>x.an && x.an.hot);
@@ -1898,9 +1900,14 @@ function renderBias(){
     $(elK).style.left = ((v+100)/200*100).toFixed(1)+'%';
     $(elT).innerHTML = txt;
   };
-  const n = STATE.ctx.NQ;
-  set('nq', STATE.bias.nq, '#biasNqV', '#biasNqK', '#biasNqT',
-    n ? `Teknik ${(n.trend>0?'+':'')+Math.round(n.trend)} · nyheter ${(STATE.newsBias.nq>0?'+':'')+Math.round(STATE.newsBias.nq)} · RSI ${Math.round(n.rsi)}. ${n.px>n.vwap?'Över':'Under'} VWAP.` : '–');
+  const krypto = STATE.lage === 'krypto';
+  const n = krypto ? STATE.ctx[STATE.chartSym] : STATE.ctx.NQ;
+  const chip = $('.biasbox .chip'), rub = $('.biasbox .bt b');
+  if(chip) chip.textContent = krypto ? (n ? n.inst.kort : 'BTC') : 'MNQ';
+  if(rub) rub.textContent = krypto ? 'Krypto-bias' : 'Nasdaq-bias';
+  const nbv = krypto ? (STATE.newsBias.kr || 0) : STATE.newsBias.nq;
+  set('nq', krypto ? (STATE.bias.kr || 0) : STATE.bias.nq, '#biasNqV', '#biasNqK', '#biasNqT',
+    n ? `Teknik ${(n.trend>0?'+':'')+Math.round(n.trend)} · nyheter ${(nbv>0?'+':'')+Math.round(nbv)} · RSI ${Math.round(n.rsi)}. ${n.px>n.vwap?'Över':'Under'} VWAP.` : '–');
 }
 
 /* Innan affären är igång: villkoret. När den är igång: varför den lever och
@@ -3732,6 +3739,7 @@ function liveFranMolnet(k){
    som är bredare men bara finns här.
    -------------------------------------------------------------------------- */
 function aktivBias(){
+  if(STATE.lage === 'krypto') return { poang: STATE.newsBias.kr || 0, n: STATE.news.length, kalla: 'kryptoflödet' };
   const m = STATE.molnBias;
   if(m && isFinite(m.poang) && Date.now() - (m.nar || 0) < 20*60000){
     return { poang: m.poang, n: m.n || 0, kalla: 'molnet' };
@@ -3766,18 +3774,26 @@ function renderNyhetsbias(){
 }
 
 function buildAllSignals(){
-  const nq = STATE.ctx.NQ;
+  /* Alla instrument i det aktiva läget — förr bara STATE.ctx.NQ, vilket gjorde
+     kryptoläget signallöst hur många kontexter som än fanns. Nyhetsbiasen är
+     lägets: Nasdaqs för NQ, kryptons för kryptona, och den styr hållet på
+     samma sätt i båda (och är lika omätt i båda). */
   const bias = aktivBias();
-  if(nq){
-    nq.newsBias = bias.poang;
-    nq.biasRiktning = biasLage(bias.poang).riktning;   // styr vilket håll som ges
+  const alla = [];
+  for(const k of aktivaSyms()){
+    const c = STATE.ctx[k]; if(!c) continue;
+    c.newsBias = bias.poang;
+    c.biasRiktning = biasLage(bias.poang).riktning;   // styr vilket håll som ges
+    try{ alla.push(...generateSignals(c)); }catch(e){ coreRead('signalfel ' + k + ': ' + (e.message || e)); }
   }
+  const nq = STATE.ctx[STATE.chartSym] || STATE.ctx.NQ;     // för röstremsan i kärnan
   const byGrade = (a,b) => (GRADE_RANK[a.grade]-GRADE_RANK[b.grade]) || (b.conf-a.conf);
-  const nqAll = nq ? generateSignals(nq).sort(byGrade) : [];
+  const nqAll = alla.sort(byGrade);
   // En setup som redan är fylld ska aldrig konkurrera om plats i listan.
   const igang = nqAll.filter(x => LIVE.has(x.nyckel));
   const ovriga = nqAll.filter(x => !LIVE.has(x.nyckel));
-  const sig = igang.concat(ovriga.slice(0, Math.max(3, 6 - igang.length)));
+  const tak = STATE.lage === 'krypto' ? 14 : 6;                  // sju instrument behöver plats
+  const sig = igang.concat(ovriga.slice(0, Math.max(3, tak - igang.length)));
   // en påbörjad affär ska synas tills den är avslutad, även om motorn slutat föreslå den
   const idn = new Set(sig.map(x => x.nyckel));
   LIVE.forEach((st, id) => {
@@ -3814,6 +3830,7 @@ function buildAllSignals(){
 
 function paint(){
   STATE.bias.nq = buildBias('NQ');
+  STATE.bias.kr = buildBias(grupp(INSTR[STATE.chartSym]) === 'crypto' ? STATE.chartSym : 'BTC');
   buildAllSignals();
 
   renderTape(); renderNews(); renderKalender(); renderSeNews(); renderSe(); renderRisk();
