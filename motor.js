@@ -110,8 +110,23 @@ const INSTR = {
   // Guld är pausat. Lägg tillbaka raden nedan så följer resten av sidan med av sig själv:
   // GC: { key:'GC', yahoo:'GC=F', alt:['XAUUSD=X','GLD'], label:'GC · Guld', unit:'$',
   //       tick:0.1, dec:1, ptValue:100, base:3385, vol:0.0016 }
+
+  /* Krypto. Samma motor, samma familjer, samma gradering — men dygnet runt:
+     inget handelsfönster, ingen tidsstängning, ingen nyhetsbias (den räknas på
+     Nasdaq) och inget konto. grupp:'crypto' är det sidan växlar på; NQ har
+     grupp:'nq' underförstått. ptValue är dollar per punkt för en enhet, tick är
+     minsta prissteg på de stora börserna, dec hur många decimaler kortet visar.
+     base och vol används bara av den simulerade reservdatan. */
+  BTC:  { key:'BTC',  yahoo:'BTC-USD',  alt:[], label:'BTC · Bitcoin',  unit:'$', kort:'BTC',  tick:1,        dec:0, ptValue:1, base:60000,  vol:0.0030, grupp:'crypto', dygnetRunt:true },
+  ETH:  { key:'ETH',  yahoo:'ETH-USD',  alt:[], label:'ETH · Ether',    unit:'$', kort:'ETH',  tick:0.1,      dec:1, ptValue:1, base:2500,   vol:0.0036, grupp:'crypto', dygnetRunt:true },
+  SOL:  { key:'SOL',  yahoo:'SOL-USD',  alt:[], label:'SOL · Solana',   unit:'$', kort:'SOL',  tick:0.01,     dec:2, ptValue:1, base:150,    vol:0.0045, grupp:'crypto', dygnetRunt:true },
+  XRP:  { key:'XRP',  yahoo:'XRP-USD',  alt:[], label:'XRP · Ripple',   unit:'$', kort:'XRP',  tick:0.0001,   dec:4, ptValue:1, base:0.6,    vol:0.0040, grupp:'crypto', dygnetRunt:true },
+  DOGE: { key:'DOGE', yahoo:'DOGE-USD', alt:[], label:'DOGE · Dogecoin',unit:'$', kort:'DOGE', tick:0.00001,  dec:5, ptValue:1, base:0.12,   vol:0.0055, grupp:'crypto', dygnetRunt:true },
+  SHIB: { key:'SHIB', yahoo:'SHIB-USD', alt:[], label:'SHIB · Shiba Inu',unit:'$',kort:'SHIB', tick:0.00000001,dec:8,ptValue:1, base:0.00002,vol:0.0060, grupp:'crypto', dygnetRunt:true },
+  PEPE: { key:'PEPE', yahoo:'PEPE24478-USD', alt:['PEPE-USD'], label:'PEPE · Pepe', unit:'$', kort:'PEPE', tick:0.00000001, dec:8, ptValue:1, base:0.00001, vol:0.0080, grupp:'crypto', dygnetRunt:true }
 };
-const SYMS = Object.keys(INSTR);          // enda stället som avgör vilka instrument som körs
+const SYMS = Object.keys(INSTR);          // alla instrument; sidan väljer grupp, molnet kör bara NQ
+const grupp = inst => (inst && inst.grupp) || 'nq';
 
 /* ---------- positionsstorlek ----------
    Förlusten är det som hålls fast: en stoppad affär kostar MAX_RISK dollar,
@@ -970,11 +985,15 @@ function targetCandidates(ctx){
   add(ctx.e200, 0.66, 'EMA 200');
   ctx.recentHi.forEach(s=> add(s.p, 0.72, 'Swinghögsta'));
   ctx.recentLo.forEach(s=> add(s.p, 0.72, 'Swinglägsta'));
-  const step = ctx.inst.key==='NQ' ? 50 : 10;
+  /* Runda nivåer: 50 och 100 på NQ; på allt annat ett steg kring 0,2 procent
+     av priset, avrundat till 1, 2 eller 5 gånger en tiopotens, med vart femte
+     som stor nivå. Så fungerar 60 000 för bitcoin och 0,00002 för shiba lika. */
+  const rundSteg = p => { const r = p*0.002, e = Math.pow(10, Math.floor(Math.log10(r))), m = r/e; return (m < 1.5 ? 1 : m < 3.5 ? 2 : 5)*e; };
+  const step = ctx.inst.key==='NQ' ? 50 : rundSteg(px);
   const anchor = Math.round(px/step)*step;
   for(let k=-9;k<=9;k++){
     const q = anchor + k*step;
-    const major = ctx.inst.key==='NQ' ? (q % 100 === 0) : (q % 50 === 0);
+    const major = ctx.inst.key==='NQ' ? (Math.abs(q % 100) < 1e-9) : (Math.abs((q/step) % 5) < 1e-9);
     add(q, major ? 0.62 : 0.40, major ? 'Stor rund nivå' : 'Rund nivå');
   }
   return c;
@@ -1059,7 +1078,7 @@ function makeSignal(ctx, o){
   /* Tidsstängning. Momentfamiljen har sin egen (sessionens slut); handelsfönstret
      lägger sin ovanpå, och den tidigaste gäller. */
   let stangVid = o.stangVid || null;
-  if(MOTORCFG.fonster){
+  if(MOTORCFG.fonster && !ctx.inst.dygnetRunt){
     const slut = sthlmKlockslag(ctx.bars[ctx.i].t, MOTORCFG.fonster.till);
     stangVid = stangVid ? Math.min(stangVid, slut) : slut;
   }
@@ -1187,7 +1206,7 @@ function generateSignals(ctx){
      tillbaka — en order lagd 21:55 ska inte fyllas på en nattstapel. Pågående
      affärer lever i LIVE och läggs tillbaka av assignStatus tills de stängs.
      Rösterna räknas ändå, så panelen visar var marknaden står. */
-  if(MOTORCFG.fonster){
+  if(MOTORCFG.fonster && !ctx.inst.dygnetRunt){
     const mS = minutesSthlm(ctx.bars[ctx.i].t);
     if(mS < MOTORCFG.fonster.fran || mS >= MOTORCFG.fonster.sistaEntry){
       for(const k of [...VILANDE.keys()]) if(k.startsWith(ctx.inst.key + '|')) VILANDE.delete(k);
@@ -1698,7 +1717,7 @@ function assignStatus(sigs, pxByInst){
 export {
   SYMS, clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, minutesSthlm, sthlmKlockslag, sessionVWAP, swings, buildContext,
-  INSTR, RISK_MULT, MAX_RISK, positionsStorlek, handlasGrad, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
+  INSTR, grupp, RISK_MULT, MAX_RISK, positionsStorlek, handlasGrad, FAM, FAM_KORT, FAM_KEY, FAM_N, FAM_HANDLAS, GRADE_RANK,
   adx, DRAG_NAMN, drag, aiSannolikhet, MODELL, orbLage, brusband, momentLage,
   RULES, RISK_EVENTS, analyseHeadline, computeNewsBias, biasLage, BIAS_TROSKEL, BIAS_FULLT,
   rangeBox, tightRange, ictKillzone, ictState, familyVotes, gradeFor,
