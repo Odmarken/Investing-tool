@@ -40,6 +40,8 @@
   --glow-lblue: 0 0 0 1px rgba(79,211,255,.25), 0 0 18px rgba(79,211,255,.18);
   --glow-scar:  0 0 0 1px rgba(255,46,76,.35), 0 0 22px rgba(255,46,76,.22);
   --glow-green: 0 0 0 1px rgba(0,229,140,.35), 0 0 22px rgba(0,229,140,.20);
+  --lb: 79,211,255;     /* accentens rgb-tripel, för rgba(var(--lb), a) */
+  --l2: 27,58,92;       /* linjefärgens rgb-tripel */
   --r: 10px;
 }
 
@@ -53,7 +55,7 @@ body{
   background-image:
     radial-gradient(1200px 600px at 15% -10%, rgba(30,90,255,.13), transparent 60%),
     radial-gradient(900px 500px at 95% 0%, rgba(255,46,76,.09), transparent 60%),
-    radial-gradient(1000px 700px at 50% 120%, rgba(79,211,255,.07), transparent 60%);
+    radial-gradient(1000px 700px at 50% 120%, rgba(var(--lb),.07), transparent 60%);
   background-attachment:fixed;
 }
 ::-webkit-scrollbar{width:8px;height:8px}
@@ -110,18 +112,25 @@ header.topbar{
   padding:6px 12px;border-radius:7px;cursor:pointer;transition:.16s;
 }
 .btn:hover{border-color:var(--lblue);color:var(--lblue);box-shadow:var(--glow-lblue)}
-.btn.primary{background:linear-gradient(180deg,#17335c,#0E2038);border-color:#2A5C8F;color:var(--lblue-2)}
+.btn.primary{background:linear-gradient(180deg,#17335c,var(--panel-3));border-color:#2A5C8F;color:var(--lblue-2)}
 .btn.scar{border-color:rgba(255,46,76,.45);color:var(--scarlet-2)}
-.btn.krypto{border-color:rgba(61,220,132,.45);color:#B7F5C8;background:linear-gradient(180deg,#0E2A1E,#08111F)}
+.btn.krypto{border-color:rgba(61,220,132,.45);color:#B7F5C8;background:linear-gradient(180deg,#0E2A1E,var(--panel))}
 .btn.krypto:hover{border-color:#3DDC84;color:#FFD60A;box-shadow:0 0 0 1px rgba(61,220,132,.3),0 0 18px rgba(61,220,132,.2)}
 .btn.krypto.on{background:linear-gradient(180deg,#1FA85A,#0B4A2B);border-color:#FFD60A;color:#FFF7C2;box-shadow:0 0 0 1px rgba(255,214,10,.35),0 0 18px rgba(61,220,132,.25)}
 /* Kryptoläget: samma sida i grönt och gult. Variablerna bär det blå överallt,
    så det räcker att byta dem; demokontot finns inte i det här läget. */
 body.krypto{
+  --bg:#020503; --bg-2:#04100A; --panel:#061A10; --panel-2:#08221A; --panel-3:#0B2E20;
+  --line:#0F3A28; --line-2:#1A5C3E;
   --blue:#1FA85A; --blue-deep:#0B4A2B; --lblue:#3DDC84; --lblue-2:#B7F5C8;
-  --panel-3:#0E2A1E; --line-2:#1E4A33; --amber:#FFD60A;
+  --amber:#FFD60A; --muted:#5E9A7A; --muted-2:#3D6B52; --text-2:#A9D9BE;
+  --lb: 61,220,132; --l2: 26,92,62;
   --glow-lblue:0 0 0 1px rgba(61,220,132,.25),0 0 18px rgba(61,220,132,.18);
 }
+/* Nasdaq-delarna finns inte i kryptoläget: bias, nyhetsbias, kalender,
+   riskhändelser, Sverige och TradingView-feeden. */
+body.krypto .bias-wrap, body.krypto #nyBias, body.krypto #feedPill,
+body.krypto #kalPanel, body.krypto #riskPanel, body.krypto #sePanel{display:none !important}
 body.krypto .btn.primary{background:linear-gradient(180deg,#155C36,#0E2A1E);border-color:#2A8F5C;color:#B7F5C8}
 body.krypto .ph .accent{background:#FFD60A}
 body.krypto #demoSektion{display:none !important}
@@ -183,7 +192,7 @@ body.krypto #btnAuth{display:none}
 }
 .panel::before{
   content:"";position:absolute;inset:0 0 auto 0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(79,211,255,.45),transparent);
+  background:linear-gradient(90deg,transparent,rgba(var(--lb),.45),transparent);
 }
 .ph{
   display:flex;align-items:center;gap:9px;padding:10px 13px;
@@ -203,7 +212,7 @@ body.krypto #btnAuth{display:none}
 }
 .chip.g{color:var(--green);border-color:rgba(0,229,140,.4);background:rgba(0,229,140,.09)}
 .chip.r{color:var(--red);border-color:rgba(255,51,85,.4);background:rgba(255,51,85,.09)}
-.chip.b{color:var(--lblue);border-color:rgba(79,211,255,.4);background:rgba(79,211,255,.09)}
+.chip.b{color:var(--lblue);border-color:rgba(var(--lb),.4);background:rgba(var(--lb),.09)}
 .chip.s{color:var(--scarlet-2);border-color:rgba(255,46,76,.45);background:rgba(255,46,76,.10)}
 .chip.a{color:var(--amber);border-color:rgba(255,176,32,.4);background:rgba(255,176,32,.09)}
 
@@ -229,7 +238,7 @@ body.krypto #btnAuth{display:none}
 .nybias .procent{font-family:var(--mono);font-size:12px;font-weight:800;min-width:42px;text-align:right}
 .nybias .txt{flex-basis:100%;font-size:10.5px;color:var(--muted);line-height:1.5}
 .nybias .txt b{color:var(--text-2)}
-@keyframes biasBlink{0%{background:rgba(79,211,255,.22)}100%{background:rgba(3,6,14,.5)}}
+@keyframes biasBlink{0%{background:rgba(var(--lb),.22)}100%{background:rgba(3,6,14,.5)}}
 .nybias.andrad{animation:biasBlink 1.6s ease-out}
 
 .sig:last-child{margin-bottom:0}
@@ -288,7 +297,7 @@ body.krypto #btnAuth{display:none}
   0%,100%{box-shadow:0 0 0 1px rgba(255,46,76,.25), 0 0 20px rgba(255,46,76,.14)}
   50%    {box-shadow:0 0 0 1px rgba(255,46,76,.55), 0 0 40px rgba(255,46,76,.32)}
 }
-.sig.triggered{border-color:rgba(79,211,255,.5);box-shadow:0 0 0 1px rgba(79,211,255,.2),0 0 20px rgba(79,211,255,.12)}
+.sig.triggered{border-color:rgba(var(--lb),.5);box-shadow:0 0 0 1px rgba(var(--lb),.2),0 0 20px rgba(var(--lb),.12)}
 .sig.done{opacity:.5}
 
 .sig-top{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}
@@ -298,7 +307,7 @@ body.krypto #btnAuth{display:none}
 }
 .fam{display:inline-flex;align-items:center;height:17px;padding:0 6px;border-radius:5px;font-size:8.5px;
   font-weight:700;letter-spacing:.7px;font-family:var(--sans);white-space:nowrap}
-.fam.trend{background:rgba(79,211,255,.13);color:var(--lblue);border:1px solid rgba(79,211,255,.40)}
+.fam.trend{background:rgba(var(--lb),.13);color:var(--lblue);border:1px solid rgba(var(--lb),.40)}
 .fam.svep{background:rgba(255,176,32,.13);color:var(--amber);border:1px solid rgba(255,176,32,.40)}
 .fam.brott{background:rgba(140,230,255,.11);color:var(--lblue-2);border:1px solid rgba(140,230,255,.32)}
 .fam.ict{background:rgba(255,46,76,.15);color:var(--scarlet-2);border:1px solid rgba(255,46,76,.50);
@@ -309,7 +318,7 @@ body.krypto #btnAuth{display:none}
   text-transform:uppercase;color:var(--muted);border:1px dashed var(--line-2);border-radius:5px;padding:2px 6px}
 .sig.ohandlad .edge{opacity:.35}
 .strat.A{background:rgba(0,229,140,.16);color:var(--green);border:1px solid rgba(0,229,140,.55)}
-.strat.B{background:rgba(79,211,255,.14);color:var(--lblue);border:1px solid rgba(79,211,255,.45)}
+.strat.B{background:rgba(var(--lb),.14);color:var(--lblue);border:1px solid rgba(var(--lb),.45)}
 .strat.C{background:rgba(255,176,32,.12);color:var(--amber);border:1px solid rgba(255,176,32,.35)}
 .sig-inst{font-weight:800;font-size:12.5px;letter-spacing:.4px}
 .sig-dir{font-family:var(--mono);font-weight:800;font-size:11px;letter-spacing:1.2px;padding:2px 7px;border-radius:5px}
@@ -328,7 +337,7 @@ body.krypto #btnAuth{display:none}
 .status.ACTIVE .d{animation:pulse 1.1s infinite;box-shadow:0 0 8px currentColor}
 @keyframes statBlink{0%,100%{box-shadow:0 0 10px rgba(6,255,165,.25)}50%{box-shadow:0 0 22px rgba(6,255,165,.6)}}
 .status.NÄRA{color:var(--amber);border-color:rgba(255,176,32,.5);background:rgba(255,176,32,.10)}
-.status.LÖPANDE{color:var(--lblue);border-color:rgba(79,211,255,.5);background:rgba(79,211,255,.10)}
+.status.LÖPANDE{color:var(--lblue);border-color:rgba(var(--lb),.5);background:rgba(var(--lb),.10)}
 .status.TP{color:var(--green);border-color:rgba(0,229,140,.5);background:rgba(0,229,140,.12)}
 .status.SL{color:var(--red);border-color:rgba(255,51,85,.5);background:rgba(255,51,85,.12)}
 
@@ -354,8 +363,8 @@ body.krypto #btnAuth{display:none}
 .metrics .m i{font-style:normal;color:var(--muted);font-size:9px;letter-spacing:.8px;text-transform:uppercase}
 .metrics .m b{font-family:var(--mono);font-weight:700;font-size:11px}
 .conf{flex:0 1 300px;min-width:150px;margin-left:auto;display:flex;align-items:center;gap:7px}
-.confbar{flex:1;height:4px;border-radius:3px;background:#0E2038;overflow:hidden}
-.confbar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--lblue));box-shadow:0 0 8px rgba(79,211,255,.6)}
+.confbar{flex:1;height:4px;border-radius:3px;background:var(--panel-3);overflow:hidden}
+.confbar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--lblue));box-shadow:0 0 8px rgba(var(--lb),.6)}
 .confbar.hi i{background:linear-gradient(90deg,#00B96F,var(--green-2));box-shadow:0 0 8px rgba(6,255,165,.6)}
 .confbar.lo i{background:linear-gradient(90deg,#8A2233,var(--scarlet));box-shadow:0 0 8px rgba(255,46,76,.5)}
 
@@ -405,8 +414,8 @@ body.krypto #btnAuth{display:none}
 .news .mer .rad{display:flex;flex-wrap:wrap;gap:5px 14px;font-size:9.5px;color:var(--muted);margin-bottom:9px}
 .news .mer .rad b{color:var(--text-2);font-weight:600}
 .news .mer .kalla{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:var(--lblue);
-  border:1px solid rgba(79,211,255,.35);border-radius:6px;padding:4px 9px;text-decoration:none}
-.news .mer .kalla:hover{background:rgba(79,211,255,.10)}
+  border:1px solid rgba(var(--lb),.35);border-radius:6px;padding:4px 9px;text-decoration:none}
+.news .mer .kalla:hover{background:rgba(var(--lb),.10)}
 .news .sv b{color:var(--lblue)}
 .news.hot{background:linear-gradient(90deg,rgba(255,46,76,.09),transparent 70%);border-left:2px solid var(--scarlet)}
 
@@ -449,7 +458,7 @@ body.krypto #btnAuth{display:none}
 .ct{font:inherit;font-size:10px;font-weight:700;letter-spacing:.6px;padding:4px 10px;border-radius:6px;
   background:transparent;border:1px solid var(--line-2);color:var(--muted);cursor:pointer;transition:.15s}
 .ct:hover{color:var(--lblue)}
-.ct.on{background:rgba(79,211,255,.13);border-color:var(--lblue);color:var(--lblue);box-shadow:0 0 12px rgba(79,211,255,.22)}
+.ct.on{background:rgba(var(--lb),.13);border-color:var(--lblue);color:var(--lblue);box-shadow:0 0 12px rgba(var(--lb),.22)}
 /* ---------- KÄRNA + BACKTEST ---------- */
 .bottom{grid-template-columns:minmax(0,1fr)}
 #coreCanvas{display:block;width:100%;border-radius:0 0 10px 10px}
@@ -496,7 +505,7 @@ body.krypto #btnAuth{display:none}
 .kv:last-child{border-bottom:none}
 .kv span{color:var(--muted)} .kv b{font-family:var(--mono);font-weight:700}
 .empty{padding:24px 14px;text-align:center;color:var(--muted-2);font-size:11px}
-.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(79,211,255,.25);border-top-color:var(--lblue);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(var(--lb),.25);border-top-color:var(--lblue);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
 @keyframes sp{to{transform:rotate(360deg)}}
 footer{padding:14px 18px 26px;text-align:center;color:var(--muted-2);font-size:10px;line-height:1.7}
 footer b{color:var(--muted)}
@@ -608,7 +617,7 @@ footer b{color:var(--muted)}
 .authflik button{flex:1;background:transparent;border:1px solid var(--line-2);color:var(--muted);
   border-radius:7px;padding:8px 10px;font:inherit;font-size:11px;font-weight:800;letter-spacing:.6px;
   text-transform:uppercase;cursor:pointer;transition:.15s}
-.authflik button.on{border-color:var(--lblue);color:var(--lblue);background:rgba(79,211,255,.10)}
+.authflik button.on{border-color:var(--lblue);color:var(--lblue);background:rgba(var(--lb),.10)}
 .authkryss{display:flex;align-items:center;gap:8px;margin:14px 0 2px;font-size:11px;color:var(--text-2);cursor:pointer}
 .authkryss input{width:auto;margin:0;accent-color:var(--lblue)}
 .authfel{display:none;margin-top:12px;padding:8px 10px;border-radius:7px;font-size:11px;line-height:1.5;
@@ -656,7 +665,7 @@ footer b{color:var(--muted)}
 
   <!-- ============ VÄNSTER: INTERNATIONELLT ============ -->
   <div class="col col-side">
-    <div class="panel">
+    <div class="panel" id="kalPanel">
       <div class="ph">
         <span class="accent"></span><h2>Internationellt flöde</h2>
         <span class="right"><span id="newsCount">0</span> nyheter · <span id="newsAge">–</span></span>
@@ -675,7 +684,7 @@ footer b{color:var(--muted)}
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="riskPanel">
       <div class="ph"><span class="accent"></span><h2>Riskhändelser i fokus</h2></div>
       <div class="pb" id="riskBox"><div class="empty">–</div></div>
     </div>
@@ -775,7 +784,7 @@ footer b{color:var(--muted)}
 
   <!-- ============ HÖGER: SVERIGE + TEKNIK ============ -->
   <div class="col col-side">
-    <div class="panel">
+    <div class="panel" id="sePanel">
       <div class="flagbar"></div>
       <div class="ph"><span class="accent"></span><h2>🇸🇪 Sverige</h2><span class="right" id="seStamp">–</span></div>
       <div class="se-grid" id="seGrid"></div>
@@ -1003,6 +1012,15 @@ function saveCfg(){
   }catch(e){ /* privat läge eller full lagring — kör vidare utan att spara */ }
 }
 
+/* Nyhetskällor i kryptoläget. Analysreglerna är skrivna för Nasdaq och ger
+   mestadels neutralt på de här rubrikerna — det är ärligt, ingen bias räknas. */
+const KRYPTO_FEEDS = [
+  'https://www.coindesk.com/arc/outboundfeeds/rss/',
+  'https://cointelegraph.com/rss',
+  'https://decrypt.co/feed',
+  'https://news.google.com/rss/search?q=(bitcoin+OR+ethereum+OR+solana+OR+crypto)+when:1d&hl=en-US&gl=US&ceid=US:en'
+];
+
 const SIDE_SYMS = [
   { k:'ES',   y:'ES=F',      n:'S&P 500', dec:2 },
   { k:'VIX',  y:'^VIX',      n:'VIX',     dec:2 },
@@ -1208,6 +1226,13 @@ function synligGrad(s){
 
 /* Instrumenten i det läge sidan står i. Motorn känner alla; molnet kör bara
    NQ; sidan visar en grupp i taget. */
+/* Temats färger som canvas behöver, lästa när det ritas — så följer graferna
+   läget. Reserverna är Nasdaq-blått. */
+function kulor(){
+  const cs = getComputedStyle(document.body), v = k => cs.getPropertyValue(k).trim();
+  return { lblue: v('--lblue') || '#4FD3FF', muted2: v('--muted-2') || '#3E5A7C', lb: v('--lb') || '79,211,255', l2: v('--l2') || '27,58,92' };
+}
+
 function aktivaSyms(){
   const krypto = STATE.lage === 'krypto';
   return SYMS.filter(k => (grupp(INSTR[k]) === 'crypto') === krypto);
@@ -1220,6 +1245,9 @@ function tillLage(lage, tyst){
   try{ localStorage.setItem('riptide.lage', STATE.lage); }catch(e){}
   document.body.classList.toggle('krypto', STATE.lage === 'krypto');
   const b = $('#btnKrypto'); if(b){ b.classList.toggle('on', STATE.lage === 'krypto'); b.textContent = STATE.lage === 'krypto' ? '◈ Nasdaq' : '◈ Crypto'; }
+  const sub = $('.sub'); if(sub) sub.textContent = STATE.lage === 'krypto'
+    ? 'Krypto · BTC ETH SOL XRP DOGE SHIB PEPE · Realtidsanalys · 5 min · Dygnet runt'
+    : 'MNQ · Micro Nasdaq-100 · Realtidsanalys · 5 min · Day trades';
   /* Huvudgrafen följer läget: första instrumentet i gruppen tills en signal
      får fokus. */
   const syms = aktivaSyms();
@@ -1421,7 +1449,7 @@ function drawSetupChart(cv, s){
     g.fillText(txt, w-padR+4, y+3.5);
   };
   lvl(s.tp,    '#00E58C', 'MÅL', [4,3]);
-  lvl(s.entry, '#4FD3FF', 'ENT', [6,3]);
+  lvl(s.entry, kulor().lblue, 'ENT', [6,3]);
   lvl(s.sl,    '#FF3355', 'SL',  [4,3]);
 
   // pil som visar riktning i projektionen
@@ -1440,7 +1468,7 @@ function drawSetupChart(cv, s){
   g.beginPath(); g.moveTo(2,ly); g.lineTo(w-padR,ly); g.stroke(); g.setLineDash([]);
 
   // skiljelinje
-  g.strokeStyle='rgba(27,58,92,.7)'; g.beginPath(); g.moveTo(projX-3,padT); g.lineTo(projX-3,h-padB); g.stroke();
+  g.strokeStyle=`rgba(${kulor().l2},.7)`; g.beginPath(); g.moveTo(projX-3,padT); g.lineTo(projX-3,h-padB); g.stroke();
 }
 
 function drawCandles(cv, opts){
@@ -1468,13 +1496,13 @@ function drawCandles(cv, opts){
   const bw = Math.max(1.2, Math.min(9, cw/bars.length*0.62));
 
   // rutnät
-  g.strokeStyle = 'rgba(27,58,92,.35)'; g.lineWidth = 1; g.font = '9px ui-monospace,monospace';
+  g.strokeStyle = `rgba(${kulor().l2},.35)`; g.lineWidth = 1; g.font = '9px ui-monospace,monospace';
   const rows = opts.mini ? 2 : 5;
   for(let k=0;k<=rows;k++){
     const p = lo + (hi-lo)*k/rows, y = Math.round(Y(p))+0.5;
     g.beginPath(); g.moveTo(padL,y); g.lineTo(padL+cw,y); g.stroke();
     if(!opts.mini){
-      g.fillStyle = '#3E5A7C'; g.textAlign='left';
+      g.fillStyle = kulor().muted2; g.textAlign='left';
       g.fillText(p.toFixed(opts.dec||2), padL+cw+6, y+3);
     }
   }
@@ -1528,16 +1556,16 @@ function drawCandles(cv, opts){
 
   // sista pris
   const lp = last(bars).c, ly = Math.round(Y(lp))+0.5;
-  g.strokeStyle = '#4FD3FF'; g.lineWidth = 1; g.setLineDash([2,2]);
+  g.strokeStyle = kulor().lblue; g.lineWidth = 1; g.setLineDash([2,2]);
   g.beginPath(); g.moveTo(padL,ly); g.lineTo(padL+cw,ly); g.stroke(); g.setLineDash([]);
   g.fillStyle = '#0A2A4A'; g.fillRect(padL+cw+2, ly-7.5, padR-6, 15);
-  g.strokeStyle='#4FD3FF'; g.strokeRect(padL+cw+2.5, ly-7, padR-7, 14);
+  g.strokeStyle=kulor().lblue; g.strokeRect(padL+cw+2.5, ly-7, padR-7, 14);
   g.fillStyle = '#8CE6FF'; g.font='700 '+(opts.mini?'8.5':'10')+'px ui-monospace,monospace'; g.textAlign='left';
   g.fillText(lp.toFixed(opts.dec||2), padL+cw+6, ly+3.5);
 
   // tidsaxel
   if(!opts.mini){
-    g.fillStyle='#3E5A7C'; g.font='9px ui-monospace,monospace'; g.textAlign='center';
+    g.fillStyle=kulor().muted2; g.font='9px ui-monospace,monospace'; g.textAlign='center';
     const stepN = Math.max(1, Math.floor(bars.length/7));
     for(let i=0;i<bars.length;i+=stepN){
       const t = new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Stockholm',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(bars[i].t));
@@ -1591,11 +1619,14 @@ function makeSummary(){
   const hot = STATE.news.filter(x=>x.an && x.an.hot).slice(0,3);
   const vol = n.atrPct > 0.22 ? 'förhöjd' : (n.atrPct < 0.09 ? 'låg' : 'normal');
 
-  const lead = `${ss.t}. ${n.inst.kort || 'NQ'} handlas kring <b>${fmt(n.px,1)}</b> med en 5-minuters ATR på ${fmt(n.atr,1)} punkter (${vol} volatilitet).`;
+  const enhet = n.inst.unit === '$' ? 'dollar' : 'punkter', dc = n.inst.dec;
+  const lead = `${STATE.lage === 'krypto' ? 'Krypto handlas dygnet runt' : ss.t}. ${n.inst.kort || 'NQ'} handlas kring <b>${fmt(n.px,dc)}</b> med en 5-minuters ATR på ${fmt(n.atr,dc)} ${enhet} (${vol} volatilitet).`;
 
   const tech = `Tekniskt är 5m-strukturen i ${n.inst.kort || 'NQ'} <b>${trendWord(n.trend)}</b> — priset ligger ${n.px>n.vwap?'över':'under'} VWAP (${fmt(n.vwap,1)}) och EMA21 står i ${fmt(n.e21,1)}. RSI ${Math.round(n.rsi)}${n.rsi>70?' (överköpt — akta jaganden)':n.rsi<30?' (översålt — leta reclaim, inte fritt fall)':''}. Relativ volym ${n.relVol.toFixed(2)}x.`;
 
-  const flow = STATE.news.length
+  const flow = STATE.lage === 'krypto'
+    ? `Kryptoflödet visas till vänster (${STATE.news.length} rubriker) — ingen bias räknas på det, och inga spärrar följer av det.`
+    : STATE.news.length
     ? `Nyhetsflödet lutar ${STATE.newsBias.nq>10?'positivt':STATE.newsBias.nq<-10?'negativt':'neutralt'} för Nasdaq (${STATE.news.length} rubriker analyserade).`
     : 'Inga nyhetsflöden kunde läsas in just nu — analysen bygger enbart på pris och struktur.';
 
@@ -1646,8 +1677,10 @@ function renderTape(){
     const q = STATE.quotes[k] || {};
     rows.push({n: INSTR[k].kort || k, p:c.px, d:INSTR[k].dec, chg:q.chgPct});
   });
-  SIDE_SYMS.forEach(s=>{ const q = STATE.quotes[s.k]; if(q&&q.ok) rows.push({n:s.n,p:q.px,d:s.dec,chg:q.chgPct,suffix:s.suffix}); });
-  SE_SYMS.slice(0,2).forEach(s=>{ const q = STATE.quotes[s.k]; if(q&&q.ok) rows.push({n:s.n,p:q.px,d:s.dec,chg:q.chgPct}); });
+  if(STATE.lage !== 'krypto'){                      // makro och Sverige hör till Nasdaq-läget
+    SIDE_SYMS.forEach(s=>{ const q = STATE.quotes[s.k]; if(q&&q.ok) rows.push({n:s.n,p:q.px,d:s.dec,chg:q.chgPct,suffix:s.suffix}); });
+    SE_SYMS.slice(0,2).forEach(s=>{ const q = STATE.quotes[s.k]; if(q&&q.ok) rows.push({n:s.n,p:q.px,d:s.dec,chg:q.chgPct}); });
+  }
 
   el.innerHTML = rows.map(r=>{
     const cls = !nz(r.chg) ? 'neu' : r.chg>0?'pos':'neg';
@@ -2357,7 +2390,7 @@ function renderMainChart(){
     bars, height: window.innerWidth < 680 ? 250 : window.innerWidth >= 1900 ? 460 : 330,
     dec:c.inst.dec, prisSkala: v.pris, prisSkift: v.py,
     lines:[
-      {data:cut(c.e9a),   color:'#4FD3FF', w:1.2},
+      {data:cut(c.e9a),   color:kulor().lblue, w:1.2},
       {data:cut(c.e21a),  color:'#FF2E4C', w:1.2},
       {data:cut(c.e50a),  color:'#FFB020', w:1.1},
       {data:cut(c.vwapArr), color:'rgba(140,230,255,.75)', w:1.6, dash:[6,4]}
@@ -2382,10 +2415,10 @@ function renderMainChart(){
    ========================================================================== */
 const CORE = {
   nodes: [
-    {k:'yahoo',  n:'YAHOO 5M',     kort:'YAHOO', a:-2.90, heat:0, c:'#4FD3FF'},
+    {k:'yahoo',  n:'YAHOO 5M',     kort:'YAHOO', a:-2.90, heat:0, c:kulor().lblue},
     {k:'feed',   n:'TV-FEED',      kort:'TV',    a:-2.10, heat:0, c:'#00E58C'},
     {k:'quotes', n:'SIDOPRISER',   kort:'PRIS',  a:-1.30, heat:0, c:'#8CE6FF'},
-    {k:'ind',    n:'EMA·ATR·VWAP', kort:'EMA',   a:-0.45, heat:0, c:'#4FD3FF'},
+    {k:'ind',    n:'EMA·ATR·VWAP', kort:'EMA',   a:-0.45, heat:0, c:kulor().lblue},
     {k:'news',   n:'RSS VÄRLDEN',  kort:'RSS',   a: 0.35, heat:0, c:'#FFB020'},
     {k:'newsSe', n:'RSS SVERIGE',  kort:'RSS SE',a: 1.15, heat:0, c:'#FFB020'},
     {k:'bias',   n:'NYHETSBIAS',   kort:'BIAS',  a: 1.95, heat:0, c:'#FF6A80'},
@@ -2550,7 +2583,7 @@ function coreFrame(){
   bg.addColorStop(1, 'rgba(3,6,14,0)');
   g.fillStyle = bg; g.fillRect(0,0,w,h);
 
-  g.fillStyle = 'rgba(79,211,255,.020)';
+  g.fillStyle = `rgba(${kulor().lb},.020)`;
   for(let y = 0; y < h; y += 4) g.fillRect(0, y, w, 1);
 
   const sy = (F*0.8) % (h + 80) - 40;
@@ -3558,8 +3591,8 @@ const DEMO_NEWS_SE = [
 async function loadNews(){
   try{
     const [intl, se] = await Promise.all([
-      fetchFeeds(CFG.feeds).catch(()=>[]),
-      fetchFeeds(CFG.feedsSe).catch(()=>[])
+      fetchFeeds(STATE.lage === 'krypto' ? (CFG.feedsKrypto || KRYPTO_FEEDS) : CFG.feeds).catch(()=>[]),
+      fetchFeeds(STATE.lage === 'krypto' ? [] : CFG.feedsSe).catch(()=>[])
     ]);
     STATE.news = intl; STATE.seNews = se;
     if(intl.length){
