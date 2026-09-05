@@ -733,7 +733,7 @@ footer b{color:var(--muted)}
       <div class="panel">
         <div class="ph">
           <span class="accent"></span><h2>5-minutersgraf</h2>
-          <div class="chart-tabs">
+          <div class="chart-tabs" id="chartSyms">
             <button class="ct on" data-sym="NQ">MNQ · Micro Nasdaq-100</button>
           </div>
           <div class="chart-tabs" style="margin-left:auto;gap:5px">
@@ -1121,6 +1121,42 @@ function parseYahooChart(j){
   return { bars:out, meta:r.meta||{} };
 }
 
+/* Bybit — kryptostaplar. Öppet marknads-API utan nyckel, men utan CORS-header,
+   så det går via proxyn precis som Yahoo. 1 000 staplar per anrop är tre och
+   ett halvt dygn i 5 minuter; två anrop med end= ger de fem dygn sidan räknar
+   på. Listan kommer nyast först med strängar: [start, o, h, l, c, volym, omsättning]. */
+async function fetchBybitBars(symbol, interval='5', sidor=2){
+  let end = Date.now(), alla = [];
+  for(let i = 0; i < sidor; i++){
+    const u = 'https://api.bybit.com/v5/market/kline?category=spot&symbol=' + encodeURIComponent(symbol)
+            + '&interval=' + interval + '&limit=1000&end=' + end;
+    const j = await grab(u, { json:true });
+    const list = j && j.result && j.result.list;
+    if(!list || !list.length) break;
+    alla = alla.concat(list.map(r => ({ t:+r[0], o:+r[1], h:+r[2], l:+r[3], c:+r[4], v:+r[5] || 0 })));
+    end = +list[list.length-1][0] - 1;
+  }
+  const karta = new Map(alla.map(b => [b.t, b]));
+  const bars = [...karta.values()].filter(b => [b.o,b.h,b.l,b.c].every(x => isFinite(x))).sort((a,b) => a.t - b.t);
+  if(bars.length < 200) throw new Error('för få staplar från Bybit');
+  return { bars, live: true, meta: { symbol, kalla:'bybit' } };
+}
+
+/* Bybits tickers för tapen: pris och 24-timmarsförändring för alla kryptona i ett anrop. */
+async function loadBybitTickers(){
+  const j = await grab('https://api.bybit.com/v5/market/tickers?category=spot', { json:true });
+  const list = (j && j.result && j.result.list) || [];
+  const by = new Map(list.map(t => [t.symbol, t]));
+  aktivaSyms().forEach(k => {
+    const inst = INSTR[k], t = inst.bybit && by.get(inst.bybit);
+    if(!t) return;
+    const px = +t.lastPrice, pct = +t.price24hPcnt*100, prev = px/(1 + pct/100);
+    STATE.quotes[k] = { ok:true, px, prev, chg:px-prev, chgPct:pct };
+  });
+  corePing('quotes', 3);
+  coreRead('Bybit-tickers · ' + aktivaSyms().join(', ') + ' inlästa');
+}
+
 async function fetchBars(ySym, interval='5m', range='5d'){
   const u = 'https://query1.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(ySym)
           + '?interval='+interval+'&range='+range+'&includePrePost=true';
@@ -1233,6 +1269,14 @@ function kulor(){
   return { lblue: v('--lblue') || '#4FD3FF', muted2: v('--muted-2') || '#3E5A7C', lb: v('--lb') || '79,211,255', l2: v('--l2') || '27,58,92' };
 }
 
+/* Grafens instrumentknappar: ett per instrument i det aktiva läget, det valda
+   markerat. I kryptoläget står BTC först och är förvalt. */
+function renderChartSyms(){
+  const el = $('#chartSyms'); if(!el) return;
+  el.innerHTML = aktivaSyms().map(k => '<button class="ct' + (k === STATE.chartSym ? ' on' : '') + '" data-sym="' + k + '">' +
+    esc(INSTR[k].kort || k) + (STATE.lage === 'krypto' ? '' : ' · ' + esc((INSTR[k].label.split(' · ')[1]) || '')) + '</button>').join('');
+}
+
 function aktivaSyms(){
   const krypto = STATE.lage === 'krypto';
   return SYMS.filter(k => (grupp(INSTR[k]) === 'crypto') === krypto);
@@ -1251,9 +1295,14 @@ function tillLage(lage, tyst){
   /* Huvudgrafen följer läget: första instrumentet i gruppen tills en signal
      får fokus. */
   const syms = aktivaSyms();
-  if(!syms.includes(STATE.chartSym)) STATE.chartSym = syms[0] || 'NQ';
+  if(!syms.includes(STATE.chartSym)) STATE.chartSym = syms[0] || 'NQ';   // krypto: BTC först
+  renderChartSyms();
   if(tyst) return;
   STATE.signals = [];
+  /* Nyheterna laddas bara vartannat varv, eller när listan är tom. Töms den
+     här kommer det nya lägets flöden i första varvet i stället för att
+     Nasdaq-rubrikerna står kvar i två minuter. */
+  STATE.news = [];
   renderSignals();
   refresh();
 }
@@ -3514,7 +3563,12 @@ async function loadMarket(){
   for(const k of aktivaSyms()){
     const inst = INSTR[k];
     let d = null;
-    try{ d = await fetchBars(inst.yahoo); liveOk++; corePing('yahoo', 3);
+    if(inst.bybit){
+      try{ d = await fetchBybitBars(inst.bybit); liveOk++; corePing('yahoo', 3);
+           coreRead('läser ' + k + ' 5m · ' + d.bars.length + ' staplar från Bybit'); }
+      catch(e){ coreRead('Bybit svarade inte för ' + k + ' — provar Yahoo'); }
+    }
+    if(!d) try{ d = await fetchBars(inst.yahoo); liveOk++; corePing('yahoo', 3);
          coreRead('läser ' + k + ' 5m · ' + d.bars.length + ' staplar från Yahoo'); }
     catch(e){
       for(const alt of inst.alt){
@@ -3554,6 +3608,7 @@ async function loadMarket(){
 }
 
 async function loadSideQuotes(){
+  if(STATE.lage === 'krypto'){ try{ await loadBybitTickers(); }catch(e){ coreRead('Bybit-tickers svarade inte'); } return; }
   const all = SIDE_SYMS.concat(SE_SYMS.map(s=>({k:s.k, y:s.fallbackY||s.y, dec:s.dec})));
   const res = await Promise.allSettled(all.map(s=>fetchQuote(s.y)));
   corePing('quotes', 3);
@@ -3878,11 +3933,14 @@ function wire(){
     $$('[data-sf]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
     STATE.sigFilter = b.dataset.sf; renderSignals();
   });
-  $$('[data-sym]').forEach(b=> b.onclick = ()=>{
-    $$('[data-sym]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  /* Delegerat: knapparna byggs om vid lägesväxling. */
+  $('#chartSyms').addEventListener('click', e => {
+    const b = e.target.closest('[data-sym]'); if(!b) return;
+    $$('#chartSyms [data-sym]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
     STATE.chartSym = b.dataset.sym;
     renderMainChart(); renderTech(); renderLevels();
   });
+  renderChartSyms();
   $$('[data-zoom]').forEach(b => b.onclick = () => {
     const v = STATE.vy, k = b.dataset.zoom;
     if(k === 'in')  v.n = Math.max(24, Math.round(v.n*0.75));

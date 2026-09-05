@@ -46,7 +46,7 @@ const PROXY_VARDAR = [
   'news.google.com', 'investing.com', 'financialjuice.com', 'fxstreet.com',
   'cnbc.com', 'dowjones.io', 'marketwatch.com', 'reuters.com', 'kitco.com',
   'di.se', 'dn.se', 'svt.se', 'omni.se', 'placera.se',
-  'coindesk.com', 'cointelegraph.com', 'decrypt.co',          // kryptoläget på sidan
+  'coindesk.com', 'cointelegraph.com', 'decrypt.co', 'api.bybit.com',   // kryptoläget på sidan
   'economic-calendar.tradingview.com'
 ];
 

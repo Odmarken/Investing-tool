@@ -117,13 +117,13 @@ const INSTR = {
      grupp:'nq' underförstått. ptValue är dollar per punkt för en enhet, tick är
      minsta prissteg på de stora börserna, dec hur många decimaler kortet visar.
      base och vol används bara av den simulerade reservdatan. */
-  BTC:  { key:'BTC',  yahoo:'BTC-USD',  alt:[], label:'BTC · Bitcoin',  unit:'$', kort:'BTC',  tick:1,        dec:0, ptValue:1, base:60000,  vol:0.0030, grupp:'crypto', dygnetRunt:true },
-  ETH:  { key:'ETH',  yahoo:'ETH-USD',  alt:[], label:'ETH · Ether',    unit:'$', kort:'ETH',  tick:0.1,      dec:1, ptValue:1, base:2500,   vol:0.0036, grupp:'crypto', dygnetRunt:true },
-  SOL:  { key:'SOL',  yahoo:'SOL-USD',  alt:[], label:'SOL · Solana',   unit:'$', kort:'SOL',  tick:0.01,     dec:2, ptValue:1, base:150,    vol:0.0045, grupp:'crypto', dygnetRunt:true },
-  XRP:  { key:'XRP',  yahoo:'XRP-USD',  alt:[], label:'XRP · Ripple',   unit:'$', kort:'XRP',  tick:0.0001,   dec:4, ptValue:1, base:0.6,    vol:0.0040, grupp:'crypto', dygnetRunt:true },
-  DOGE: { key:'DOGE', yahoo:'DOGE-USD', alt:[], label:'DOGE · Dogecoin',unit:'$', kort:'DOGE', tick:0.00001,  dec:5, ptValue:1, base:0.12,   vol:0.0055, grupp:'crypto', dygnetRunt:true },
-  SHIB: { key:'SHIB', yahoo:'SHIB-USD', alt:[], label:'SHIB · Shiba Inu',unit:'$',kort:'SHIB', tick:0.00000001,dec:8,ptValue:1, base:0.00002,vol:0.0060, grupp:'crypto', dygnetRunt:true },
-  PEPE: { key:'PEPE', yahoo:'PEPE24478-USD', alt:['PEPE-USD'], label:'PEPE · Pepe', unit:'$', kort:'PEPE', tick:0.00000001, dec:8, ptValue:1, base:0.00001, vol:0.0080, grupp:'crypto', dygnetRunt:true }
+  BTC:  { key:'BTC',  yahoo:'BTC-USD', bybit:'BTCUSDT',  alt:[], label:'BTC · Bitcoin',  unit:'$', kort:'BTC',  tick:1,        dec:0, ptValue:1, base:60000,  vol:0.0030, grupp:'crypto', dygnetRunt:true },
+  ETH:  { key:'ETH',  yahoo:'ETH-USD', bybit:'ETHUSDT',  alt:[], label:'ETH · Ether',    unit:'$', kort:'ETH',  tick:0.1,      dec:1, ptValue:1, base:2500,   vol:0.0036, grupp:'crypto', dygnetRunt:true },
+  SOL:  { key:'SOL',  yahoo:'SOL-USD', bybit:'SOLUSDT',  alt:[], label:'SOL · Solana',   unit:'$', kort:'SOL',  tick:0.01,     dec:2, ptValue:1, base:150,    vol:0.0045, grupp:'crypto', dygnetRunt:true },
+  XRP:  { key:'XRP',  yahoo:'XRP-USD', bybit:'XRPUSDT',  alt:[], label:'XRP · Ripple',   unit:'$', kort:'XRP',  tick:0.0001,   dec:4, ptValue:1, base:0.6,    vol:0.0040, grupp:'crypto', dygnetRunt:true },
+  DOGE: { key:'DOGE', yahoo:'DOGE-USD', bybit:'DOGEUSDT', alt:[], label:'DOGE · Dogecoin',unit:'$', kort:'DOGE', tick:0.00001,  dec:5, ptValue:1, base:0.12,   vol:0.0055, grupp:'crypto', dygnetRunt:true },
+  SHIB: { key:'SHIB', yahoo:'SHIB-USD', bybit:'SHIBUSDT', alt:[], label:'SHIB · Shiba Inu',unit:'$',kort:'SHIB', tick:0.00000001,dec:8,ptValue:1, base:0.00002,vol:0.0060, grupp:'crypto', dygnetRunt:true },
+  PEPE: { key:'PEPE', yahoo:'PEPE24478-USD', bybit:'PEPEUSDT', alt:['PEPE-USD'], label:'PEPE · Pepe', unit:'$', kort:'PEPE', tick:0.00000001, dec:8, ptValue:1, base:0.00001, vol:0.0080, grupp:'crypto', dygnetRunt:true }
 };
 const SYMS = Object.keys(INSTR);          // alla instrument; sidan väljer grupp, molnet kör bara NQ
 const grupp = inst => (inst && inst.grupp) || 'nq';
