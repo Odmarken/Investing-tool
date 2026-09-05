@@ -443,6 +443,13 @@ const RULES = [
   {k:/\b(whale|whales)\b.*\b(sell|sells|dump|moved|transfer)/i, nq:0, gc:0, kr:-1, c:'krypto', sv:'Stora flyttar eller försäljningar → utbudssignal. Svag men riktad.'},
   {k:/\b(halving|upgrade|mainnet|hard fork|dencun|pectra)\b/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Protokollhändelse → uppmärksamhet och positionering. Ofta "köp ryktet, sälj nyheten".'},
   {k:/\b(stablecoin|tether|usdt|usdc)\b.*\b(supply|mint|minted|inflow)/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Växande stablecoin-utbud → torrt pulver på börserna. Stödjande för hela sektorn.'},
+  /* Prisrörelse och ton — bara när ett kryptoord står i rubriken, så att en
+     Nasdaq-rubrik om "sell-off" inte får kryptopoäng. */
+  {k:/(?=.*\b(bitcoin|btc|ethereum|eth|solana|crypto|altcoin|xrp|doge|memecoin)\b).*\b(crash|crashes|plunge|plunges|tumble|tumbles|sell-off|selloff|price shock|bloodbath|capitulat\w*)\b/i, nq:0, gc:0, kr:-2, c:'krypto', sv:'Kraftig nedgång i rubriken → riskaversion och tvångsförsäljning. Rörelsen är ofta redan gjord när det står i pressen.'},
+  {k:/(?=.*\b(bitcoin|btc|ethereum|eth|solana|crypto|altcoin|xrp|doge|memecoin)\b).*\b(surge|surges|soar|soars|rally|rallies|jumps?|climbs?|breaks? out|breakout)\b/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Uppgång i rubriken → momentum och uppmärksamhet. Svag positiv, och sent i rörelsen när det står i pressen.'},
+  {k:/(?=.*\b(bitcoin|btc|ethereum|eth|solana|crypto|altcoin|xrp|doge)\b).*\b(bargain|undervalued|buy the dip|accumulation|bullish|bull run|bull market)\b/i, nq:0, gc:0, kr:1, c:'krypto', sv:'Positiv ton — köpläge, bullish. Sentimentsignal, inte flöde. Svag.'},
+  {k:/(?=.*\b(bitcoin|btc|ethereum|eth|solana|crypto|altcoin|xrp|doge)\b).*\b(warning|warns|fear|bearish|bear market|bubble|ponzi|scam)\b/i, nq:0, gc:0, kr:-1, c:'krypto', sv:'Negativ ton — varning, bearish. Sentimentsignal, inte flöde. Svag.'},
+  {k:/(?=.*\b(bitcoin|btc|ethereum|eth|solana|crypto|altcoin|xrp|doge)\b).*\b(strategic (?:bitcoin |crypto )?reserve|treasury|buys? bitcoin|adds? bitcoin|adopt\w*)\b/i, nq:0, gc:0, kr:2, c:'krypto', sv:'Stat, bolag eller fond som köper eller reserverar → strukturell efterfrågan. Tydligt positiv.'},
   {k:/\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|dogecoin|doge|shiba|pepe|memecoin|altcoin|crypto|defi|blockchain)\b/i, nq:0, gc:0, kr:0, c:'krypto', sv:'Kryptonyhet utan tydlig riktningseffekt i sig.'},
   // --- Inflation ---
   {k:/\b(cpi|inflation)\b.*\b(hotter|higher|beats|above|rises|jump|accelerat)/i, nq:-3, gc:-1, c:'macro', sv:'Hetare inflation än väntat → högre räntebana och press på tillväxtaktier. Tyngst i de längsta techcaseen.'},

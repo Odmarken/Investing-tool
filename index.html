@@ -129,6 +129,7 @@ body.krypto{
 }
 /* Nasdaq-delarna finns inte i kryptoläget: bias, nyhetsbias, kalender,
    riskhändelser, Sverige och TradingView-feeden. */
+body:not(.krypto) #kryptoSektion{display:none}
 body.krypto #feedPill, body.krypto #kalender,
 body.krypto #riskPanel, body.krypto #sePanel{display:none !important}
 body.krypto .btn.primary{background:linear-gradient(180deg,#155C36,#0E2A1E);border-color:#2A8F5C;color:#B7F5C8}
@@ -808,6 +809,26 @@ footer b{color:var(--muted)}
 <!-- ============ DEMOKONTO ============
      Hela sektionen finns bara för inloggade. Den ligger dold från början, så
      den hinner aldrig blinka förbi medan Firebase avgör om någon är inloggad. -->
+<!-- ============ KRYPTOKONTO ============
+     Lokalt demokonto för kryptoläget. Bybit-isolerad margin: hela saldot är
+     margin på varje affär, notional = margin × hävstång, avgift per sida på
+     notional, likvidation när förlusten närmar sig marginen. Syns bara i
+     kryptoläget; molnkontot rörs inte. -->
+<div class="wrap bottom" id="kryptoSektion">
+  <div class="panel">
+    <div class="ph">
+      <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
+      <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krNoll" title="Tillbaka till 100 $">Nollställ</button></span>
+    </div>
+    <div class="pb">
+      <div class="btstats" id="krStats"></div>
+      <div id="krOppen"></div>
+      <div id="krLista"></div>
+      <div class="btnote" id="krNote"></div>
+    </div>
+  </div>
+</div>
+
 <div class="wrap bottom" id="demoSektion" style="display:none">
 
   <div class="panel">
@@ -1741,7 +1762,7 @@ function renderTape(){
   }).join('');
 }
 
-const KAT_NAMN = { nq:'Nasdaq/teknik', macro:'Makro och räntor', gold:'Råvaror', '':'Övrigt' };
+const KAT_NAMN = { krypto:'Krypto', nq:'Nasdaq/teknik', macro:'Makro och räntor', gold:'Råvaror', '':'Övrigt' };
 
 /* Kortet i listan. Klick fäller ut resten av analysen — hela texten ligger redan här,
    så utfällningen kostar inget nätverksanrop. */
@@ -1749,12 +1770,13 @@ function newsHTML(it, sv=false){
   const a = it.an || analyseHeadline(it.title, it.desc);
   it.an = a;
   const chips = [];
-  if(a.nq) chips.push(`<span class="impact ${a.nq>0?'up':'dn'}">NQ ${a.nq>0?'▲':'▼'}${Math.abs(a.nq)}</span>`);
-  if(a.kr) chips.push(`<span class="impact ${a.kr>0?'up':'dn'}">BTC ${a.kr>0?'▲':'▼'}${Math.abs(a.kr)}</span>`);
+  /* I kryptoläget är det BTC-effekten som visas, i Nasdaq-läget NQ:s. */
+  const kr = STATE.lage === 'krypto', v = kr ? (a.kr || 0) : a.nq, mk = kr ? 'BTC' : 'NQ';
+  if(v) chips.push(`<span class="impact ${v>0?'up':'dn'}">${mk} ${v>0?'▲':'▼'}${Math.abs(v)}</span>`);
   if(!chips.length) chips.push('<span class="impact nu">NEUTRAL</span>');
 
-  const styrka = Math.abs(a.nq) >= 3 ? 'stark' : Math.abs(a.nq) === 2 ? 'tydlig' : Math.abs(a.nq) === 1 ? 'svag' : 'ingen';
-  const riktning = a.nq > 0 ? 'positiv' : a.nq < 0 ? 'negativ' : 'neutral';
+  const styrka = Math.abs(v) >= 3 ? 'stark' : Math.abs(v) === 2 ? 'tydlig' : Math.abs(v) === 1 ? 'svag' : 'ingen';
+  const riktning = v > 0 ? 'positiv' : v < 0 ? 'negativ' : 'neutral';
   const kats = (a.cats && a.cats.length ? a.cats : ['']).map(k => KAT_NAMN[k] || k).join(', ');
   const tid = new Intl.DateTimeFormat('sv-SE', {hour:'2-digit', minute:'2-digit', day:'numeric', month:'short'}).format(new Date(it.ts));
   const ur = (it.desc || '').replace(/\s+/g, ' ').trim();
@@ -1772,7 +1794,7 @@ function newsHTML(it, sv=false){
         <span>Källa <b>${esc(it.src)}</b></span>
         <span>Publicerad <b>${tid}</b> (${agoTxt(it.ts)} sedan)</span>
         <span>Kategori <b>${esc(kats)}</b></span>
-        <span>Effekt på NQ <b>${styrka} ${riktning}</b>${a.nq ? ' (' + (a.nq>0?'+':'') + a.nq + ' av ±6)' : ''}</span>
+        <span>Effekt på ${mk} <b>${styrka} ${riktning}</b>${v ? ' (' + (v>0?'+':'') + v + ' av ±6)' : ''}</span>
         ${a.hot ? '<span><b style="color:var(--scarlet-2)">Högt läge</b></span>' : ''}
       </div>
       <h5>Vad det betyder</h5>
@@ -3180,6 +3202,143 @@ function demoNollstall(){
    nått stoppen eller målet. Stapelns högsta och lägsta används så att en
    träff mellan två uppdateringar inte missas; nås båda i samma stapel
    räknas stoppen. */
+/* ==========================================================================
+   KRYPTOKONTO — 100 dollar, hävstång, hela saldot varje affär.
+
+   Modellen är Bybits isolerade margin på USDT-perpetuals:
+     margin     = hela saldot
+     notional   = margin × hävstång
+     enheter    = notional / entry
+     avgift     = 0,055 % av notional per sida (taker), dras vid stängning
+     likvidation: förlusten når marginen minus underhållsmarginen (0,5 %) —
+                  long  entry × (1 − 1/hävstång + 0,005)
+                  short entry × (1 + 1/hävstång − 0,005)
+   Ligger stoppen bortom likvidationspriset tar likvidationen först och hela
+   marginen går. Nås likvidation, stopp och mål i samma stapel räknas de i
+   den ordningen. En affär i taget — saldot är redan i den. Funding var
+   åttonde timme (~0,01 %) är utelämnad; affärerna lever i minuter till
+   timmar. Priserna är Bybits spotstaplar, inte perpetualens, vilket skiljer
+   några punkter på BTC. Sparas i webbläsaren.
+   ========================================================================== */
+const KR_NYCKEL = 'riptide.krypto.v1';
+const KRYPTO = { start:100, kapital:100, havstang:20, mmr:0.005, avgift:0.00055, oppen:null, affarer:[], startad:Date.now() };
+
+function krLadda(){
+  try{ const d = JSON.parse(localStorage.getItem(KR_NYCKEL) || 'null'); if(d && isFinite(d.kapital)) Object.assign(KRYPTO, d); }catch(e){}
+}
+function krSpara(){
+  try{ localStorage.setItem(KR_NYCKEL, JSON.stringify({ start:KRYPTO.start, kapital:KRYPTO.kapital, havstang:KRYPTO.havstang,
+    oppen:KRYPTO.oppen, affarer:KRYPTO.affarer.slice(-300), startad:KRYPTO.startad })); }catch(e){}
+}
+function krLikvidation(side, entry){
+  return side === 'long' ? entry*(1 - 1/KRYPTO.havstang + KRYPTO.mmr) : entry*(1 + 1/KRYPTO.havstang - KRYPTO.mmr);
+}
+
+function kryptoTick(){
+  if(STATE.lage !== 'krypto') return;
+  let andrat = false;
+
+  /* öppna: första handlingsbara aktiva kryptosignalen, om saldot är fritt */
+  if(!KRYPTO.oppen && KRYPTO.kapital >= 1){
+    const sig = STATE.signals.find(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && handlasGrad(x.grade)
+                                        && !KRYPTO.affarer.some(a => a.id === x.id));
+    if(sig){
+      const entry = sig.entryFyllt || sig.entry, margin = KRYPTO.kapital, notional = margin*KRYPTO.havstang, enheter = notional/entry;
+      const c = STATE.ctx[sig.inst];
+      KRYPTO.oppen = { id:sig.id, inst:sig.inst, side:sig.side, grade:sig.grade, namn:sig.name, fam:sig.fam,
+        entry, sl:sig.sl, tp:sig.tp, liq: krLikvidation(sig.side, entry), enheter, notional, margin,
+        oppnad: sig.oppnad || Date.now(), kollad: (c && c.bars.length) ? c.bars[c.bars.length-1].t : Date.now() };
+      andrat = true;
+      coreRead('kryptokonto: ' + (sig.side === 'long' ? 'KÖPT' : 'SÅLT') + ' ' + sig.inst + ' för ' + fmt(notional, 0) + ' $ @ ' + fmt(entry, INSTR[sig.inst].dec) +
+               ' · likvidation ' + fmt(KRYPTO.oppen.liq, INSTR[sig.inst].dec));
+    }
+  }
+
+  /* stänga: staplar sedan förra kollen, likvidation före stopp före mål */
+  const p = KRYPTO.oppen;
+  if(p){
+    const c = STATE.ctx[p.inst];
+    if(c && c.bars.length){
+      const dir = p.side === 'long' ? 1 : -1;
+      const nya = c.bars.filter(b => b.t > p.kollad);
+      p.kollad = c.bars[c.bars.length-1].t;
+      let exit = null, hur = null, nar = Date.now();
+      for(const b of nya){
+        if(dir > 0 ? b.l <= p.liq : b.h >= p.liq){ exit = p.liq; hur = 'likviderad'; nar = b.t; break; }
+        if(dir > 0 ? b.l <= p.sl : b.h >= p.sl){ exit = p.sl; hur = 'stopp'; nar = b.t; break; }
+        if(dir > 0 ? b.h >= p.tp : b.l <= p.tp){ exit = p.tp; hur = 'mål'; nar = b.t; break; }
+      }
+      if(exit === null){
+        const px = c.px;
+        if(dir > 0 ? px <= p.liq : px >= p.liq){ exit = p.liq; hur = 'likviderad'; }
+        else if(dir > 0 ? px <= p.sl : px >= p.sl){ exit = p.sl; hur = 'stopp'; }
+        else if(dir > 0 ? px >= p.tp : px <= p.tp){ exit = p.tp; hur = 'mål'; }
+      }
+      if(exit !== null){
+        const avgift = KRYPTO.avgift*(p.notional + Math.abs(exit)*p.enheter);
+        let pnl = hur === 'likviderad' ? -p.margin : dir*(exit - p.entry)*p.enheter - avgift;
+        pnl = Math.max(pnl, -p.margin);                          // isolerad margin: aldrig mer än insatsen
+        KRYPTO.kapital = Math.max(0, KRYPTO.kapital + pnl);
+        KRYPTO.affarer.push({ id:p.id, inst:p.inst, side:p.side, grade:p.grade, namn:p.namn, entry:p.entry, exit, hur,
+          notional:p.notional, margin:p.margin, avgift: hur === 'likviderad' ? 0 : avgift, pnl, oppnad:p.oppnad, stangd:nar, kapitalEfter:KRYPTO.kapital });
+        KRYPTO.oppen = null; andrat = true;
+        coreRead('kryptokonto: ' + hur + ' · ' + fmtSigned(pnl, 2) + ' $ · saldo ' + fmt(KRYPTO.kapital, 2) + ' $');
+      }
+    }
+  }
+  if(andrat) krSpara();
+}
+
+function renderKrypto(){
+  const el = $('#krStats'); if(!el) return;
+  const p = KRYPTO.oppen;
+  let oreal = 0;
+  if(p){ const c = STATE.ctx[p.inst]; if(c){ const dir = p.side === 'long' ? 1 : -1; oreal = dir*(c.px - p.entry)*p.enheter; } }
+  const eget = Math.max(0, KRYPTO.kapital + oreal), a = KRYPTO.affarer, v = a.filter(x => x.pnl > 0).length, likv = a.filter(x => x.hur === 'likviderad').length;
+  let topp = KRYPTO.start, dd = 0; for(const x of a){ topp = Math.max(topp, x.kapitalEfter); dd = Math.max(dd, topp ? (topp - x.kapitalEfter)/topp : 0); }
+  const tile = (e, w, cls) => '<div class="btstat"><i>' + e + '</i><b class="' + (cls||'') + '">' + w + '</b></div>';
+  const nastaNotional = KRYPTO.kapital*KRYPTO.havstang, avgiftRt = nastaNotional*KRYPTO.avgift*2;
+  el.innerHTML =
+    tile('Saldo', fmt(eget, 2) + ' $', eget >= KRYPTO.start ? 'pos' : 'neg') +
+    tile('Resultat', fmtSigned(eget - KRYPTO.start, 2) + ' $', eget >= KRYPTO.start ? 'pos' : 'neg') +
+    tile('Avkastning', pct((eget - KRYPTO.start)/KRYPTO.start*100, 1), eget >= KRYPTO.start ? 'pos' : 'neg') +
+    tile('Hävstång', KRYPTO.havstang + '×') +
+    tile('Nästa affär', fmt(nastaNotional, 0) + ' $ notional') +
+    tile('Avgifter/affär', '≈ ' + fmt(avgiftRt, 2) + ' $ (' + (KRYPTO.avgift*2*KRYPTO.havstang*100).toFixed(1) + ' % av saldot)') +
+    tile('Likvidation vid', '±' + ((1/KRYPTO.havstang - KRYPTO.mmr)*100).toFixed(1) + ' %') +
+    tile('Affärer', String(a.length)) +
+    tile('Träffsäkerhet', a.length ? Math.round(v/a.length*100) + ' %' : '–') +
+    tile('Likviderade', String(likv), likv ? 'neg' : '') +
+    tile('Max nedgång', a.length ? pct(-dd*100, 1) : '–', dd > 0.3 ? 'neg' : '');
+
+  const opp = $('#krOppen');
+  if(p){
+    const c = STATE.ctx[p.inst], d = INSTR[p.inst].dec, dir = p.side === 'long' ? 1 : -1, px = c ? c.px : p.entry;
+    const tillLiq = Math.abs(px - p.liq)/px*100, riskStopp = Math.abs(dir*(p.sl - p.entry))*p.enheter;
+    opp.innerHTML = '<div class="oppen"><span class="tag ' + p.side + '">' + (p.side === 'long' ? 'LONG' : 'SHORT') + '</span><b>' + esc(p.inst) + '</b>' +
+      '<span>' + fmt(p.notional, 0) + ' $ notional · margin ' + fmt(p.margin, 2) + ' $</span>' +
+      '<span>entry <b>' + fmt(p.entry, d) + '</b> · stopp ' + fmt(p.sl, d) + ' (−' + fmt(riskStopp, 2) + ' $) · mål ' + fmt(p.tp, d) + '</span>' +
+      '<span>likvidation <b class="neg">' + fmt(p.liq, d) + '</b> · ' + tillLiq.toFixed(2) + ' % bort' + (Math.abs(p.sl - p.entry) > Math.abs(p.liq - p.entry) ? ' · <b class="neg">stoppen ligger bortom likvidationen</b>' : '') + '</span>' +
+      '<span class="' + (oreal >= 0 ? 'pos' : 'neg') + '"><b>' + fmtSigned(oreal, 2) + ' $</b> (' + fmtSigned(oreal/p.margin*100, 1) + ' % av marginen)</span></div>';
+  }else{
+    opp.innerHTML = '<div class="empty" style="padding:8px 0">' + (KRYPTO.kapital < 1 ? 'Kontot är utslaget — nollställ för att börja om.' : 'Ingen affär öppen. Nästa aktiva A-signal tas med hela saldot.') + '</div>';
+  }
+
+  const senaste = a.slice(-10).reverse();
+  $('#krLista').innerHTML = senaste.length
+    ? '<div class="dlista"><div class="rad hd"><span>Tid</span><span>Sida</span><span>Grad</span><span>Setup</span><span>Utfall</span><span>Resultat</span></div>' +
+      senaste.map(x => '<div class="rad"><span>' + new Date(x.stangd).toLocaleTimeString('sv-SE', { hour:'2-digit', minute:'2-digit' }) + '</span>' +
+        '<span class="' + x.side + '">' + (x.side === 'long' ? 'LONG' : 'SHORT') + '</span><span>' + x.grade + '</span><span>' + esc(x.inst + ' · ' + (x.namn || '').slice(0, 36)) + '</span>' +
+        '<span class="' + (x.pnl >= 0 ? 'pos' : 'neg') + '">' + x.hur + '</span><span class="' + (x.pnl >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(x.pnl, 2) + ' $</span></div>').join('') + '</div>'
+    : '';
+  $('#krStamp').textContent = 'sedan ' + new Date(KRYPTO.startad).toLocaleDateString('sv-SE');
+  $('#krNote').innerHTML = 'Bybit-isolerad margin på USDT-perpetuals: hela saldot är margin, notional är saldot × ' + KRYPTO.havstang +
+    ', avgiften är ' + (KRYPTO.avgift*100).toFixed(3) + ' % av notional per sida — vid ' + KRYPTO.havstang + '× blir det ' + (KRYPTO.avgift*2*KRYPTO.havstang*100).toFixed(1) +
+    ' % av saldot per affär bara i avgifter. <b>Margin call</b> finns inte som varning på isolerad margin: positionen likvideras när förlusten når marginen minus underhållsmarginen (' +
+    (KRYPTO.mmr*100).toFixed(1) + ' %), alltså när priset gått ' + ((1/KRYPTO.havstang - KRYPTO.mmr)*100).toFixed(1) + ' % emot. Motorns stoppar ligger normalt långt innanför det, men ligger en stopp bortom likvidationen står det på positionen. ' +
+    'Nås likvidation, stopp och mål i samma stapel räknas de i den ordningen. Funding är utelämnad; priserna är Bybits spotstaplar. Hävstången ändras i <code>KRYPTO.havstang</code>.';
+}
+
 function demoTick(){
   if(KONTO.server) return;                 // servern sköter öppning och stängning
   let andrat = false;
@@ -3860,10 +4019,12 @@ async function refresh(){
     coreState('analyserar');
     paint();                       // priser och grafer ritas direkt — de väntar inte på nyhetsflödena
     demoTick();                    // lokalt konto: öppnar och stänger sina positioner
+    kryptoTick();                  // kryptokontot: hela saldot, hävstång, likvidation
     demoHamtaServer();             // serverkonto: hämtar läget om en Worker-URL är inlagd
     await Promise.all([side, news, kal]);
     paint();                       // nyheter, nyhetsbias och sidopriser fylls på när de landat
     renderDemo();
+    renderKrypto();
     coreState('vaktar marknaden');
     $('#bnErr').classList.remove('show');
   }catch(e){
@@ -3893,6 +4054,9 @@ function tick(){
 function wire(){
   $('#btnRefresh').onclick = refresh;
   $('#btnKrypto').onclick = () => tillLage(STATE.lage === 'krypto' ? 'nq' : 'krypto');
+  krLadda(); renderKrypto();
+  $('#krNoll').onclick = () => { if(!confirm('Nollställa kryptokontot till 100 $?')) return;
+    KRYPTO.kapital = KRYPTO.start; KRYPTO.oppen = null; KRYPTO.affarer = []; KRYPTO.startad = Date.now(); krSpara(); renderKrypto(); };
   tillLage(STATE.lage, true);                               // sparat läge, utan omladdning — refresh kommer strax
 
   $('#btnAuth').onclick = async () => {
