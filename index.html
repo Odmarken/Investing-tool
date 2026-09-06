@@ -818,7 +818,7 @@ footer b{color:var(--muted)}
   <div class="panel">
     <div class="ph">
       <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
-      <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krNoll" title="Tillbaka till 100 $">Nollställ</button></span>
+      <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button> <button class="btn" id="krNoll" title="Tillbaka till 100 $">Nollställ</button></span>
     </div>
     <div class="pb">
       <div class="btstats" id="krStats"></div>
@@ -3241,7 +3241,7 @@ function kryptoTick(){
   /* öppna: första handlingsbara aktiva kryptosignalen, om saldot är fritt */
   if(!KRYPTO.oppen && KRYPTO.kapital >= 1){
     const sig = STATE.signals.find(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && handlasGrad(x.grade)
-                                        && !KRYPTO.affarer.some(a => a.id === x.id));
+                                        && !KRYPTO.affarer.some(a => a.id === x.id) && isFinite(x.entryFyllt || x.entry) && (x.entryFyllt || x.entry) > 0);
     if(sig){
       const entry = sig.entryFyllt || sig.entry, margin = KRYPTO.kapital, notional = margin*KRYPTO.havstang, enheter = notional/entry;
       const c = STATE.ctx[sig.inst];
@@ -3260,7 +3260,12 @@ function kryptoTick(){
     const c = STATE.ctx[p.inst];
     if(c && c.bars.length){
       const dir = p.side === 'long' ? 1 : -1;
-      const nya = c.bars.filter(b => b.t > p.kollad);
+      /* >= och inte >: Bybits sista stapel är den som byggs, med starttiden som t.
+         Med > scannades den aldrig med sitt färdiga spann, och stopp eller mål
+         som nåddes inuti den missades tills stängningskursen råkade ligga förbi.
+         Att fyllningsstapeln därmed scannas igen är riggens regel: stoppen
+         först om båda nås i samma stapel. */
+      const nya = c.bars.filter(b => b.t >= p.kollad);
       p.kollad = c.bars[c.bars.length-1].t;
       let exit = null, hur = null, nar = Date.now();
       for(const b of nya){
@@ -3319,9 +3324,20 @@ function renderKrypto(){
       '<span>' + fmt(p.notional, 0) + ' $ notional · margin ' + fmt(p.margin, 2) + ' $</span>' +
       '<span>entry <b>' + fmt(p.entry, d) + '</b> · stopp ' + fmt(p.sl, d) + ' (−' + fmt(riskStopp, 2) + ' $) · mål ' + fmt(p.tp, d) + '</span>' +
       '<span>likvidation <b class="neg">' + fmt(p.liq, d) + '</b> · ' + tillLiq.toFixed(2) + ' % bort' + (Math.abs(p.sl - p.entry) > Math.abs(p.liq - p.entry) ? ' · <b class="neg">stoppen ligger bortom likvidationen</b>' : '') + '</span>' +
-      '<span class="' + (oreal >= 0 ? 'pos' : 'neg') + '"><b>' + fmtSigned(oreal, 2) + ' $</b> (' + fmtSigned(oreal/p.margin*100, 1) + ' % av marginen)</span></div>';
+      '<span class="' + (oreal >= 0 ? 'pos' : 'neg') + '"><b>' + fmtSigned(oreal, 2) + ' $</b> (' + fmtSigned(oreal/p.margin*100, 1) + ' % av marginen)</span>' +
+      (c ? '' : '<span class="neg">instrumentet är inte laddat — positionen kan inte följas; stäng manuellt</span>') + '</div>' +
+      '<div class="dim" style="font-size:11px;margin:4px 0 8px">Hela saldot sitter i den här affären. Nästa signal tas när den stängts' +
+      (function(){ const v = STATE.signals.filter(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && x.id !== p.id).length; return v ? ' — ' + v + ' aktiva väntar.' : '.'; })() + '</div>';
   }else{
-    opp.innerHTML = '<div class="empty" style="padding:8px 0">' + (KRYPTO.kapital < 1 ? 'Kontot är utslaget — nollställ för att börja om.' : 'Ingen affär öppen. Nästa aktiva A-signal tas med hela saldot.') + '</div>';
+    const aktiva = STATE.signals.filter(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto');
+    const kvar = aktiva.filter(x => handlasGrad(x.grade) && !KRYPTO.affarer.some(a => a.id === x.id));
+    const tagna = aktiva.filter(x => KRYPTO.affarer.some(a => a.id === x.id)).length;
+    const skal = KRYPTO.kapital < 1 ? 'Kontot är utslaget — nollställ för att börja om.'
+      : !aktiva.length ? 'Ingen affär öppen och ingen aktiv kryptosignal just nu.'
+      : kvar.length ? 'Ingen affär öppen — ' + kvar.length + ' handlingsbar tas vid nästa uppdatering.'
+      : tagna ? 'Ingen affär öppen. De ' + tagna + ' aktiva korten är redan handlade och avslutade i det här kontot — en fyllning tas en gång.'
+      : 'Ingen affär öppen. De aktiva korten har inte en grad kontot tar (MOTORCFG.grader).';
+    opp.innerHTML = '<div class="empty" style="padding:8px 0">' + skal + '</div>';
   }
 
   const senaste = a.slice(-10).reverse();
@@ -4055,6 +4071,17 @@ function wire(){
   $('#btnRefresh').onclick = refresh;
   $('#btnKrypto').onclick = () => tillLage(STATE.lage === 'krypto' ? 'nq' : 'krypto');
   krLadda(); renderKrypto();
+  $('#krStang').onclick = () => {
+    const p = KRYPTO.oppen; if(!p) return;
+    const c = STATE.ctx[p.inst], px = c ? c.px : p.entry, dir = p.side === 'long' ? 1 : -1;
+    if(!confirm('Stänga ' + p.inst + ' ' + p.side + ' till ' + fmt(px, INSTR[p.inst].dec) + '?')) return;
+    const avgift = KRYPTO.avgift*(p.notional + px*p.enheter);
+    const pnl = Math.max(dir*(px - p.entry)*p.enheter - avgift, -p.margin);
+    KRYPTO.kapital = Math.max(0, KRYPTO.kapital + pnl);
+    KRYPTO.affarer.push({ id:p.id, inst:p.inst, side:p.side, grade:p.grade, namn:p.namn, entry:p.entry, exit:px, hur:'manuellt',
+      notional:p.notional, margin:p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
+    KRYPTO.oppen = null; krSpara(); renderKrypto();
+  };
   $('#krNoll').onclick = () => { if(!confirm('Nollställa kryptokontot till 100 $?')) return;
     KRYPTO.kapital = KRYPTO.start; KRYPTO.oppen = null; KRYPTO.affarer = []; KRYPTO.startad = Date.now(); krSpara(); renderKrypto(); };
   tillLage(STATE.lage, true);                               // sparat läge, utan omladdning — refresh kommer strax
