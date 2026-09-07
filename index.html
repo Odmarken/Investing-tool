@@ -1948,6 +1948,9 @@ function rationaleHTML(s){
     return gradRad + '<br>' +
       `<b>Aktiv sedan ${klocka}:</b> fylld på <span class="mono">${fmt(s.entryFyllt || s.entry, s.dec)}</span>, ligger nu ` +
       `<b class="${R>=0?'pos':'neg'}">${fmtSigned(R,2)} R</b> (${fmtSigned(s.openPnl||0, 1)} ${s.unit}) — ${lage}. ` +
+      (function(){ const p = (typeof KRYPTO !== 'undefined') && KRYPTO.oppen; if(!p || p.id !== s.id) return '';
+        const c = STATE.ctx[p.inst], px = c ? c.px : p.entry, dir = p.side === 'long' ? 1 : -1, o = dir*(px - p.entry)*p.enheter;
+        return `<b>Kryptokontot:</b> <b class="${o>=0?'pos':'neg'}">${fmtSigned(o, 2)} $</b> (${fmtSigned(o/p.margin*100, 1)} % av marginen ${fmt(p.margin, 2)} $) · saldo nu <b>${fmt(KRYPTO.kapital + o, 2)} $</b>. `; })() +
       `Positionen står kvar som aktiv tills målet eller stoppen nås.<br>` +
       `<b>Härifrån:</b> ${fmt(s.kvarMal,1)} ${s.unit} (${(s.kvarMal/s.atr).toFixed(1)} ATR) upp till målet ` +
       `<span class="mono">${fmt(s.tp,s.dec)}</span> och ${fmt(s.kvarStopp,1)} ${s.unit} ned till stoppen ` +
@@ -3725,6 +3728,42 @@ function taEmotLive(bar){
   if(livePuls % 12 === 1) corePing('feed', 1);
 }
 
+/* Kryptots realtidspuls. Nasdaq får sitt livepris från TradingView-feeden var
+   femte sekund; kryptot fick bara nya staplar var 60:e, så saldot stod stilla
+   mellan varven. Bybits tickers ger alla sju priser i ett anrop. Priset skrivs
+   in i stapeln som byggs — stängning, och högsta/lägsta om det passerat dem —
+   så att statusar, stopp, mål och kontots orealiserade reagerar direkt, precis
+   som taEmotLive gör för NQ. */
+let kryptoPollar = false;
+async function pollaKrypto(){
+  if(STATE.lage !== 'krypto' || STATE.loading || kryptoPollar) return;
+  kryptoPollar = true;
+  try{
+    const j = await grab('https://api.bybit.com/v5/market/tickers?category=spot', { json:true, timeout:6000 });
+    const by = new Map(((j && j.result && j.result.list) || []).map(t => [t.symbol, t]));
+    let andrat = false;
+    for(const k of aktivaSyms()){
+      const inst = INSTR[k], c = STATE.ctx[k], t = inst.bybit && by.get(inst.bybit);
+      if(!c || !c.bars.length || !t) continue;
+      const px = +t.lastPrice; if(!isFinite(px) || px <= 0) continue;
+      const sista = c.bars[c.bars.length-1];
+      sista.c = px; if(px > sista.h) sista.h = px; if(px < sista.l) sista.l = px;
+      c.px = px;
+      const pct = +t.price24hPcnt*100, prev = px/(1 + pct/100);
+      STATE.quotes[k] = { ok:true, px, prev, chg:px-prev, chgPct:pct };
+      andrat = true;
+    }
+    if(!andrat) return;
+    STATE.livePris = STATE.ctx[STATE.chartSym] ? STATE.ctx[STATE.chartSym].px : STATE.livePris;
+    STATE.liveNar = Date.now();
+    const pxBy = {}; aktivaSyms().forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
+    STATE.signals = assignStatus(STATE.signals, pxBy);
+    kryptoTick();
+    renderTape(); renderSignals(); renderMainChart(); renderTech(); renderKrypto();
+  }catch(e){ /* nästa puls */ }
+  finally{ kryptoPollar = false; }
+}
+
 /* Utan Firestore — localhost, GitHub Pages — frågar vi efter samma stapel. */
 async function pollaLive(){
   if(STATE.liveKalla === 'firestore') return;
@@ -4170,6 +4209,7 @@ function wire(){
 
 pollaLive();                          // direkt vid start, annars står brickan tyst i fem sekunder
 setInterval(pollaLive, 5000);         // samma takt som feeden kan skicka i
+setInterval(pollaKrypto, 5000);       // kryptots pris från Bybit i samma takt
 
 let timer = null;
 function restartTimer(){
