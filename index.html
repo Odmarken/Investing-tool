@@ -3240,8 +3240,15 @@ function kryptoTick(){
 
   /* öppna: första handlingsbara aktiva kryptosignalen, om saldot är fritt */
   if(!KRYPTO.oppen && KRYPTO.kapital >= 1){
-    const sig = STATE.signals.find(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && handlasGrad(x.grade)
-                                        && !KRYPTO.affarer.some(a => a.id === x.id) && isFinite(x.entryFyllt || x.entry) && (x.entryFyllt || x.entry) > 0);
+    /* Vilken av flera aktiva som får saldot: den som blev aktiv först. Förut
+       togs den första i listan, och listan är sorterad på konf — ett tal som
+       mätt pekar åt fel håll (92–99 var den sämsta hinken). Att låta det välja
+       affären vore att låta det minst pålitliga talet styra. Först fylld är
+       den ärliga regeln när man tar en i taget: signalen tas när den kommer.
+       Vill man hellre ha högst R:R: sortera på b.rr - a.rr i stället. */
+    const sig = STATE.signals.filter(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && handlasGrad(x.grade)
+                                        && !KRYPTO.affarer.some(a => a.id === x.id) && isFinite(x.entryFyllt || x.entry) && (x.entryFyllt || x.entry) > 0)
+                                .sort((a, b) => (a.oppnad || 0) - (b.oppnad || 0))[0];
     if(sig){
       const entry = sig.entryFyllt || sig.entry, margin = KRYPTO.kapital, notional = margin*KRYPTO.havstang, enheter = notional/entry;
       const c = STATE.ctx[sig.inst];
