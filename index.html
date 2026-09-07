@@ -1298,6 +1298,14 @@ function renderChartSyms(){
     esc(INSTR[k].kort || k) + (STATE.lage === 'krypto' ? '' : ' · ' + esc((INSTR[k].label.split(' · ')[1]) || '')) + '</button>').join('');
 }
 
+/* Instrumentets etikett ur signalen, med instrumentlistan som reserv. Ett
+   kort utan etikett ska visa "BTC" — inte fälla hela ritningen. */
+function instEtikett(s){
+  const l = s && (s.instLabel || (INSTR[s.inst] && INSTR[s.inst].label) || s.inst || '');
+  const d = String(l).split(' · ');
+  return { kort: d[0] || '', lang: d[1] || '' };
+}
+
 function aktivaSyms(){
   const krypto = STATE.lage === 'krypto';
   return SYMS.filter(k => (grupp(INSTR[k]) === 'crypto') === krypto);
@@ -1705,13 +1713,13 @@ function makeSummary(){
     if(igang.length){
       const a2 = igang[0];
       const R = nz(a2.openPnl) && a2.risk ? a2.openPnl/a2.risk : 0;
-      return `Pågående affär: <b>${a2.instLabel.split(' · ')[0]} ${a2.side==='long'?'LONG':'SHORT'}</b> ` +
+      return `Pågående affär: <b>${instEtikett(a2).kort} ${a2.side==='long'?'LONG':'SHORT'}</b> ` +
         `(${a2.grade}-setup, ${a2.backN}/${FAM_N} strategier) fylld på ${fmt(a2.entryFyllt||a2.entry,a2.dec)}, ` +
         `nu ${fmtSigned(R,2)} R. Stopp ${fmt(a2.sl,a2.dec)}, mål ${fmt(a2.tp,a2.dec)} — den ligger kvar tills ett av dem nås` +
         (igang.length > 1 ? `. Ytterligare ${igang.length-1} affär${igang.length>2?'er':''} är igång.` : '.');
     }
     const nasta = fokusSignal();
-    if(nasta) return `Ingen affär är igång. Närmast är <b>${nasta.instLabel.split(' · ')[0]} ${nasta.side==='long'?'LONG':'SHORT'}</b> ` +
+    if(nasta) return `Ingen affär är igång. Närmast är <b>${instEtikett(nasta).kort} ${nasta.side==='long'?'LONG':'SHORT'}</b> ` +
       `(${nasta.grade}-setup) som utlöses när priset ${nasta.needTxt||'når'} ${fmt(nasta.entry,nasta.dec)} — ` +
       `${(nasta.dist/nasta.atr).toFixed(1)} ATR bort. Nivåerna är villkorade och ska inte förköpas.`;
     return 'Ingen setup är i entryzonen just nu — de listade nivåerna är villkorade och ska inte förköpas.';
@@ -2204,7 +2212,7 @@ function renderSignals(){
         <span class="strat ${s.grade}" title="${s.backN} av ${FAM_N} strategifamiljer bakom riktningen">${s.grade}</span>
         <span class="fam ${s.fam}" title="${esc(s.famName)}">${FAM_KORT[s.fam] || ''}</span>
         ${(s.also||[]).map(x=>`<span class="fam extra" title="Sammanslagen med ${esc(x)}">+ ${FAM_KORT[FAM_KEY(x)] || ''}</span>`).join('')}
-        <span class="sig-inst">${esc(s.instLabel.split(' · ')[0])} <span class="dim" style="font-weight:500">${esc(s.instLabel.split(' · ')[1]||'')}</span></span>
+        <span class="sig-inst">${esc(instEtikett(s).kort)} <span class="dim" style="font-weight:500">${esc(instEtikett(s).lang)}</span></span>
         <span class="sig-dir ${s.side}">${dirTxt}</span>
         ${FAM_HANDLAS[s.fam] === false ? '<span class="ejhandlas" title="Familjen ' + esc(s.famName) + ' hade negativ förväntan i mätningen på 60 dagar — demokontot öppnar inga affärer på den">handlas ej</span>' : ''}
         <span class="status ${stCls}"><span class="d"></span>${esc(s.statusTxt||s.status)}</span>

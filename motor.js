@@ -1592,12 +1592,12 @@ function assignStatus(sigs, pxByInst){
        men ordern som ska ligga ute i morgon är dagens. Sparades den efter FRYS
        blev den gamla entryn ny vilande order, "fylldes" direkt eftersom priset
        lämnat den för länge sedan, och stoppades på samma stapel. */
-    const farsk = { nyckel: s.nyckel, inst: s.inst, atr: s.atr, side: s.side, trigger: s.trigger, invalid: !!s.invalid,
-      entry: s.entry, sl: s.sl, tp: s.tp, risk: s.risk, ptsTp: s.ptsTp, rr: s.rr, grade: s.grade,
-      backers: s.backers, backN: s.backN, against: s.against, conf: s.conf, ai: s.ai, ev: s.ev, x: s.x,
-      stangVid: s.stangVid, kontrakt: s.kontrakt, riskUsd: s.riskUsd, malUsd: s.malUsd,
-      riskPerKontrakt: s.riskPerKontrakt, overRisk: s.overRisk, name: s.name, fam: s.fam, famName: s.famName,
-      why: s.why, also: s.also, tpBasis: s.tpBasis, tpMacro: s.tpMacro, tpAlign: s.tpAlign, reachSign: s.reachSign };
+    /* Hela signalen minus staplarna. Förr var det ett handplockat urval fält,
+       och det saknade id, instLabel, dec och unit: ett provkort som fylldes
+       frystes utan dem, lades tillbaka som aktivt kort och fällde hela
+       ritningen på instLabel.split. En kopia glömmer inget. */
+    const farsk = Object.assign({}, s, { invalid: !!s.invalid });
+    delete farsk.bars;
 
     const traff = Math.abs(px - s.entry) <= s.atr*0.05;   // priset står i praktiken på nivån
     const fylld = s.reachSign*(px - s.entry) >= 0;        // priset ligger på fyllningssidan
