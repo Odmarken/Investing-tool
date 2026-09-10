@@ -529,11 +529,13 @@ sämsta urvalet motorn har, och kontot handlar bara A. Per familj: svep
 moment tydligt negativa men på 60–420 setups var. Modellen underkänns av
 sitt eget test och `modell.js` skrivs med `duger: false`.
 
-Det betyder inte att motorn är fel — det betyder att 63 dagar inte räcker för
-att se en edge på 0,05 R om den finns, och att varje fix som "hittat" mer än
-så har visat sig vara ett mätfel. Kontot samlar nu data på lika villkor för
-alla sex familjerna, med de fyllningar man faktiskt får. Det som flyttar
-siffran är fler dagar. Kör `npm run mat` med några veckors mellanrum.
+Det här är inte längre "oavgjort". Varje mätfel som rättats har flyttat
+siffran nedåt, och den står nu där en korrekt byggd motor utan edge hamnar
+när kostnaderna räknas: under noll. Tre saker i datan pekar samtidigt åt
+samma håll — graden sorterar baklänges och kontot handlar bara A, svep är
+enda familjen över noll, och trend är hälften av alla affärer på −0,06 —
+men ingen av dem är mätt på ett urval kontot faktiskt tagit. Kör
+`npm run mat` innan en regel ändras, och efter.
 
 ### Det som fortfarande inte är mätt
 
