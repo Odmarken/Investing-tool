@@ -3113,7 +3113,7 @@ async function firebaseStart(){
   const cfg = await firebaseKonfig();
   if(!cfg) return;
   try{
-    const [{ initializeApp }, { getFirestore, doc, onSnapshot }, authModul] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, doc, onSnapshot, setDoc }, authModul] = await Promise.all([
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js'),
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js'),
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js')
@@ -3126,6 +3126,7 @@ async function firebaseStart(){
     AUTH.app = app;
     AUTH.modul = authModul;
     AUTH.auth = authModul.getAuth(app);
+    AUTH.db = db; AUTH.fs = { doc, onSnapshot, setDoc };   // kryptokontot skriver härifrån
     /* Den pågående stapeln pushas hit så fort molnet tagit emot den. */
     onSnapshot(doc(db, 'riptide', 'live'), snap => {
       const d = snap.data();
@@ -3160,13 +3161,39 @@ async function firebaseStart(){
       }, fel => console.warn('Firestore lyssnar inte: ' + fel.message));
     };
 
+    /* Kryptokontot i molnet. Samma dokument på alla enheter. Finns det inget
+       dokument än laddas den här enhetens lokala konto upp — om det har
+       historik — så att sparningen från datorn blir startpunkten. Ett nyare
+       moln vinner alltid över det lokala; ett äldre ignoreras. */
+    const lyssnaKrypto = () => {
+      if(AUTH.krAvlyssnare) return;
+      AUTH.krAvlyssnare = onSnapshot(doc(db, 'riptide', 'krypto'), snap => {
+        const d = snap.exists() ? snap.data() : null;
+        if(!d || !isFinite(d.kapital)){
+          const harHistorik = KRYPTO.affarer.length > 0 || !!KRYPTO.oppen || Math.abs(KRYPTO.kapital - KRYPTO.start) > 0.005;
+          KRYPTO.moln = true;
+          if(harHistorik){ krSpara(); coreRead('kryptokonto: laddade upp den här enhetens konto till molnet · ' + fmt(KRYPTO.kapital, 2) + ' $'); }
+          else coreRead('kryptokonto: molnet är tomt — första affären skapar dokumentet');
+          renderKrypto(); return;
+        }
+        if((d.uppdaterad || 0) < (KRYPTO.uppdaterad || 0)) return;        // äldre än det vi själva just skrev
+        ['kapital','havstang','oppen','affarer','startad','uppdaterad','aktivEnhet','hjartslag'].forEach(k => { if(d[k] !== undefined) KRYPTO[k] = d[k]; });
+        KRYPTO.moln = true;
+        krSparaLokalt();
+        renderKrypto();
+      }, fel => console.warn('Firestore krypto lyssnar inte: ' + fel.message));
+    };
+
     authModul.onAuthStateChanged(AUTH.auth, anv => {
       AUTH.anvandare = anv || null;
       if(anv){
         lyssnaKonto();
+        lyssnaKrypto();
         coreRead('inloggad som ' + (anv.email || 'okänd'));
       }else{
         if(AUTH.avlyssnare){ AUTH.avlyssnare(); AUTH.avlyssnare = null; }
+        if(AUTH.krAvlyssnare){ AUTH.krAvlyssnare(); AUTH.krAvlyssnare = null; }
+        KRYPTO.moln = false;
         KONTO.server = false;
         KONTO.oppna = {}; KONTO.affarer = []; KONTO.kapital = KONTO.start;
         // Töm rutorna också — sektionen döljs, men siffrorna ska inte ligga kvar i dokumentet.
@@ -3263,9 +3290,26 @@ const KRYPTO = { start:100, kapital:100, havstang:20, mmr:0.005, avgift:0.00055,
 function krLadda(){
   try{ const d = JSON.parse(localStorage.getItem(KR_NYCKEL) || 'null'); if(d && isFinite(d.kapital)) Object.assign(KRYPTO, d); }catch(e){}
 }
+/* Enhetens id: den som handlar. Slumpas en gång per webbläsare. */
+const KR_ENHET = (() => { try{ let e = localStorage.getItem('riptide.enhet'); if(!e){ e = Math.random().toString(36).slice(2, 10); localStorage.setItem('riptide.enhet', e); } return e; }catch(e){ return 'x' + Date.now(); } })();
+let krSistSkrivet = 0;
+
+function krTillstand(){
+  return { start:KRYPTO.start, kapital:KRYPTO.kapital, havstang:KRYPTO.havstang, oppen:KRYPTO.oppen, affarer:KRYPTO.affarer.slice(-300),
+           startad:KRYPTO.startad, uppdaterad:KRYPTO.uppdaterad || 0, aktivEnhet:KRYPTO.aktivEnhet || null, hjartslag:KRYPTO.hjartslag || 0 };
+}
+function krSparaLokalt(){
+  try{ localStorage.setItem(KR_NYCKEL, JSON.stringify(krTillstand())); }catch(e){}
+}
+/* Skriver lokalt och, inloggad, till molnet. Stämpeln uppdaterad gör att en
+   gammal ögonblicksbild från molnet inte kan skriva över det vi just gjorde. */
 function krSpara(){
-  try{ localStorage.setItem(KR_NYCKEL, JSON.stringify({ start:KRYPTO.start, kapital:KRYPTO.kapital, havstang:KRYPTO.havstang,
-    oppen:KRYPTO.oppen, affarer:KRYPTO.affarer.slice(-300), startad:KRYPTO.startad })); }catch(e){}
+  KRYPTO.uppdaterad = Date.now();
+  krSparaLokalt();
+  if(AUTH.anvandare && AUTH.db && AUTH.fs){
+    krSistSkrivet = Date.now();
+    AUTH.fs.setDoc(AUTH.fs.doc(AUTH.db, 'riptide', 'krypto'), krTillstand()).catch(e => coreRead('kryptokonto: kunde inte skriva till molnet — ' + (e.message || e)));
+  }
 }
 function krLikvidation(side, entry){
   return side === 'long' ? entry*(1 - 1/KRYPTO.havstang + KRYPTO.mmr) : entry*(1 + 1/KRYPTO.havstang - KRYPTO.mmr);
@@ -3292,9 +3336,24 @@ function krTagbar(sig){
   return { ok:true, px, kvarRR };
 }
 
+/* Handlar den här enheten, eller bara visar den? När kontot ligger i molnet
+   får bara en enhet i taget öppna och stänga: den som senast tickat. Är den
+   andra enhetens hjärtslag färskare än en minut visar vi bara. Slutar den
+   ticka — fliken stängd, telefonen i fickan — tar nästa enhet över. */
+function krHandlarHar(){
+  if(!KRYPTO.moln) return true;
+  const annan = KRYPTO.aktivEnhet && KRYPTO.aktivEnhet !== KR_ENHET && Date.now() - (KRYPTO.hjartslag || 0) < 60000;
+  return !annan;
+}
+
 function kryptoTick(){
   if(STATE.lage !== 'krypto') return;
+  if(!krHandlarHar()) return;                                        // en annan enhet handlar — vi visar
   let andrat = false;
+  if(KRYPTO.moln && (KRYPTO.aktivEnhet !== KR_ENHET || Date.now() - (KRYPTO.hjartslag || 0) > 30000)){
+    KRYPTO.aktivEnhet = KR_ENHET; KRYPTO.hjartslag = Date.now();    // ta eller förnya låset, högst varannan halvminut
+    andrat = true;
+  }
 
   /* öppna: första handlingsbara aktiva kryptosignalen, om saldot är fritt */
   if(!KRYPTO.oppen && KRYPTO.kapital >= 1){
@@ -3420,7 +3479,8 @@ function renderKrypto(){
         '<span class="' + x.side + '">' + (x.side === 'long' ? 'LONG' : 'SHORT') + '</span><span>' + x.grade + '</span><span>' + esc(x.inst + ' · ' + (x.namn || '').slice(0, 36)) + '</span>' +
         '<span class="' + (x.pnl >= 0 ? 'pos' : 'neg') + '">' + x.hur + '</span><span class="' + (x.pnl >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(x.pnl, 2) + ' $</span></div>').join('') + '</div>'
     : '';
-  $('#krStamp').textContent = 'sedan ' + new Date(KRYPTO.startad).toLocaleDateString('sv-SE');
+  $('#krStamp').textContent = 'sedan ' + new Date(KRYPTO.startad).toLocaleDateString('sv-SE') +
+    (KRYPTO.moln ? (krHandlarHar() ? ' · molnet · handlas här' : ' · molnet · handlas på en annan enhet, visas här') : ' · bara den här webbläsaren — logga in för att synka');
   $('#krNote').innerHTML = 'Bybit-isolerad margin på USDT-perpetuals: hela saldot är margin, notional är saldot × ' + KRYPTO.havstang +
     ', avgiften är ' + (KRYPTO.avgift*100).toFixed(3) + ' % av notional per sida — vid ' + KRYPTO.havstang + '× blir det ' + (KRYPTO.avgift*2*KRYPTO.havstang*100).toFixed(1) +
     ' % av saldot per affär bara i avgifter. <b>Margin call</b> finns inte som varning på isolerad margin: positionen likvideras när förlusten når marginen minus underhållsmarginen (' +
