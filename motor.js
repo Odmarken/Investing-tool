@@ -1163,10 +1163,19 @@ function makeSignal(ctx, o){
      pullbacken retraceras. Det är ett urval, inte en giltighetskontroll, och
      det är ett bra urval. Stoppen prövas av det uppenbara skälet: har priset
      redan passerat den finns ingen affär. */
+  /* En limitorder måste ligga på rätt sida om priset: en köplimit under, en
+     säljlimit över. Förr fick den ligga upp till 0,75 ATR på fel sida — och
+     fyllningsregeln bockade sedan av den på nästa stapel, eftersom stapelns
+     högsta alltid är över en säljlimit som redan ligger under marknaden. Det
+     gav "fyllningar" på nivåer priset aldrig kom till: en SOL-short på 99,05
+     medan priset låg i 99,3 hela kvällen. En stopporder är det motsatta —
+     den finns för att priset brutit nivån — och får ligga en bit förbi, för
+     den fylls till öppningen, inte till nivån. */
   const invalid = (dir*(ctx.px - sl) <= 0)
                || (dir*(ctx.px - tp) >= 0)
+               || (!levande && trigger === 'limit' && reached)
                || (fardsk && trigger === 'limit' && framfor < (MOTORCFG.minPullback || 0)*ctx.atr)
-               || (reached && gap > 0.75*ctx.atr && !levande);
+               || (!levande && trigger === 'stop' && reached && gap > 0.75*ctx.atr);
 
   const rr = t/risk;
   const dist = gap;
@@ -1674,6 +1683,7 @@ function assignStatus(sigs, pxByInst){
         else if(s.stangVid && b.t >= s.stangVid){ st.tid = true; st.slutAt = Date.now(); st.slutStapel = b.t;
           if(dir*(b.c - s.entry) >= 0) st.hitTp = true; else st.hitSl = true; }
       }
+      st.kollad = s.bars[s.bars.length-1].t;                 // domen står här; nästa varv tar vid
     }
     if(!gammal || avslutad) SEDD.set(s.nyckel, fylld);   // väntande idé: minns var priset låg
 
@@ -1690,15 +1700,29 @@ function assignStatus(sigs, pxByInst){
            stängningen — samma regel som fyllningen, samma som kontot och
            riggen. Nås båda i samma stapel räknas stoppen. Tiden är stapelns,
            så uppspelning och skarpt läge dömer likadant. */
-        const nu = stapel ? stapel.t : Date.now();
-        const traffSl = stapel ? (dir > 0 ? stapel.l <= s.sl : stapel.h >= s.sl) : (dir*(px - s.sl) <= 0);
-        const traffTp = stapel ? (dir > 0 ? stapel.h >= s.tp : stapel.l <= s.tp) : (dir*(px - s.tp) >= 0);
-        if(traffSl){ st.hitSl = true; st.slutAt = Date.now(); st.slutStapel = nu; }
-        else if(traffTp){ st.hitTp = true; st.slutAt = Date.now(); st.slutStapel = nu; }
-        else if(s.stangVid && nu >= s.stangVid){
-          st.tid = true; st.slutAt = Date.now(); st.slutStapel = nu;
-          if(dir*(px - s.entry) >= 0) st.hitTp = true; else st.hitSl = true;
+        /* Alla staplar sedan senaste dom, inte bara den sista. Förr dömdes
+           bara den senaste stapeln: staplar som passerade medan fliken var
+           stängd eller strypt i bakgrunden dömdes aldrig, och en stopp som
+           träffats då lämnade kortet aktivt. Stapeln som byggs döms om varje
+           varv, och när den är färdig döms den en sista gång med hela sitt
+           spann. Molnet, som kör var femte minut, får samma skydd om ett varv
+           uteblivit. */
+        const dom = (s.bars && s.bars.length) ? s.bars.filter(b => b.t >= (st.kollad || 0)) : [];
+        if(!dom.length){
+          const nu = Date.now();
+          if(dir*(px - s.sl) <= 0){ st.hitSl = true; st.slutAt = nu; st.slutStapel = nu; }
+          else if(dir*(px - s.tp) >= 0){ st.hitTp = true; st.slutAt = nu; st.slutStapel = nu; }
         }
+        for(const b of dom){
+          if(st.hitTp || st.hitSl) break;
+          if(dir > 0 ? b.l <= s.sl : b.h >= s.sl){ st.hitSl = true; st.slutAt = Date.now(); st.slutStapel = b.t; }
+          else if(dir > 0 ? b.h >= s.tp : b.l <= s.tp){ st.hitTp = true; st.slutAt = Date.now(); st.slutStapel = b.t; }
+          else if(s.stangVid && b.t >= s.stangVid){
+            st.tid = true; st.slutAt = Date.now(); st.slutStapel = b.t;
+            if(dir*(b.c - s.entry) >= 0) st.hitTp = true; else st.hitSl = true;
+          }
+        }
+        if(dom.length) st.kollad = dom[dom.length-1].t;
       }
     }
 
