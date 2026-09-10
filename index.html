@@ -836,7 +836,7 @@ footer b{color:var(--muted)}
   <div class="panel">
     <div class="ph">
       <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
-      <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button> <button class="btn" id="krNoll" title="Tillbaka till 100 $">Nollställ</button></span>
+      <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button></span>
     </div>
     <div class="pb">
       <div class="btstats" id="krStats"></div>
@@ -3346,6 +3346,14 @@ function krHandlarHar(){
   return !annan;
 }
 
+/* Nollställer kryptokontot till startsaldot — lokalt och, inloggad, i molnet.
+   Bara från konsolen: RIPTIDE.kryptoNollstall(). */
+function kryptoNollstall(){
+  if(!confirm('Nollställa kryptokontot till ' + KRYPTO.start + ' $ på alla enheter?')) return false;
+  KRYPTO.kapital = KRYPTO.start; KRYPTO.oppen = null; KRYPTO.affarer = []; KRYPTO.startad = Date.now();
+  krSpara(); renderKrypto(); return true;
+}
+
 function kryptoTick(){
   if(STATE.lage !== 'krypto') return;
   if(!krHandlarHar()) return;                                        // en annan enhet handlar — vi visar
@@ -3463,7 +3471,7 @@ function renderKrypto(){
     const kvar = aktiva.filter(x => handlasGrad(x.grade) && !KRYPTO.affarer.some(a => a.id === x.id));
     const tagbara = kvar.filter(x => krTagbar(x).ok);
     const tagna = aktiva.filter(x => KRYPTO.affarer.some(a => a.id === x.id)).length;
-    const skal = KRYPTO.kapital < 1 ? 'Kontot är utslaget — nollställ för att börja om.'
+    const skal = KRYPTO.kapital < 1 ? 'Kontot är utslaget — RIPTIDE.kryptoNollstall() i konsolen börjar om.'
       : !aktiva.length ? 'Ingen affär öppen och ingen aktiv kryptosignal just nu.'
       : tagbara.length ? 'Ingen affär öppen — ' + tagbara.length + ' handlingsbar tas vid nästa uppdatering, till marknadspris.'
       : kvar.length ? 'Ingen affär öppen. ' + kvar.length + ' aktiv' + (kvar.length > 1 ? 'a' : '') + ' har redan gått för långt sedan fyllningen — ' + krTagbar(kvar[0]).skal + ' — och tas inte till marknadspris.'
@@ -4371,8 +4379,8 @@ function wire(){
       notional:p.notional, margin:p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
     KRYPTO.oppen = null; krSpara(); renderKrypto();
   };
-  $('#krNoll').onclick = () => { if(!confirm('Nollställa kryptokontot till 100 $?')) return;
-    KRYPTO.kapital = KRYPTO.start; KRYPTO.oppen = null; KRYPTO.affarer = []; KRYPTO.startad = Date.now(); krSpara(); renderKrypto(); };
+  /* Ingen nollställningsknapp — som för Nasdaq-kontot finns det inget att råka
+     klicka på. Kontot nollställs med RIPTIDE.kryptoNollstall() i konsolen. */
   tillLage(STATE.lage, true);                               // sparat läge, utan omladdning — refresh kommer strax
 
   $('#btnAuth').onclick = async () => {
@@ -4464,7 +4472,7 @@ function restartTimer(){
 window.RIPTIDE = {
   STATE, KONTO, CFG, MOTOR,
   assignStatus, buildAllSignals, generateSignals, buildContext, demoTick, renderDemo, FAM_HANDLAS, MODELL, taEmotLive,
-  demoNollstall,
+  demoNollstall, kryptoNollstall,
   renderSignals, renderMainChart, stodOchMotstand, till15m, fokusSignal, refresh
 };
 

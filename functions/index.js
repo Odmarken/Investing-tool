@@ -519,6 +519,20 @@ export const api = onRequest(
       return;
     }
 
+    /* Kryptokontot, för kontroll från kommandoraden. Sidan äger dokumentet;
+       molnet bara läser det här. Nyckeln är samma som för /tick. */
+    if(vag === '/krypto'){
+      if(!nyckel || req.query.k !== nyckel){ res.status(401).json({ error: 'fel nyckel' }); return; }
+      const snap = await db.doc('riptide/krypto').get();
+      if(!snap.exists){ res.json({ finns: false }); return; }
+      const d = snap.data(), aff = d.affarer || [];
+      res.json({ finns: true, kapital: d.kapital, start: d.start, havstang: d.havstang, affarer: aff.length,
+                 oppen: d.oppen ? { id: d.oppen.id, inst: d.oppen.inst, side: d.oppen.side, entry: d.oppen.entry, margin: d.oppen.margin } : null,
+                 startad: d.startad, uppdaterad: d.uppdaterad, aktivEnhet: d.aktivEnhet, hjartslag: d.hjartslag,
+                 senaste: aff.slice(-3).map(a => ({ inst: a.inst, side: a.side, hur: a.hur, pnl: a.pnl, stangd: a.stangd })) });
+      return;
+    }
+
     if(vag === '/konto'){
       const huvud = String(req.get('authorization') || '');
       const token = huvud.startsWith('Bearer ') ? huvud.slice(7) : '';
@@ -534,6 +548,6 @@ export const api = onRequest(
       return;
     }
 
-    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/webbkonfig', '/api/tick?k=…', '/api/konto', '/api/konto/nollstall (POST)'] });
+    res.json({ tjanst: 'riptide', vagar: ['/api/proxy?url=…', '/api/ingest (POST)', '/api/bars?s=NQ', '/api/live', '/api/webbkonfig', '/api/tick?k=…', '/api/konto', '/api/konto/nollstall (POST)', '/api/krypto?k=…'] });
   }
 );
