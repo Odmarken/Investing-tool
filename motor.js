@@ -1215,12 +1215,12 @@ function makeSignal(ctx, o){
   // Dragen och modellens svar. p = sannolikhet att målet nås före stoppen,
   // ev = förväntat utfall i R om affären tas (p*rr − (1−p)*1).
   const x = drag(ctx, o, rr, dist, G);
-  const p = aiSannolikhet(x);
+  const p = grupp(ctx.inst) === 'crypto' ? null : aiSannolikhet(x);
   /* Uppmätt träff för familjen och graden, ur riggens senaste körning. Det är
      det kortet visar. Konfidensen räknas fortfarande — den är ett drag i
      modellen — men den var en checklista, inte en sannolikhet, och pekade åt
      fel håll. null tills riggen körts med den här versionen. */
-  const traff = (MODELL && MODELL.traff && MODELL.traff[o.fam + '|' + G.grade]) || null;
+  const traff = grupp(ctx.inst) === 'crypto' ? null : (MODELL && MODELL.traff && MODELL.traff[o.fam + '|' + G.grade]) || null;
   const ev = p === null ? null : p*rr - (1-p);
 
   return {

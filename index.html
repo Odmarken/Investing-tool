@@ -266,6 +266,16 @@ body.krypto #btnAuth{display:none}
    utan att man scrollar. Den man klickar på fäller ut sig över hela bredden. */
 #sigList{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:8px;align-content:start}
 #sigList .empty, #sigList .votes{grid-column:1/-1}
+.crypto-tools{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 11px;border-bottom:1px solid var(--line);font-size:11px}
+.crypto-tools[hidden]{display:none}
+.crypto-tools label{font-weight:700;color:var(--text)}
+.crypto-tools select{max-width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line-2);border-radius:6px;padding:6px;font:inherit}
+.crypto-tools p{flex-basis:100%;margin:0;color:var(--muted);line-height:1.5}
+.crypto-quality{padding:7px 10px;border-top:1px solid var(--line);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
+.crypto-quality strong{font-weight:700}
+.crypto-checks{padding:8px 10px;font-size:10px;line-height:1.65;border-top:1px solid var(--line)}
+.crypto-checks ul{padding-left:17px;margin:5px 0}
+.crypto-checks .failed{color:var(--muted)}
 .sig{margin-bottom:0;padding:9px 10px;cursor:pointer}
 .sig.oppen{grid-column:1/-1;cursor:default;padding:11px 12px}
 .sig-mer{display:none}
@@ -792,6 +802,15 @@ footer b{color:var(--muted)}
           <span class="right"><span id="sigStamp">–</span></span>
         </div>
         <div class="nybias" id="nyBias"></div>
+        <div class="crypto-tools" id="cryptoTools" hidden>
+          <label for="cryptoSelective">Kryptofilter</label>
+          <select id="cryptoSelective">
+            <option value="review">Granska signalerna</option>
+            <option value="selective">Selektivt · nya demoaffärer</option>
+          </select>
+          <span id="cryptoQualitySummary" role="status"></span>
+          <p id="cryptoQualityNote"></p>
+        </div>
         <div class="pb" style="padding:11px" id="sigList">
           <div class="empty"><span class="spin"></span> Beräknar setups…</div>
         </div>
@@ -969,6 +988,7 @@ footer b{color:var(--muted)}
 <script type="module">
 "use strict";
 import * as MOTOR from './motor.js';
+import { CRYPTO_RULES, cryptoContext, reviewCrypto } from './crypto-quality.js';
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
@@ -986,6 +1006,7 @@ MOTORCFG.formandeStapel = true;
    0. KONFIGURATION
    ========================================================================== */
 const CFG = {
+  cryptoSelective: false,
   proxy: 'auto',
   customProxy: '',        // t.ex. https://min-proxy.workers.dev/?url=
   feedUrl: '',            // t.ex. https://riptide-feed.dittnamn.workers.dev
@@ -1025,6 +1046,7 @@ function loadCfg(){
   try{ saved = JSON.parse(localStorage.getItem(CFG_KEY) || localStorage.getItem(CFG_KEY_GAMMAL) || 'null'); }
   catch(e){ saved = null; }
   if(!saved || typeof saved !== 'object'){ syncMotorCfg(); return; }
+  CFG.cryptoSelective = saved.cryptoSelective === true;
   ['proxy','risk'].forEach(k => { if(typeof saved[k] === 'string') CFG[k] = saved[k]; });
   ['customProxy','feedUrl'].forEach(k => { if(typeof saved[k] === 'string') CFG[k] = cleanUrl(saved[k]); });
   ['refreshSec','minPts','maxPts'].forEach(k => { if(isFinite(+saved[k]) && +saved[k] > 0) CFG[k] = +saved[k]; });
@@ -1057,7 +1079,7 @@ function saveCfg(){
     localStorage.setItem(CFG_KEY, JSON.stringify({
       proxy:CFG.proxy, customProxy:CFG.customProxy, feedUrl:CFG.feedUrl,
       refreshSec:CFG.refreshSec, minPts:CFG.minPts, maxPts:CFG.maxPts,
-      risk:CFG.risk, feeds:CFG.feeds, feedsSe:CFG.feedsSe
+      risk:CFG.risk, feeds:CFG.feeds, feedsSe:CFG.feedsSe, cryptoSelective:CFG.cryptoSelective
     }));
   }catch(e){ /* privat läge eller full lagring — kör vidare utan att spara */ }
 }
@@ -2052,6 +2074,7 @@ function kopplaSignalKlick(){
    därför i verktygstipset: familjens och gradens träff ur riggen, med antal
    och snitt-R, och kontots egna avslutade affärer i samma familj och grad. */
 function traffHtml(s){
+  if(grupp(INSTR[s.inst]) === 'crypto') return '<div class="conf" title="Regelpoäng, inte uppmätt vinstchans. Nasdaq-statistik används inte för krypto."><span class="dim">Regelpoäng</span> <b class="mono">' + s.conf + '/100</b></div>';
   const cCls = s.conf >= 68 ? 'hi' : s.conf < 45 ? 'lo' : '';
   const t = s.traff;
   const egna = (KONTO.affarer || []).filter(a => a.nyckel && a.nyckel.split('|')[1] === s.fam && a.grade === s.grade);
@@ -2216,6 +2239,23 @@ function visaPablo(s){
 
 function renderSignals(){
   const el = $('#sigList');
+  const crypto = STATE.lage === 'krypto', reviewTime = Date.now();
+  const snapshots = new Map(), reviews = new Map();
+  if(crypto) for(const s of STATE.signals){
+    if(grupp(INSTR[s.inst]) !== 'crypto') continue;
+    if(!snapshots.has(s.inst)) snapshots.set(s.inst, cryptoContext(STATE.ctx[s.inst]?.bars, reviewTime));
+    reviews.set(s.id, krReview(s, reviewTime, snapshots.get(s.inst)));
+  }
+  $('#cryptoTools').hidden = !crypto;
+  if(crypto){
+    $('#cryptoSelective').value = CFG.cryptoSelective ? 'selective' : 'review';
+    const pending = STATE.signals.filter(s => reviews.has(s.id) && s.status !== 'TP' && s.status !== 'SL');
+    $('#cryptoQualitySummary').textContent = pending.filter(s => reviews.get(s.id).pass).length + ' av ' + pending.length + ' klarar filtret';
+    $('#cryptoQualityNote').textContent = (CFG.cryptoSelective
+      ? 'Selektivt: denna webbläsare öppnar bara nya demoaffärer som klarar alla krav. Öppna positioner behåller sina stopp och mål.'
+      : 'Granskning: kontot följer nuvarande regler. Välj Selektivt för att kräva filtret vid nya demoaffärer i denna webbläsare.') +
+      ' Experimentellt, ännu inte lönsamhetsvaliderat. Hela saldot och ' + KRYPTO.havstang + '× exponering gäller fortfarande.';
+  }
   let list = STATE.signals.filter(synligGrad);
   if(STATE.sigFilter === 'A' || STATE.sigFilter === 'B' || STATE.sigFilter === 'C'){
     list = list.filter(s => s.grade === STATE.sigFilter);
@@ -2237,6 +2277,7 @@ function renderSignals(){
   const stj = x => STATE.stjarnor.has(x.id) ? 1 : 0;
   list.sort((a,b)=> (stj(b)-stj(a))                         // stjärnmärkta allra först
                  || (rang(a)-rang(b))                       // sedan pågående och avslutade affärer
+                 || (crypto ? Number(reviews.get(b.id)?.pass || false)-Number(reviews.get(a.id)?.pass || false) : 0)
                  || (GRADE_RANK[a.grade]-GRADE_RANK[b.grade])
                  || (order[a.status]-order[b.status])
                  || (b.conf-a.conf));
@@ -2271,11 +2312,13 @@ function renderSignals(){
         <span class="vik">▾</span>
       </div>
       <div class="sig-namn">${esc(s.name)}</div>
+      ${cryptoQualityHtml(s, reviews.get(s.id), false)}
       <div class="sig-snabb">
         <i>entry</i><span class="e">${fmt(s.entry,s.dec)}</span>
         <span class="rr">R:R ${s.rr.toFixed(2)}</span>
       </div>
       <div class="sig-mer">
+      ${cryptoQualityHtml(s, reviews.get(s.id), true)}
       <div class="sig-body">
         <div class="legs">
           <div class="leg entry"><i>Entry ${s.trigger==='stop'?'stop':'limit'}</i><b>${fmt(s.entry,s.dec)}</b><s>${s.dist<s.atr*0.3?'i zonen':(s.dist/s.atr).toFixed(1)+' ATR'}</s></div>
@@ -3365,7 +3408,29 @@ function krTagbar(sig){
   const kvarRR = Math.abs(sig.tp - px) / Math.max(Math.abs(px - sig.sl), 1e-12);
   if(!innanfor) return { ok:false, px, kvarRR, skal:'priset är redan förbi stopp eller mål' };
   if(kvarRR < 1) return { ok:false, px, kvarRR, skal:'mindre än 1:1 kvar till målet' };
+  if(CFG.cryptoSelective){
+    const review = krReview(sig);
+    if(!review.pass) return { ok:false, px, kvarRR, skal:'kryptofiltret: ' + review.reason };
+  }
   return { ok:true, px, kvarRR };
+}
+
+function krReview(sig, now = Date.now(), snapshot){
+  return reviewCrypto(sig, STATE.ctx[sig.inst], now, {
+    ...CRYPTO_RULES, fee:KRYPTO.avgift, leverage:KRYPTO.havstang, maintenance:KRYPTO.mmr
+  }, snapshot);
+}
+
+function cryptoQualityHtml(sig, review, details){
+  if(!review) return '';
+  if(sig.status === 'TP' || sig.status === 'SL') return details ? '' : '<div class="crypto-quality dim">Avslutad signal · inget nytt inträde bedöms</div>';
+  const rr = Number.isFinite(review.netRR) ? fmt(review.netRR, 2) + ':1' : '–';
+  if(!details) return '<div class="crypto-quality"><strong class="' + (review.pass ? 'pos' : 'dim') + '">' +
+    (review.pass ? 'Klarar kryptofiltret' : 'Avvakta · ' + review.failed.length + ' krav saknas') + '</strong>' +
+    ' · netto R:R ' + rr + '<div class="dim">' + esc(review.basis) + ' · experimentellt filter</div></div>';
+  return '<div class="crypto-checks"><b>Kontroll inför ett nytt inträde</b><ul>' + review.checks.map(x =>
+    '<li class="' + (x.ok ? 'pos' : 'failed') + '">' + (x.ok ? '✓ ' : '– ') + esc(x.label) + '</li>').join('') +
+    '</ul><span class="dim">Netto R:R räknar avgifter och 0,05 % slippage per sida, före funding. Godkänt filter är ingen uppmätt vinstchans.</span></div>';
 }
 
 /* Handlar den här enheten, eller bara visar den? När kontot ligger i molnet
@@ -3510,7 +3575,7 @@ function renderKrypto(){
     const skal = KRYPTO.kapital < 1 ? 'Kontot är utslaget — RIPTIDE.kryptoNollstall() i konsolen börjar om.'
       : !aktiva.length ? 'Ingen affär öppen och ingen aktiv kryptosignal just nu.'
       : tagbara.length ? 'Ingen affär öppen — ' + tagbara.length + ' handlingsbar tas vid nästa uppdatering, till marknadspris.'
-      : kvar.length ? 'Ingen affär öppen. ' + kvar.length + ' aktiv' + (kvar.length > 1 ? 'a' : '') + ' har redan gått för långt sedan fyllningen — ' + krTagbar(kvar[0]).skal + ' — och tas inte till marknadspris.'
+      : kvar.length ? 'Ingen affär öppen. ' + kvar.length + ' aktiv' + (kvar.length > 1 ? 'a' : '') + ' klarar inte inträdeskraven — ' + esc(krTagbar(kvar[0]).skal) + '.'
       : tagna ? 'Ingen affär öppen. De ' + tagna + ' aktiva korten är redan handlade och avslutade i det här kontot — en fyllning tas en gång.'
       : 'Ingen affär öppen. De aktiva korten har inte en grad kontot tar (MOTORCFG.grader).';
     opp.innerHTML = '<div class="empty" style="padding:8px 0">' + skal + '</div>';
@@ -4437,6 +4502,10 @@ function tick(){
 
 /* ---------- wiring ---------- */
 function wire(){
+  $('#cryptoSelective').onchange = e => {
+    CFG.cryptoSelective = e.target.value === 'selective';
+    saveCfg(); renderSignals(); renderKrypto();
+  };
   $('#btnRefresh').onclick = refresh;
   $('#btnKrypto').onclick = () => tillLage(STATE.lage === 'krypto' ? 'nq' : 'krypto');
   krLadda(); renderKrypto();

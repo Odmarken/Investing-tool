@@ -48,7 +48,7 @@ function cryptoFixture() {
       liq:95.5, enheter:20, margin:100, notional:2000, kollad:1000, fyllStapel:1000 } };
   let saves = 0;
   const ctx = context(['krTagbar','krLikvidation','kryptoTick','riktigaPriser'], {
-    STATE:state, KRYPTO:account, KR_ENHET:'test', krHandlarHar:() => true,
+    STATE:state, KRYPTO:account, CFG:{cryptoSelective:false}, KR_ENHET:'test', krHandlarHar:() => true,
     krSpara:() => saves++, coreRead:noop, aktivaSyms:() => ['BTC','ETH']
   });
   return { ctx, state, account, saves:() => saves };
@@ -82,6 +82,26 @@ test('simulated entries are blocked without blocking healthy instruments', () =>
   state.ctx.BTC.simulated = false;
   ctx.kryptoTick();
   assert.equal(account.oppen.id, 'entry');
+});
+
+test('selective mode blocks new entries, allows qualified entries and preserves open-position exits', () => {
+  const {ctx,state,account} = cryptoFixture();
+  state.ctx.BTC.simulated=false;state.ctx.BTC.px=100;
+  state.ctx.BTC.bars=[{t:1000,o:100,h:100,l:100,c:100}];
+  account.oppen=null;ctx.CFG.cryptoSelective=true;
+  const s={id:'selective',inst:'BTC',side:'long',status:'ACTIVE',grade:'A',sl:99,tp:102};
+  state.signals=[s];ctx.krReview=()=>({pass:false,reason:'test requirement'});
+  assert.match(ctx.krTagbar(s).skal,/test requirement/);
+  ctx.kryptoTick();assert.equal(account.oppen,null);
+  ctx.krReview=()=>({pass:true});ctx.kryptoTick();assert.equal(account.oppen.id,s.id);
+  ctx.krReview=()=>{throw Error('Existing position must not be re-filtered');};
+  state.ctx.BTC.px=98;ctx.kryptoTick();assert.equal(account.oppen,null);assert.equal(account.affarer.length,1);
+});
+
+test('crypto score is a rule score and does not reuse Nasdaq measured success', () => {
+  const ctx=context(['traffHtml'],{});
+  const html=ctx.traffHtml({inst:'BTC',conf:93,traff:{traff:99,n:10000,R:2}});
+  assert.match(html,/93\/100/);assert.doesNotMatch(html,/99|93%/);
 });
 
 test('fallback history stays marked simulated even when a real feed bar arrives', async () => {
