@@ -505,6 +505,7 @@ body.krypto #btnAuth{display:none}
 .oppen{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;margin-bottom:8px;border-radius:8px;
   border:1px solid rgba(6,255,165,.35);background:rgba(6,255,165,.06);font-size:10.5px}
 .oppen b{font-family:var(--mono);font-size:11.5px}
+.oppen .kr-close{margin-left:auto;flex-shrink:0;white-space:nowrap}
 .oppen .tag{font-size:8.5px;font-weight:800;letter-spacing:.8px;padding:2px 6px;border-radius:5px;
   border:1px solid var(--line-2);color:var(--muted)}
 .dlista{margin-top:11px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -3468,7 +3469,8 @@ function renderKrypto(){
   const p = KRYPTO.oppen;
   let oreal = 0;
   if(p){ const c = STATE.ctx[p.inst]; if(c && !c.simulated){ const dir = p.side === 'long' ? 1 : -1; oreal = dir*(c.px - p.entry)*p.enheter; } }
-  $('#krStang').disabled = !!p && (!STATE.ctx[p.inst] || STATE.ctx[p.inst].simulated);
+  const kanStanga = !!p && !!STATE.ctx[p.inst] && !STATE.ctx[p.inst].simulated && nz(STATE.ctx[p.inst].px) && STATE.ctx[p.inst].px > 0;
+  $('#krStang').disabled = !kanStanga;
   const eget = Math.max(0, KRYPTO.kapital + oreal), a = KRYPTO.affarer, v = a.filter(x => x.pnl > 0).length, likv = a.filter(x => x.hur === 'likviderad').length;
   let topp = KRYPTO.start, dd = 0; for(const x of a){ topp = Math.max(topp, x.kapitalEfter); dd = Math.max(dd, topp ? (topp - x.kapitalEfter)/topp : 0); }
   const tile = (e, w, cls) => '<div class="btstat"><i>' + e + '</i><b class="' + (cls||'') + '">' + w + '</b></div>';
@@ -3496,7 +3498,8 @@ function renderKrypto(){
       '<span>in på <b>' + fmt(p.entry, d) + '</b>' + (p.entrySignal && Math.abs(p.entrySignal - p.entry) > 0 ? ' <span class="dim">(signalen fylldes ' + fmt(p.entrySignal, d) + ')</span>' : '') + ' · stopp ' + fmt(p.sl, d) + ' (−' + fmt(riskStopp, 2) + ' $) · mål ' + fmt(p.tp, d) + '</span>' +
       '<span>likvidation <b class="neg">' + fmt(p.liq, d) + '</b> · ' + tillLiq.toFixed(2) + ' % bort' + (Math.abs(p.sl - p.entry) > Math.abs(p.liq - p.entry) ? ' · <b class="neg">stoppen ligger bortom likvidationen</b>' : '') + '</span>' +
       '<span class="' + (oreal >= 0 ? 'pos' : 'neg') + '"><b>' + fmtSigned(oreal, 2) + ' $</b> (' + fmtSigned(oreal/p.margin*100, 1) + ' % av marginen)</span>' +
-      (c ? '' : '<span class="neg">Riktiga priser saknas — handeln och resultatvisningen är pausade.</span>') + '</div>' +
+      (c ? '' : '<span class="neg">Riktiga priser saknas — handeln och resultatvisningen är pausade.</span>') +
+      '<button type="button" class="btn kr-close" data-kr-stang title="Stäng den aktuella demopositionen till senaste pris"' + (kanStanga ? '' : ' disabled') + '>Close trade</button></div>' +
       '<div class="dim" style="font-size:11px;margin:4px 0 8px">Hela saldot sitter i den här affären. Nästa signal tas när den stängts' +
       (function(){ const v = STATE.signals.filter(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && x.id !== p.id).length; return v ? ' — ' + v + ' aktiva väntar.' : '.'; })() + '</div>';
   }else{
@@ -4439,7 +4442,7 @@ function wire(){
   krLadda(); renderKrypto();
   $('#krStang').onclick = () => {
     const p = KRYPTO.oppen; if(!p) return;
-    if(!STATE.ctx[p.inst] || STATE.ctx[p.inst].simulated) return;
+    if(!STATE.ctx[p.inst] || STATE.ctx[p.inst].simulated || !nz(STATE.ctx[p.inst].px) || STATE.ctx[p.inst].px <= 0) return;
     const c = STATE.ctx[p.inst], px = c ? c.px : p.entry, dir = p.side === 'long' ? 1 : -1;
     if(!confirm('Stänga ' + p.inst + ' ' + p.side + ' till ' + fmt(px, INSTR[p.inst].dec) + '?')) return;
     const avgift = KRYPTO.avgift*(p.notional + px*p.enheter);
@@ -4449,6 +4452,10 @@ function wire(){
       notional:p.notional, margin:p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
     KRYPTO.oppen = null; krSpara(); renderKrypto();
   };
+  // Delegerat eftersom positionsraden byggs om vid varje prisuppdatering.
+  $('#krOppen').addEventListener('click', e => {
+    if(e.target.closest('[data-kr-stang]')) $('#krStang').click();
+  });
   /* Ingen nollställningsknapp — som för Nasdaq-kontot finns det inget att råka
      klicka på. Kontot nollställs med RIPTIDE.kryptoNollstall() i konsolen. */
   tillLage(STATE.lage, true);                               // sparat läge, utan omladdning — refresh kommer strax
