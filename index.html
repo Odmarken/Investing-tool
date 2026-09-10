@@ -272,6 +272,11 @@ body.krypto #btnAuth{display:none}
 .sig.oppen .sig-mer{display:block}
 .sig .vik{margin-left:auto;color:var(--muted);font-size:11px;line-height:1;transition:transform .15s}
 .sig.oppen .vik{transform:rotate(180deg)}
+.sig .stjarna{background:none;border:0;color:var(--muted-2);font-size:16px;line-height:1;cursor:pointer;padding:0 3px;transition:.15s}
+.sig .stjarna:hover{color:#FFD60A}
+.sig .stjarna.on{color:#FFD60A;text-shadow:0 0 9px rgba(255,214,10,.65)}
+.sig.stjarnad{border-color:rgba(255,214,10,.6);box-shadow:0 0 0 1px rgba(255,214,10,.25),0 0 18px rgba(255,214,10,.14)}
+.sig .sedan{font:700 10px var(--mono);color:var(--muted);letter-spacing:.3px;white-space:nowrap}
 .pablo-knapp{display:none;margin-left:auto;font:800 9.5px/1 var(--mono);letter-spacing:.9px;text-transform:uppercase;color:var(--accent);
   background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.35);border-radius:6px;padding:4px 8px;cursor:pointer}
 .sig.oppen .pablo-knapp{display:inline-block}
@@ -1681,6 +1686,10 @@ const STATE = {
   vy:{ n:96, off:0, pris:1, py:0 },         // grafens fönster: staplar, hur långt bak, prisskala, höjdläge
   lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[], molnBias:null,
   livePris:null, liveNar:0, liveKalla:null, oppnaSignaler:new Set(),
+  /* Stjärnmärkta kort ligger högst upp i listan tills stjärnan släcks. Ett
+     kort som försvinner ur listan behåller sin stjärna ett tag, så att det
+     kommer tillbaka högst upp om det dyker upp igen. Per webbläsare. */
+  stjarnor: (() => { try{ return new Set(JSON.parse(localStorage.getItem('riptide.stjarnor') || '[]')); }catch(e){ return new Set(); } })(),
   lage: (() => { try{ return localStorage.getItem('riptide.lage') === 'krypto' ? 'krypto' : 'nq'; }catch(e){ return 'nq'; } })()
 };
 
@@ -2005,6 +2014,13 @@ function kopplaSignalKlick(){
   el.addEventListener('click', e => {
     const kort = e.target.closest('.sig');
     if(!kort || !kort.dataset.sig) return;
+    const stj = e.target.closest('.stjarna');
+    if(stj){
+      const id = kort.dataset.sig;
+      if(STATE.stjarnor.has(id)) STATE.stjarnor.delete(id); else STATE.stjarnor.add(id);
+      try{ localStorage.setItem('riptide.stjarnor', JSON.stringify([...STATE.stjarnor].slice(-50))); }catch(err){}
+      renderSignals(); return;
+    }
     const pk = e.target.closest('.pablo-knapp');
     if(pk){ const sig = STATE.signals.find(x => x.id === kort.dataset.sig); if(sig) visaPablo(sig); return; }
     if(e.target.closest('a, button')) return;                            // länkar och knappar sköter sig själva
@@ -2207,7 +2223,9 @@ function renderSignals(){
 
   const order = {ACTIVE:0, 'NÄRA':2, 'VÄNTAR':3, TP:4, SL:5, 'LÖPANDE':1};
   const rang = x => x.status === 'ACTIVE' ? 0 : (x.status === 'TP' || x.status === 'SL') ? 1 : 2;
-  list.sort((a,b)=> (rang(a)-rang(b))                       // pågående och avslutade affärer först
+  const stj = x => STATE.stjarnor.has(x.id) ? 1 : 0;
+  list.sort((a,b)=> (stj(b)-stj(a))                         // stjärnmärkta allra först
+                 || (rang(a)-rang(b))                       // sedan pågående och avslutade affärer
                  || (GRADE_RANK[a.grade]-GRADE_RANK[b.grade])
                  || (order[a.status]-order[b.status])
                  || (b.conf-a.conf));
@@ -2226,7 +2244,7 @@ function renderSignals(){
     const dirTxt = s.side==='long' ? 'LONG' : 'SHORT';
     const stCls = ['ACTIVE','NÄRA','LÖPANDE','TP','SL'].includes(s.status)?s.status:'';
     const pnl = nz(s.openPnl) ? `<div class="m"><i>Öppen</i><b class="${s.openPnl>=0?'pos':'neg'}">${fmtSigned(s.openPnl/s.risk,2)} R</b></div>` : '';
-    return `<div data-sig="${esc(s.id)}" class="sig ${s.side} ${STATE.oppnaSignaler.has(s.id) ? 'oppen' : ''} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
+    return `<div data-sig="${esc(s.id)}" class="sig ${s.side} ${STATE.oppnaSignaler.has(s.id) ? 'oppen' : ''} ${STATE.stjarnor.has(s.id) ? 'stjarnad' : ''} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
       <span class="edge"></span>
       <div class="sig-top">
         <span class="strat ${s.grade}" title="${s.backN} av ${FAM_N} strategifamiljer bakom riktningen">${s.grade}</span>
@@ -2236,6 +2254,8 @@ function renderSignals(){
         <span class="sig-dir ${s.side}">${dirTxt}</span>
         ${FAM_HANDLAS[s.fam] === false ? '<span class="ejhandlas" title="Familjen ' + esc(s.famName) + ' hade negativ förväntan i mätningen på 60 dagar — demokontot öppnar inga affärer på den">handlas ej</span>' : ''}
         <span class="status ${stCls}"><span class="d"></span>${esc(s.statusTxt||s.status)}</span>
+        ${s.oppnad && (s.status === 'ACTIVE' || s.status === 'TP' || s.status === 'SL') ? `<span class="sedan" title="Blev aktiv ${new Intl.DateTimeFormat('sv-SE', { timeZone:'Europe/Stockholm', dateStyle:'short', timeStyle:'short' }).format(new Date(s.oppnad))}">${new Intl.DateTimeFormat('sv-SE', { timeZone:'Europe/Stockholm', hour:'2-digit', minute:'2-digit' }).format(new Date(s.oppnad))}</span>` : ''}
+        <button class="stjarna ${STATE.stjarnor.has(s.id) ? 'on' : ''}" type="button" title="${STATE.stjarnor.has(s.id) ? 'Släpp — tillbaka i ledet' : 'Fäst högst upp'}">${STATE.stjarnor.has(s.id) ? '★' : '☆'}</button>
         <button class="pablo-knapp" type="button" title="Pablo läser igenom allt motorn vet om den här setupen och skriver en bedömning">Pablo</button>
         <span class="vik">▾</span>
       </div>
