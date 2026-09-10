@@ -504,19 +504,30 @@ motorer.**
 
 ### Vad mätningen visar just nu
 
-63 handelsdagar, netto efter kostnader, tekniska mål, karens 6:
+67 handelsdagar, netto efter kostnader, tekniska mål, karens 6, bara grad A:
 
 | fönster | affärer | per dag | träff | snitt R | t | plusdagar |
 |---|---|---|---|---|---|---|
-| 24h | 698 | 12,0 | 47 % | +0,003 | 0,05 | 34/58 |
-| 08–22 | 546 | 11,1 | 46 % | −0,045 | −0,76 | 23/49 |
-| 14–22 | 366 | 7,6 | 49 % | −0,011 | −0,16 | 22/48 |
+| 24h | 486 | 8,0 | 33 % | −0,169 | −2,02 | 19/61 |
+| 08–22 | 398 | 7,5 | 35 % | −0,164 | −2,22 | 19/53 |
+| 14–22 | 298 | 5,6 | 36 % | −0,149 | −1,80 | 19/53 |
 
-**Noll, i alla fönster.** Kontot är korrekt byggt och har ingen mätbar edge.
-Populationen (`npm run trana`) säger detsamma: −0,062 R mot nolltestets
-−0,081, graderingen sorterar inte (A −0,127, B −0,052, C −0,025), riktningen
-ensam +0,05 mot slump med t = 0,20, inget av 34 drag med |t| > 2. Modellen
-underkänns av sitt eget test och `modell.js` skrivs med `duger: false`.
+**Negativt, i alla fönster, med t kring −2.** Den förra mätningen låg kring
+noll — men den bar ett par hundra fyllningar på nivåer priset aldrig kom
+till (limitordrar på fel sida om marknaden, se *Tre fel* ovan; det blev ett
+fjärde). Utan dem är kontot ett förlorande system: −0,16 R per affär, åtta
+affärer om dagen, en av tre dagar plus. Det stämmer med det skarpa Nasdaq-
+kontot, som gått från 50 000 till 44 259 dollar på 27 affärer.
+
+Populationen (`npm run trana`, 67 dagar, 3 765 setups) säger detsamma:
+−0,033 R mot nolltestets −0,077, riktningen ensam +0,03 mot slump med
+t = 0,11, inget av 34 drag med |t| > 2. Graderingen sorterar inte — den
+sorterar **baklänges**, och det har den gjort i varje körning: A −0,117,
+B −0,059, C +0,037. Antalet familjer som röstar åt samma håll är det
+sämsta urvalet motorn har, och kontot handlar bara A. Per familj: svep
++0,065 på 1 296, ict +0,017 på 401, trend −0,057 på 1 509; brott, orb och
+moment tydligt negativa men på 60–420 setups var. Modellen underkänns av
+sitt eget test och `modell.js` skrivs med `duger: false`.
 
 Det betyder inte att motorn är fel — det betyder att 63 dagar inte räcker för
 att se en edge på 0,05 R om den finns, och att varje fix som "hittat" mer än
