@@ -3473,6 +3473,9 @@ function visaAktivering(s){
     $$('#aktivRuta .ljud').forEach(b => { b.classList.toggle('pa', ljudPa); b.textContent = ljudPa ? '🔔 ljud på' : '🔕 ljud av'; }); if(ljudPa) spelaLjud(); };
   box.appendChild(el);
   while(box.children.length > 4) box.firstChild.remove();
+  /* Försvinner av sig själv efter tio minuter — annars fylls skärmen en
+     aktiv kväll. Reglaget stänger tidigare. */
+  setTimeout(() => el.remove(), 10*60*1000);
 }
 
 function bevakaAktiveringar(){
