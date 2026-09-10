@@ -3995,13 +3995,38 @@ const DEMO_NEWS_SE = [
   ['[EXEMPEL] Rapportfloden fortsätter på Stockholmsbörsen', 210]
 ];
 
+/* Städar flödet innan det vägs.
+
+   Google News är en sökning och matar flest rubriker, så de 45 nyaste som vägs
+   var till 38 delar Google — med samma nyhet från Decrypt, Yahoo och Google
+   räknad tre gånger, och autogenererade prissidor ("BTC price on Sep 10 at
+   10am EDT Crypto Prediction Market") som rubriker. Dubbletter känns igen på
+   titeln utan källsuffix; av två behålls den nyaste. Skräpmönstren är
+   specifika nog att gälla båda lägena. */
+const SKRAP = [
+  /\bprice (?:range )?on \w{3,9}\.? \d{1,2},? \d{4}\b/i,       // "BTC price on Sep 10, 2026 at 10am EDT"
+  /crypto prediction market/i,
+  /\([A-Z0-9]{2,6}\.CC\)/,                                         // "$Bitcoin (BTC.CC)$ - Moomoo"
+  /^\$?[A-Z0-9]{2,6}\s*\(/                                          // "$BTC (…" tickersidor
+];
+function rensaNyheter(lista){
+  const sedda = new Set(), ut = [];
+  for(const it of lista.slice().sort((a,b) => b.ts - a.ts)){
+    if(SKRAP.some(r => r.test(it.title))) continue;
+    const nyckel = it.title.replace(/\s+[-–—|]\s+[^-–—|]{2,40}$/, '').toLowerCase().replace(/[^a-z0-9åäö]+/g, ' ').trim();
+    if(!nyckel || sedda.has(nyckel)) continue;
+    sedda.add(nyckel); ut.push(it);
+  }
+  return ut;
+}
+
 async function loadNews(){
   try{
     const [intl, se] = await Promise.all([
       fetchFeeds(STATE.lage === 'krypto' ? (CFG.feedsKrypto || KRYPTO_FEEDS) : CFG.feeds).catch(()=>[]),
       fetchFeeds(STATE.lage === 'krypto' ? [] : CFG.feedsSe).catch(()=>[])
     ]);
-    STATE.news = intl; STATE.seNews = se;
+    STATE.news = rensaNyheter(intl); STATE.seNews = se;
     if(intl.length){
       corePing('news', Math.min(5, Math.ceil(intl.length/12)));
       coreRead('läser ' + intl.length + ' rubriker · ' + (intl[0] ? intl[0].title : ''));
