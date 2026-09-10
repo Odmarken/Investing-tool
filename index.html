@@ -165,6 +165,24 @@ body.krypto #btnAuth{display:none}
 .banner.show{display:flex}
 .banner.warn{background:rgba(255,176,32,.10);border-color:rgba(255,176,32,.35);color:#FFCF72}
 .banner.err{background:rgba(255,46,76,.10);border-color:rgba(255,46,76,.35);color:var(--scarlet-2)}
+/* Aktiveringsrutan: en signal blev aktiv i kryptoläget. Ligger kvar tills man
+   dragit reglaget i botten — ett klick ska inte kunna stänga den av misstag. */
+#aktivRuta{position:fixed;right:18px;bottom:18px;z-index:300;display:flex;flex-direction:column;gap:10px;width:min(400px,calc(100vw - 36px))}
+.aktiv{background:var(--panel-2);border:1px solid #FFD60A;border-radius:12px;padding:12px 14px 10px;
+  box-shadow:0 0 0 1px rgba(255,214,10,.25),0 18px 50px rgba(0,0,0,.7),0 0 26px rgba(61,220,132,.25);animation:aktivIn .28s ease-out}
+@keyframes aktivIn{from{transform:translateY(18px);opacity:0}to{transform:none;opacity:1}}
+.aktiv .ah{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.aktiv .ah b{font-size:13px;letter-spacing:.3px}
+.aktiv .ah .tid{margin-left:auto;font:700 11px var(--mono);color:#FFD60A}
+.aktiv .rad{display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;font:11.5px var(--mono);margin:6px 0}
+.aktiv .rad span{color:var(--muted)}
+.aktiv .rad b{text-align:right}
+.aktiv .konto{font-size:11px;color:var(--text-2);margin:6px 0 8px;line-height:1.45}
+.aktiv .dra{display:flex;align-items:center;gap:8px;font:600 10px var(--mono);letter-spacing:.6px;color:var(--muted);text-transform:uppercase}
+.aktiv .dra input{flex:1;accent-color:#FFD60A;cursor:grab;height:22px}
+.aktiv .dra input:active{cursor:grabbing}
+.aktiv .ljud{margin-left:auto;background:none;border:1px solid var(--line-2);color:var(--muted);border-radius:6px;font:600 9.5px var(--mono);padding:3px 7px;cursor:pointer}
+.aktiv .ljud.pa{color:#FFD60A;border-color:rgba(255,214,10,.45)}
 .banner .x{margin-left:auto;cursor:pointer;opacity:.6}
 
 /* ---------- GRID ---------- */
@@ -2104,7 +2122,9 @@ function pabloText(s){
   /* 4. geometrin */
   const rr = nz(s.rr) ? s.rr : 0, riskA = s.risk/A, malA = s.ptsTp/A;
   rader.push('Geometrin: stoppen ' + fmt(s.risk, 1) + ' p bort (' + riskA.toFixed(1) + ' ATR), målet ' + fmt(s.ptsTp, 1) + ' p (' + malA.toFixed(1) + ' ATR), R:R ' + rr.toFixed(2) + '. ' +
-    s.kontrakt + ' kontrakt ger ' + Math.round(s.riskUsd) + ' $ i risk och ' + Math.round(s.malUsd) + ' $ vid målet.' + (s.tpBasis ? ' Målet: ' + s.tpBasis + '.' : ''));
+    (function(){ const k = grupp(INSTR[s.inst]) === 'crypto' ? kryptoStorlek(s) : null;
+       return k ? 'Kryptokontot: ' + fmt(k.margin, 2) + ' $ margin, ' + fmt(k.notional, 0) + ' $ notional vid ' + KRYPTO.havstang + '× — ' + fmt(k.risk, 2) + ' $ (' + k.riskPct.toFixed(1) + ' % av marginen) vid stopp, +' + fmt(k.mal, 2) + ' $ vid mål, likvidation ' + k.liqPct.toFixed(1) + ' % bort.' + (k.bortomLiq ? ' Stoppen ligger bortom likvidationen.' : '')
+                : s.kontrakt + ' kontrakt ger ' + Math.round(s.riskUsd) + ' $ i risk och ' + Math.round(s.malUsd) + ' $ vid målet.'; })() + (s.tpBasis ? ' Målet: ' + s.tpBasis + '.' : ''));
   if(riskA < 0.7) minus.push('Stoppen är tajt (' + riskA.toFixed(1) + ' ATR) — brus räcker för att ta den.');
   if(rr >= 2) plus.push('R:R över 2: en träff på tre räcker till noll.');
   if(rr < 1.2) minus.push('R:R under 1,2: träffen måste vara hög för att bära kostnaderna.');
@@ -2235,9 +2255,15 @@ function renderSignals(){
       </div>
       <div class="metrics">
         <div class="m"><i>R:R</i><b class="${s.rr>=2?'pos':s.rr<1.3?'neg':''}">${s.rr.toFixed(2)}</b></div>
-        <div class="m"><i>Kontrakt</i><b title="Så många MNQ ryms under ${fmt(MAX_RISK,0)} $ risk med den här stoppen">${s.kontrakt} <span class="dim" style="font-size:9.5px;font-weight:600">MNQ</span></b></div>
-        <div class="m"><i>Risk</i><b class="neg" title="${fmt(s.riskPerKontrakt,0)} $ per kontrakt × ${s.kontrakt}${s.overRisk ? ' — stoppen är så vid att ett enda kontrakt går över taket' : ''}">${fmt(s.riskUsd, 0)} $${s.overRisk ? ' <span class="dim" style="font-size:9px">över taket</span>' : ''}</b></div>
-        <div class="m"><i>Mål</i><b class="pos" title="${s.rr.toFixed(2)} × risken">${fmt(s.malUsd, 0)} $</b></div>
+        ${(function(){ if(grupp(INSTR[s.inst]) !== 'crypto') return ''; const k = kryptoStorlek(s); if(!k) return '';
+          return `<div class="m"><i>${k.oppen ? 'Margin' : 'Saldo'}</i><b title="${k.oppen ? 'Marginen i den öppna affären' : 'Kryptokontots realiserade saldo — hela summan sätts in'}">${fmt(k.margin, 2)} $</b></div>
+        <div class="m"><i>Notional</i><b title="margin × ${KRYPTO.havstang}">${fmt(k.notional, 0)} $</b></div>
+        <div class="m"><i>Risk</i><b class="neg" title="Förlust vid stopp, netto avgifter${k.bortomLiq ? ' — stoppen ligger bortom likvidationen: hela marginen' : ''}">−${fmt(k.risk, 2)} $ <span class="dim" style="font-size:9.5px;font-weight:600">${k.riskPct.toFixed(1)} %</span></b></div>
+        <div class="m"><i>Mål</i><b class="pos" title="Vinst vid mål, netto avgifter">+${fmt(k.mal, 2)} $</b></div>
+        <div class="m"><i>Likv.</i><b class="neg" title="Likvidationspris vid ${KRYPTO.havstang}×">${fmt(k.liq, s.dec)} <span class="dim" style="font-size:9.5px;font-weight:600">${k.liqPct.toFixed(1)} %</span></b></div>`; })()}
+        ${grupp(INSTR[s.inst]) === 'crypto' ? '' : `<div class="m"><i>Kontrakt</i><b title="Så många MNQ ryms under ${fmt(MAX_RISK,0)} $ risk med den här stoppen">${s.kontrakt} <span class="dim" style="font-size:9.5px;font-weight:600">MNQ</span></b></div>`}
+        ${grupp(INSTR[s.inst]) === 'crypto' ? '' : `<div class="m"><i>Risk</i><b class="neg" title="${fmt(s.riskPerKontrakt,0)} $ per kontrakt × ${s.kontrakt}${s.overRisk ? ' — stoppen är så vid att ett enda kontrakt går över taket' : ''}">${fmt(s.riskUsd, 0)} $${s.overRisk ? ' <span class="dim" style="font-size:9px">över taket</span>' : ''}</b></div>
+        <div class="m"><i>Mål</i><b class="pos" title="${s.rr.toFixed(2)} × risken">${fmt(s.malUsd, 0)} $</b></div>`}
         ${pnl}
         ${traffHtml(s)}
       </div>
@@ -3373,6 +3399,95 @@ function renderKrypto(){
     'Nås likvidation, stopp och mål i samma stapel räknas de i den ordningen. Funding är utelämnad; priserna är Bybits spotstaplar. Hävstången ändras i <code>KRYPTO.havstang</code>.';
 }
 
+/* Storlek för en kryptosignal, ur kryptokontot i stället för MAX_RISK och
+   kontrakt. Är signalen kontots öppna affär används den positionens siffror;
+   annars vad affären skulle bli om den togs nu, med hela det realiserade
+   saldot som margin. Risk och mål är netto: avgiften på notional per sida
+   ligger i båda, precis som i kryptoTick. Ligger stoppen bortom likvidationen
+   är risken hela marginen. */
+function kryptoStorlek(s){
+  const p = KRYPTO.oppen && KRYPTO.oppen.id === s.id ? KRYPTO.oppen : null;
+  const entry = p ? p.entry : (s.entryFyllt || s.entry);
+  if(!isFinite(entry) || entry <= 0) return null;
+  const margin = p ? p.margin : KRYPTO.kapital, notional = p ? p.notional : margin*KRYPTO.havstang, enheter = p ? p.enheter : notional/entry;
+  const liq = p ? p.liq : krLikvidation(s.side, entry), dir = s.side === 'long' ? 1 : -1;
+  const avg = px => KRYPTO.avgift*(notional + px*enheter);
+  const bortomLiq = dir > 0 ? s.sl <= liq : s.sl >= liq;
+  const risk = bortomLiq ? margin : Math.min(margin, Math.abs(entry - s.sl)*enheter + avg(s.sl));
+  const mal  = Math.abs(s.tp - entry)*enheter - avg(s.tp);
+  return { margin, notional, enheter, liq, risk, mal, bortomLiq, liqPct: Math.abs(liq - entry)/entry*100, riskPct: risk/margin*100, malPct: mal/margin*100, oppen: !!p };
+}
+
+/* ==========================================================================
+   AKTIVERINGSVAKT — ljud och ruta när en kryptosignal blir aktiv.
+   Jämför de aktiva id:na mot dem vi redan sett. Första varvet seedar tyst,
+   annars skulle varje omladdning larma om allt som redan är igång. Rutan
+   ligger kvar tills reglaget dragits till kanten.
+   ========================================================================== */
+const AKTIVA_SEDDA = new Set();
+let aktivSeddInit = false;
+let ljudPa = (() => { try{ return localStorage.getItem('riptide.ljud') !== 'av'; }catch(e){ return true; } })();
+let ljudCtx = null;
+
+function spelaLjud(){
+  if(!ljudPa) return;
+  try{
+    ljudCtx = ljudCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if(ljudCtx.state === 'suspended') ljudCtx.resume();
+    const t0 = ljudCtx.currentTime;
+    [[880, 0, .14], [1175, .16, .14], [1568, .32, .28]].forEach(([f, dt, dur]) => {
+      const o = ljudCtx.createOscillator(), g = ljudCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0 + dt); g.gain.exponentialRampToValueAtTime(0.22, t0 + dt + .02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + dur);
+      o.connect(g); g.connect(ljudCtx.destination); o.start(t0 + dt); o.stop(t0 + dt + dur + .05);
+    });
+  }catch(e){ /* utan ljud då */ }
+}
+
+function visaAktivering(s){
+  let box = $('#aktivRuta');
+  if(!box){ box = document.createElement('div'); box.id = 'aktivRuta'; document.body.appendChild(box); }
+  const d = INSTR[s.inst] ? INSTR[s.inst].dec : 2, st = kryptoStorlek(s);
+  const kl = new Intl.DateTimeFormat('sv-SE', { timeZone:'Europe/Stockholm', hour:'2-digit', minute:'2-digit', second:'2-digit' }).format(new Date(s.oppnad || Date.now()));
+  const tog = KRYPTO.oppen && KRYPTO.oppen.id === s.id;
+  const upptagen = KRYPTO.oppen && KRYPTO.oppen.id !== s.id ? KRYPTO.oppen : null;
+  const kontoTxt = tog ? '<b class="pos">Kryptokontot tog den</b> — margin ' + fmt(st.margin, 2) + ' $, notional ' + fmt(st.notional, 0) + ' $, likvidation ' + fmt(st.liq, d) + '.'
+    : upptagen ? '<b class="neg">Inte tagen</b> — kontot sitter i ' + esc(upptagen.inst) + ' ' + upptagen.side + '. Tas när den stängts om signalen lever då.'
+    : !handlasGrad(s.grade) ? '<b class="neg">Inte tagen</b> — grad ' + s.grade + ' handlas inte (MOTORCFG.grader).'
+    : 'Kontot tar den vid nästa uppdatering.';
+  const el = document.createElement('div');
+  el.className = 'aktiv';
+  el.innerHTML =
+    '<div class="ah"><span class="strat ' + s.grade + '" style="width:18px;height:18px;font-size:9px">' + s.grade + '</span>' +
+      '<span class="fam ' + s.fam + '">' + (FAM_KORT[s.fam] || '') + '</span><b>' + esc(s.inst) + ' ' + (s.side === 'long' ? 'LONG' : 'SHORT') + '</b>' +
+      '<span class="status active"><span class="d"></span>ACTIVE</span><span class="tid" title="När signalen blev aktiv">' + kl + '</span></div>' +
+    '<div class="dim" style="font-size:11px">' + esc(s.name || '') + '</div>' +
+    '<div class="rad"><span>Fylld</span><b>' + fmt(s.entryFyllt || s.entry, d) + '</b><span>Stopp</span><b class="neg">' + fmt(s.sl, d) + '</b><span>Mål</span><b class="pos">' + fmt(s.tp, d) + '</b><span>R:R</span><b>' + (s.rr || 0).toFixed(2) + '</b>' +
+      (st ? '<span>Margin</span><b>' + fmt(st.margin, 2) + ' $</b><span>Notional</span><b>' + fmt(st.notional, 0) + ' $</b><span>Risk vid stopp</span><b class="neg">−' + fmt(st.risk, 2) + ' $ (' + st.riskPct.toFixed(1) + ' %)</b><span>Vid mål</span><b class="pos">+' + fmt(st.mal, 2) + ' $</b><span>Likvidation</span><b class="neg">' + fmt(st.liq, d) + ' · ' + st.liqPct.toFixed(1) + ' % bort</b>' : '') + '</div>' +
+    '<div class="konto">' + kontoTxt + (st && st.bortomLiq ? ' <b class="neg">Stoppen ligger bortom likvidationen.</b>' : '') + '</div>' +
+    '<div class="dra"><span>dra för att stänga →</span><input type="range" min="0" max="100" value="0"><button class="ljud ' + (ljudPa ? 'pa' : '') + '" title="Ljud vid aktivering">' + (ljudPa ? '🔔 ljud på' : '🔕 ljud av') + '</button></div>';
+  const reglage = el.querySelector('input');
+  reglage.addEventListener('input', () => { if(+reglage.value >= 92) el.remove(); });
+  reglage.addEventListener('change', () => { if(el.isConnected && +reglage.value < 92) reglage.value = 0; });
+  el.querySelector('.ljud').onclick = ev => { ljudPa = !ljudPa; try{ localStorage.setItem('riptide.ljud', ljudPa ? 'pa' : 'av'); }catch(e){}
+    $$('#aktivRuta .ljud').forEach(b => { b.classList.toggle('pa', ljudPa); b.textContent = ljudPa ? '🔔 ljud på' : '🔕 ljud av'; }); if(ljudPa) spelaLjud(); };
+  box.appendChild(el);
+  while(box.children.length > 4) box.firstChild.remove();
+}
+
+function bevakaAktiveringar(){
+  const aktiva = STATE.signals.filter(x => x.status === 'ACTIVE');
+  if(!aktivSeddInit){ aktiva.forEach(x => AKTIVA_SEDDA.add(x.id)); aktivSeddInit = true; return; }
+  let larmat = false;
+  for(const x of aktiva){
+    if(AKTIVA_SEDDA.has(x.id)) continue;
+    AKTIVA_SEDDA.add(x.id);
+    if(STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // bara kryptoläget, tills vidare
+    visaAktivering(x);
+    if(!larmat){ spelaLjud(); larmat = true; }
+  }
+}
+
 function demoTick(){
   if(KONTO.server) return;                 // servern sköter öppning och stängning
   let andrat = false;
@@ -3767,6 +3882,7 @@ async function pollaKrypto(){
     const pxBy = {}; aktivaSyms().forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
     STATE.signals = assignStatus(STATE.signals, pxBy);
     kryptoTick();
+    bevakaAktiveringar();
     renderTape(); renderSignals(); renderMainChart(); renderTech(); renderKrypto();
   }catch(e){ /* nästa puls */ }
   finally{ kryptoPollar = false; }
@@ -4090,6 +4206,7 @@ async function refresh(){
     paint();                       // priser och grafer ritas direkt — de väntar inte på nyhetsflödena
     demoTick();                    // lokalt konto: öppnar och stänger sina positioner
     kryptoTick();                  // kryptokontot: hela saldot, hävstång, likvidation
+    bevakaAktiveringar();          // ljud och ruta när en kryptosignal blivit aktiv
     demoHamtaServer();             // serverkonto: hämtar läget om en Worker-URL är inlagd
     await Promise.all([side, news, kal]);
     paint();                       // nyheter, nyhetsbias och sidopriser fylls på när de landat
