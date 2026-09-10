@@ -19,7 +19,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
 import {
-  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS, handlasGrad,
+  INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS, handlasGrad, positionsStorlek,
   computeNewsBias, biasLage
 } from './motor.js';
 
@@ -236,15 +236,24 @@ export async function kontoVarv(logg = () => {}){
       const fylld = s.reachSign*(px - s.entry) >= 0;
       if(!fylld || Math.abs(px - s.entry) > s.atr) return;
       if(dir*(px - s.sl) <= 0 || dir*(px - s.tp) >= 0) return;   // redan förbi stopp eller mål
+      /* Adoptionen går in till dagens pris, inte till signalens nivå. Förr
+         bokfördes affären till nivån fast priset kunde ha gått en ATR förbi —
+         ett pris ingen kunde ha fått, samma fel som kryptokontot hade. Risk,
+         kontrakt och R:R räknas om från det verkliga inträdet, och är det
+         mindre än 1:1 kvar till målet mot stoppen lämnas den. */
+      const risk = Math.abs(px - s.sl), t = Math.abs(s.tp - px);
+      if(!(risk > 0) || t/risk < 1) return;
+      const storlek = positionsStorlek(INST.key, risk, t);
       const at = Date.now();
       const handelsId = s.nyckel + '@' + at;
-      const frusen = Object.assign({}, s, { id: handelsId, oppnad: at, entryFyllt: s.entry });
+      const om = { id: handelsId, oppnad: at, entryFyllt: px, entrySignal: s.entry, risk, ptsTp: t, rr: t/risk,
+                   kontrakt: storlek.kontrakt, riskUsd: storlek.riskUsd, malUsd: storlek.malUsd, riskPerKontrakt: storlek.perKontrakt, overRisk: storlek.overRisk };
+      const frusen = Object.assign({}, s, om);
       delete frusen.bars;                                   // 84 kB staplar hör inte hemma i Firestore
-      LIVE.set(s.nyckel, { triggered:true, at, handelsId, entryPx: s.entry, sig: frusen });
-      s.id = handelsId;
+      LIVE.set(s.nyckel, { triggered:true, at, handelsId, entryPx: px, sig: frusen });
+      Object.assign(s, om);
       s.status = 'ACTIVE'; s.statusTxt = 'ACTIVE';
-      s.oppnad = at; s.entryFyllt = s.entry;
-      logg('adopterar pågående ' + s.grade + ' ' + s.fam + ' ' + s.side);
+      logg('adopterar pågående ' + s.grade + ' ' + s.fam + ' ' + s.side + ' @ ' + px.toFixed(2) + ' (nivån ' + s.entry.toFixed(2) + ')');
     });
   }
 
