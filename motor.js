@@ -1121,7 +1121,13 @@ function makeSignal(ctx, o){
      eget id med fyllningstiden i, så att en avslutad affär inte spärrar nästa
      i samma familj (kontot nycklar både positioner och historik på id). */
   const nyckel = ctx.inst.key + '|' + o.fam + '|' + o.side + (o.variant ? '|' + o.variant : '');
-  const levande = LIVE.get(nyckel);
+  /* Levande betyder en löpande affär. Posten i LIVE ligger kvar en stund
+     efter mål eller stopp — under karensen och för visning — och räknades
+     förr som levande då också, så nästa order på samma idé lades utan
+     kontroll av sida och pullbackavstånd. Det var så en säljlimit hamnade
+     under marknaden strax efter en avslutad affär på samma idé. */
+  const lev0 = LIVE.get(nyckel);
+  const levande = (lev0 && lev0.sig && !lev0.hitTp && !lev0.hitSl) ? lev0 : null;
   /* Pullbackkravet är en födelseregel, inte ett överlevnadsvillkor.
 
      Meningen är att en limitorder inte ska födas med entryn redan vid priset —
