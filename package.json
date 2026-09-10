@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Riptide Investments Panel — NQ-dashboard, signalmotor, TradingView-feed och lokal utvecklingsserver",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "start": "node dev-server.js",
     "demo": "node dev-server.js --demo",
     "trana": "node trana.mjs",

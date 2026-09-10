@@ -1023,7 +1023,7 @@ function loadCfg(){
   let saved;
   try{ saved = JSON.parse(localStorage.getItem(CFG_KEY) || localStorage.getItem(CFG_KEY_GAMMAL) || 'null'); }
   catch(e){ saved = null; }
-  if(!saved || typeof saved !== 'object') return;
+  if(!saved || typeof saved !== 'object'){ syncMotorCfg(); return; }
   ['proxy','risk'].forEach(k => { if(typeof saved[k] === 'string') CFG[k] = saved[k]; });
   ['customProxy','feedUrl'].forEach(k => { if(typeof saved[k] === 'string') CFG[k] = cleanUrl(saved[k]); });
   ['refreshSec','minPts','maxPts'].forEach(k => { if(isFinite(+saved[k]) && +saved[k] > 0) CFG[k] = +saved[k]; });
@@ -1033,6 +1033,10 @@ function loadCfg(){
       if(list.length) CFG[k] = list;
     }
   });
+  syncMotorCfg();
+}
+function syncMotorCfg(){
+  Object.assign(MOTORCFG, { minPts:CFG.minPts, maxPts:CFG.maxPts, risk:CFG.risk });
 }
 /* Proxy att hämta marknadsdata genom, i tur och ordning:
    1. den du själv skrivit in,
@@ -1047,6 +1051,7 @@ function useLocalProxy(){
   else if(CFG.feedUrl)  CFG.customProxy = CFG.feedUrl + '/proxy?url=';
 }
 function saveCfg(){
+  syncMotorCfg();
   try{
     localStorage.setItem(CFG_KEY, JSON.stringify({
       proxy:CFG.proxy, customProxy:CFG.customProxy, feedUrl:CFG.feedUrl,
@@ -1188,7 +1193,9 @@ async function fetchBybitBars(symbol, interval='5', sidor=2){
 
 /* Bybits tickers för tapen: pris och 24-timmarsförändring för alla kryptona i ett anrop. */
 async function loadBybitTickers(){
+  const version = STATE.modeVersion;
   const j = await grab('https://api.bybit.com/v5/market/tickers?category=spot', { json:true });
+  if(version !== STATE.modeVersion) return;
   const list = (j && j.result && j.result.list) || [];
   const by = new Map(list.map(t => [t.symbol, t]));
   aktivaSyms().forEach(k => {
@@ -1337,6 +1344,7 @@ function aktivaSyms(){
 /* Växlar läge. Signaler och fokus töms så att inget från förra läget står
    kvar medan det nya laddas; kontexterna behålls, de skadar inte. */
 function tillLage(lage, tyst){
+  STATE.modeVersion++;
   STATE.lage = lage === 'krypto' ? 'krypto' : 'nq';
   try{ localStorage.setItem('riptide.lage', STATE.lage); }catch(e){}
   document.body.classList.toggle('krypto', STATE.lage === 'krypto');
@@ -1356,6 +1364,8 @@ function tillLage(lage, tyst){
      här kommer det nya lägets flöden i första varvet i stället för att
      Nasdaq-rubrikerna står kvar i två minuter. */
   STATE.news = [];
+  STATE.seNews = [];
+  STATE.newsBias = { nq:0, gc:0, kr:0 };
   renderSignals();
   refresh();
 }
@@ -1684,7 +1694,7 @@ const STATE = {
   bias:{nq:0, gc:0}, newsBias:{nq:0, gc:0},
   chartSym:'NQ', feed:{}, newsFilter:'all', sigFilter:'all',
   vy:{ n:96, off:0, pris:1, py:0 },         // grafens fönster: staplar, hur långt bak, prisskala, höjdläge
-  lastPx:{}, stamp:0, loading:false, newsOpen:null, kalender:[], molnBias:null,
+  lastPx:{}, stamp:0, loading:false, refreshPending:false, modeVersion:0, loadedLage:null, newsOpen:null, kalender:[], molnBias:null,
   livePris:null, liveNar:0, liveKalla:null, oppnaSignaler:new Set(),
   /* Stjärnmärkta kort ligger högst upp i listan tills stjärnan släcks. Ett
      kort som försvinner ur listan behåller sin stjärna ett tag, så att det
@@ -3346,6 +3356,7 @@ function krLikvidation(side, entry){
    signalen över och nästa tas. */
 function krTagbar(sig){
   const c = STATE.ctx[sig.inst];
+  if(c && c.simulated) return { ok:false, px:null, skal:'simulerad data — handeln är pausad' };
   const px = c && isFinite(c.px) && c.px > 0 ? c.px : null;
   if(px === null) return { ok:false, px:null, skal:'inget pris' };
   const dir = sig.side === 'long' ? 1 : -1;
@@ -3412,7 +3423,7 @@ function kryptoTick(){
   const p = KRYPTO.oppen;
   if(p){
     const c = STATE.ctx[p.inst];
-    if(c && c.bars.length){
+    if(c && !c.simulated && c.bars.length){
       const dir = p.side === 'long' ? 1 : -1;
       /* >= och inte >: Bybits sista stapel är den som byggs, med starttiden som t.
          Med > scannades den aldrig med sitt färdiga spann, och stopp eller mål
@@ -3456,7 +3467,8 @@ function renderKrypto(){
   const el = $('#krStats'); if(!el) return;
   const p = KRYPTO.oppen;
   let oreal = 0;
-  if(p){ const c = STATE.ctx[p.inst]; if(c){ const dir = p.side === 'long' ? 1 : -1; oreal = dir*(c.px - p.entry)*p.enheter; } }
+  if(p){ const c = STATE.ctx[p.inst]; if(c && !c.simulated){ const dir = p.side === 'long' ? 1 : -1; oreal = dir*(c.px - p.entry)*p.enheter; } }
+  $('#krStang').disabled = !!p && (!STATE.ctx[p.inst] || STATE.ctx[p.inst].simulated);
   const eget = Math.max(0, KRYPTO.kapital + oreal), a = KRYPTO.affarer, v = a.filter(x => x.pnl > 0).length, likv = a.filter(x => x.hur === 'likviderad').length;
   let topp = KRYPTO.start, dd = 0; for(const x of a){ topp = Math.max(topp, x.kapitalEfter); dd = Math.max(dd, topp ? (topp - x.kapitalEfter)/topp : 0); }
   const tile = (e, w, cls) => '<div class="btstat"><i>' + e + '</i><b class="' + (cls||'') + '">' + w + '</b></div>';
@@ -3476,14 +3488,15 @@ function renderKrypto(){
 
   const opp = $('#krOppen');
   if(p){
-    const c = STATE.ctx[p.inst], d = INSTR[p.inst].dec, dir = p.side === 'long' ? 1 : -1, px = c ? c.px : p.entry;
+    const ctx = STATE.ctx[p.inst], c = ctx && !ctx.simulated ? ctx : null;
+    const d = INSTR[p.inst].dec, dir = p.side === 'long' ? 1 : -1, px = c ? c.px : p.entry;
     const tillLiq = Math.abs(px - p.liq)/px*100, riskStopp = Math.abs(dir*(p.sl - p.entry))*p.enheter;
     opp.innerHTML = '<div class="oppen"><span class="tag ' + p.side + '">' + (p.side === 'long' ? 'LONG' : 'SHORT') + '</span><b>' + esc(p.inst) + '</b>' +
       '<span>' + fmt(p.notional, 0) + ' $ notional · margin ' + fmt(p.margin, 2) + ' $</span>' +
       '<span>in på <b>' + fmt(p.entry, d) + '</b>' + (p.entrySignal && Math.abs(p.entrySignal - p.entry) > 0 ? ' <span class="dim">(signalen fylldes ' + fmt(p.entrySignal, d) + ')</span>' : '') + ' · stopp ' + fmt(p.sl, d) + ' (−' + fmt(riskStopp, 2) + ' $) · mål ' + fmt(p.tp, d) + '</span>' +
       '<span>likvidation <b class="neg">' + fmt(p.liq, d) + '</b> · ' + tillLiq.toFixed(2) + ' % bort' + (Math.abs(p.sl - p.entry) > Math.abs(p.liq - p.entry) ? ' · <b class="neg">stoppen ligger bortom likvidationen</b>' : '') + '</span>' +
       '<span class="' + (oreal >= 0 ? 'pos' : 'neg') + '"><b>' + fmtSigned(oreal, 2) + ' $</b> (' + fmtSigned(oreal/p.margin*100, 1) + ' % av marginen)</span>' +
-      (c ? '' : '<span class="neg">instrumentet är inte laddat — positionen kan inte följas; stäng manuellt</span>') + '</div>' +
+      (c ? '' : '<span class="neg">Riktiga priser saknas — handeln och resultatvisningen är pausade.</span>') + '</div>' +
       '<div class="dim" style="font-size:11px;margin:4px 0 8px">Hela saldot sitter i den här affären. Nästa signal tas när den stängts' +
       (function(){ const v = STATE.signals.filter(x => x.status === 'ACTIVE' && grupp(INSTR[x.inst]) === 'crypto' && x.id !== p.id).length; return v ? ' — ' + v + ' aktiva väntar.' : '.'; })() + '</div>';
   }else{
@@ -3615,6 +3628,7 @@ function demoTick(){
 
   STATE.signals.forEach(sig => {
     if(sig.status !== 'ACTIVE') return;
+    if(STATE.ctx[sig.inst]?.simulated) return;
     if(grupp(INSTR[sig.inst]) === 'crypto') return;          // krypto har inget konto
     if(!handlasGrad(sig.grade)) return;                      // MOTORCFG.grader avgör
     if(FAM_HANDLAS[sig.fam] === false) return;             // familjen är mätt förlustbringande
@@ -3644,7 +3658,7 @@ function demoTick(){
   Object.keys(KONTO.oppna).forEach(id => {
     const pos = KONTO.oppna[id];
     const c = posCtx(pos);
-    if(!c || !c.bars.length) return;
+    if(!c || c.simulated || !c.bars.length) return;
     const dir = pos.side === 'long' ? 1 : -1;
     // Alla staplar som passerat sedan senaste kollen gås igenom, så att en position
     // som legat öppen medan sidan var stängd får rätt utfall och rätt tidpunkt.
@@ -3946,16 +3960,18 @@ let livePuls = 0, liveSenast = 0;
 
 function taEmotLive(bar){
   if(!bar || !isFinite(bar.t) || !nz(bar.c)) return;
-  if(bar.t === liveSenast && STATE.livePris === bar.c) return;     // inget nytt
+  const c = STATE.ctx.NQ;
+  const b = { t:+bar.t, o:+bar.o, h:+bar.h, l:+bar.l, c:+bar.c, v:+bar.v || 0 };
+  const sista = c && c.bars[c.bars.length-1];
+  if(sista && b.t < sista.t) return;
+  // Samma slutkurs kan fortfarande innehålla ett nytt högsta/lägsta eller volym.
+  if(sista && ['t','o','h','l','c','v'].every(k => b[k] === sista[k])) return;
   liveSenast = bar.t;
   STATE.livePris = bar.c;
   STATE.liveNar  = Date.now();
   livePuls++;
 
-  const c = STATE.ctx.NQ;
-  if(!c || !c.bars.length) return;
-  const b = { t:bar.t, o:+bar.o, h:+bar.h, l:+bar.l, c:+bar.c, v:+bar.v || 0 };
-  const sista = c.bars[c.bars.length-1];
+  if(!sista || c.simulated) return;
   if(b.t === sista.t) c.bars[c.bars.length-1] = b;
   else if(b.t > sista.t) c.bars.push(b);
   else return;                                                     // gammal stapel, strunt i den
@@ -3965,7 +3981,7 @@ function taEmotLive(bar){
   if(q && nz(q.prev)){ q.px = b.c; q.chg = b.c - q.prev; q.chgPct = (b.c - q.prev)/q.prev*100; }
 
   // Statusarna prövas mot det nya priset — ACTIVE, mål och stopp reagerar direkt.
-  const pxBy = {}; aktivaSyms().forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
+  const pxBy = riktigaPriser();
   STATE.signals = assignStatus(STATE.signals, pxBy);
   demoTick();
   renderTape(); renderSignals(); renderMainChart(); renderTech(); renderDemo(); renderFeedPill();
@@ -3982,13 +3998,15 @@ let kryptoPollar = false;
 async function pollaKrypto(){
   if(STATE.lage !== 'krypto' || STATE.loading || kryptoPollar) return;
   kryptoPollar = true;
+  const version = STATE.modeVersion;
   try{
     const j = await grab('https://api.bybit.com/v5/market/tickers?category=spot', { json:true, timeout:6000 });
+    if(version !== STATE.modeVersion || STATE.loading) return;
     const by = new Map(((j && j.result && j.result.list) || []).map(t => [t.symbol, t]));
     let andrat = false;
     for(const k of aktivaSyms()){
       const inst = INSTR[k], c = STATE.ctx[k], t = inst.bybit && by.get(inst.bybit);
-      if(!c || !c.bars.length || !t) continue;
+      if(!c || c.simulated || !c.bars.length || !t) continue;
       const px = +t.lastPrice; if(!isFinite(px) || px <= 0) continue;
       const sista = c.bars[c.bars.length-1];
       sista.c = px; if(px > sista.h) sista.h = px; if(px < sista.l) sista.l = px;
@@ -4000,7 +4018,7 @@ async function pollaKrypto(){
     if(!andrat) return;
     STATE.livePris = STATE.ctx[STATE.chartSym] ? STATE.ctx[STATE.chartSym].px : STATE.livePris;
     STATE.liveNar = Date.now();
-    const pxBy = {}; aktivaSyms().forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
+    const pxBy = riktigaPriser();
     STATE.signals = assignStatus(STATE.signals, pxBy);
     kryptoTick();
     bevakaAktiveringar();
@@ -4031,6 +4049,7 @@ async function pollaLive(){
 let cycle = 0;
 
 async function loadMarket(){
+  const version = STATE.modeVersion;
   const demoK = {}; let liveOk = 0;
   feedErr = null;
   for(const k of aktivaSyms()){
@@ -4052,6 +4071,7 @@ async function loadMarket(){
 
     // TradingView-staplar läggs ovanpå Yahoo-historiken
     const feed = await fetchFeedBars(k);
+    if(version !== STATE.modeVersion) return liveOk;
     let bars = d.bars, fs = null;
     if(feed && feed.length){
       corePing('feed', 3);
@@ -4061,11 +4081,13 @@ async function loadMarket(){
       coreRead('TradingView-feed · ' + m.n + ' staplar, senaste ' + Math.round(ageMin) + ' min gammal' +
                (m.fardk ? '' : ' — för gammal, kör vidare på Yahoo'));
       fs = { n:m.n, ageMin, live: m.fardk };
-      if(fs.live){ demoK[k] = false; liveOk++; d.meta.regularMarketPrice = last(bars).c; }
+      if(fs.live){ liveOk++; d.meta.regularMarketPrice = last(bars).c; }
     }
     STATE.feed[k] = fs;
     corePing('ind', 2);
     const ctx = buildContext(inst, bars);
+    // En riktig feedstapel gör inte simulerad grundhistorik till riktig data.
+    ctx.simulated = !!demoK[k];
     coreRead('räknar ' + k + ' · EMA21 ' + fmt(ctx.e21, inst.dec) + ' · ATR ' + fmt(ctx.atr, 1) +
              ' · RSI ' + Math.round(ctx.rsi) + ' · VWAP ' + fmt(ctx.vwap, inst.dec));
     STATE.ctx[k] = ctx;
@@ -4081,9 +4103,11 @@ async function loadMarket(){
 }
 
 async function loadSideQuotes(){
+  const version = STATE.modeVersion;
   if(STATE.lage === 'krypto'){ try{ await loadBybitTickers(); }catch(e){ coreRead('Bybit-tickers svarade inte'); } return; }
   const all = SIDE_SYMS.concat(SE_SYMS.map(s=>({k:s.k, y:s.fallbackY||s.y, dec:s.dec})));
   const res = await Promise.allSettled(all.map(s=>fetchQuote(s.y)));
+  if(version !== STATE.modeVersion) return;
   corePing('quotes', 3);
   coreRead('sidopriser · ' + all.slice(0, 6).map(x => x.k).join(', ') + ' inlästa');
   res.forEach((r,i)=>{
@@ -4142,11 +4166,13 @@ function rensaNyheter(lista){
 }
 
 async function loadNews(){
+  const version = STATE.modeVersion;
   try{
     const [intl, se] = await Promise.all([
       fetchFeeds(STATE.lage === 'krypto' ? (CFG.feedsKrypto || KRYPTO_FEEDS) : CFG.feeds).catch(()=>[]),
       fetchFeeds(STATE.lage === 'krypto' ? [] : CFG.feedsSe).catch(()=>[])
     ]);
+    if(version !== STATE.modeVersion) return;
     STATE.news = rensaNyheter(intl); STATE.seNews = se;
     if(intl.length){
       corePing('news', Math.min(5, Math.ceil(intl.length/12)));
@@ -4157,6 +4183,7 @@ async function loadNews(){
       coreRead('läser ' + se.length + ' svenska rubriker · ' + (se[0] ? se[0].title : ''));
     }
   }catch(e){ /* tyst */ }
+  if(version !== STATE.modeVersion) return;
   if(!STATE.news.length){
     STATE.news = DEMO_NEWS.map(([t,m])=>({title:t, desc:'', link:'#', ts:Date.now()-m*60000, src:'DEMO'}));
   }
@@ -4264,6 +4291,15 @@ function renderNyhetsbias(){
   biasFore = Math.round(b.poang);
 }
 
+function riktigaPriser(){
+  const priser = {};
+  for(const k of aktivaSyms()){
+    const c = STATE.ctx[k];
+    if(c && !c.simulated) priser[k] = c.px;
+  }
+  return priser;
+}
+
 function buildAllSignals(){
   /* Alla instrument i det aktiva läget — förr bara STATE.ctx.NQ, vilket gjorde
      kryptoläget signallöst hur många kontexter som än fanns. Nyhetsbiasen är
@@ -4272,7 +4308,7 @@ function buildAllSignals(){
   const bias = aktivBias();
   const alla = [];
   for(const k of aktivaSyms()){
-    const c = STATE.ctx[k]; if(!c) continue;
+    const c = STATE.ctx[k]; if(!c || c.simulated) continue;
     c.newsBias = bias.poang;
     c.biasRiktning = biasLage(bias.poang).riktning;   // styr vilket håll som ges
     try{ alla.push(...generateSignals(c)); }catch(e){ coreRead('signalfel ' + k + ': ' + (e.message || e)); }
@@ -4294,12 +4330,12 @@ function buildAllSignals(){
     // Annars kan ett kort stå kvar som ACTIVE i all evighet.
     if(!st.slutAt && Date.now() - (st.at || 0) > LIVE_MAXALD){ LIVE.delete(id); return; }
     const ctx = STATE.ctx[st.sig.inst];
-    if(!ctx) return;
+    if(!ctx || ctx.simulated || !aktivaSyms().includes(st.sig.inst)) return;
     sig.push(Object.assign({}, st.sig, { bars: ctx.bars, ctxPx: ctx.px, atr: ctx.atr || st.sig.atr }));
     idn.add(id);
   });
 
-  const pxBy = {}; aktivaSyms().forEach(k => { pxBy[k] = STATE.ctx[k] ? STATE.ctx[k].px : 0; });
+  const pxBy = riktigaPriser();
   STATE.signals = assignStatus(sig, pxBy);
   corePing('setups', 2);
 
@@ -4338,36 +4374,49 @@ function paint(){
 }
 
 async function refresh(){
-  if(STATE.loading) return;
+  if(STATE.loading){ STATE.refreshPending = true; return; }
   STATE.loading = true;
+  STATE.refreshPending = false;
+  const version = STATE.modeVersion, lage = STATE.lage;
+  const nyttLage = STATE.loadedLage !== lage;
+  let bakgrund = [];
   resetNet();
   $('#btnRefresh').innerHTML = '<span class="spin"></span> Hämtar…';
   coreState('hämtar data…');
   try{
-    const side = (cycle % 3 === 0) ? loadSideQuotes() : Promise.resolve();
-    const news = (cycle % 2 === 0 || !STATE.news.length) ? loadNews() : Promise.resolve();
+    const side = (nyttLage || cycle % 3 === 0) ? loadSideQuotes() : Promise.resolve();
+    const news = (nyttLage || cycle % 2 === 0 || !STATE.news.length) ? loadNews() : Promise.resolve();
     const kal  = (cycle % 20 === 0 || !STATE.kalender.length) ? hamtaKalender() : Promise.resolve();
+    bakgrund = [side, news, kal];
+    const klart = Promise.allSettled(bakgrund);
     await loadMarket();
+    if(version !== STATE.modeVersion) return;
     coreState('analyserar');
     paint();                       // priser och grafer ritas direkt — de väntar inte på nyhetsflödena
     demoTick();                    // lokalt konto: öppnar och stänger sina positioner
     kryptoTick();                  // kryptokontot: hela saldot, hävstång, likvidation
     bevakaAktiveringar();          // ljud och ruta när en kryptosignal blivit aktiv
     demoHamtaServer();             // serverkonto: hämtar läget om en Worker-URL är inlagd
-    await Promise.all([side, news, kal]);
+    await klart;
+    if(version !== STATE.modeVersion) return;
     paint();                       // nyheter, nyhetsbias och sidopriser fylls på när de landat
     renderDemo();
     renderKrypto();
     coreState('vaktar marknaden');
     $('#bnErr').classList.remove('show');
+    STATE.loadedLage = lage;
   }catch(e){
+    if(version !== STATE.modeVersion) return;
     coreState('fel vid hämtning');
     $('#bnErrTxt').innerHTML = '<b>Fel vid uppdatering:</b> ' + esc(e.message||String(e)) + ' — försök byta proxy under Inställningar.';
     $('#bnErr').classList.add('show');
   }finally{
+    // Låt även gamla bakgrundsanrop bli klara innan nästa läge laddas.
+    await Promise.allSettled(bakgrund);
     cycle++;
     STATE.loading = false;
     $('#btnRefresh').innerHTML = '↻ Uppdatera';
+    if(STATE.refreshPending) await refresh();
   }
 }
 
@@ -4390,6 +4439,7 @@ function wire(){
   krLadda(); renderKrypto();
   $('#krStang').onclick = () => {
     const p = KRYPTO.oppen; if(!p) return;
+    if(!STATE.ctx[p.inst] || STATE.ctx[p.inst].simulated) return;
     const c = STATE.ctx[p.inst], px = c ? c.px : p.entry, dir = p.side === 'long' ? 1 : -1;
     if(!confirm('Stänga ' + p.inst + ' ' + p.side + ' till ' + fmt(px, INSTR[p.inst].dec) + '?')) return;
     const avgift = KRYPTO.avgift*(p.notional + px*p.enheter);
