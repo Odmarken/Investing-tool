@@ -1,4 +1,4 @@
-import { MOMENTUM, readMomentum, advanceMomentum, fetchMomentumSnapshot, momentumValue } from './crypto-momentum.js';
+import { MOMENTUM, readMomentum, newMomentumAccount, advanceMomentum, fetchMomentumSnapshot, momentumValue } from './crypto-momentum.js';
 import {liquidationPrice,leveragedValue} from './crypto-leverage.js';
 import {MOMENTUM_RESEARCH} from './crypto-momentum-research.js';
 const money = n => !Number.isFinite(n) ? '–' : n.toFixed(2)+' $';
@@ -6,7 +6,8 @@ const date = t => t ? new Date(t).toLocaleString('sv-SE',{timeZone:'Europe/Stock
 const signed = n => (n>=0?'+':'')+n.toFixed(2);
 export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null, storage = {getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)}, locks = navigator.locks, now = () => Date.now() }) {
   root.innerHTML = `<div class="ai-top"><label><input type="checkbox" data-momentum-toggle> AI-momentum · automatisk demo med Bybit max</label>
-    <button type="button" class="btn" data-momentum-export>Exportera momentumkonto</button></div>
+    <button type="button" class="btn" data-momentum-export>Exportera momentumkonto</button>
+    <button type="button" class="btn" data-momentum-reset title="Arkivera nuvarande momentumkonto och börja om med 100 $, utan öppna positioner och med automatiken pausad">Återställ till 100 $</button></div>
     <p data-momentum-status role="status" aria-live="polite"></p>
     <div class="btstats" data-momentum-balance></div>
     <h3>Öppna positioner</h3><div data-momentum-positions></div>
@@ -14,6 +15,7 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
   const rulesHTML=`    <p>Momentum 14/28/56 dagar · BTC, ETH och SOL · högsta hävstång enligt Bybits offentliga USDT-perpetualgränser för coin och positionsstorlek. Eget demokonto med 100 $ vid start, en tredjedel i isolerad marginal per coin. Öppna affärer behåller sin hävstång. Det vanliga kryptokontot fortsätter separat.</p>
     <p>Ibockad: köper, behåller eller säljer enligt veckosignalen. Avmarkerad: pausar strategins köp och sälj; innehaven ligger kvar och funding och likvidation följs fortfarande. Första beslutet tas när du aktiverar, sedan en gång per vecka från måndag 00:00 UTC.</p>
     <p>Kör när du är inloggad och kryptosidan är öppen. Missade beslut utförs till aktuellt pris när du återkommer. Kontot och inställningen sparas för din inloggning i denna webbläsare, inte mellan enheter.</p>
+    <p>Återställ till 100 $ börjar om med ett tomt momentumkonto och pausar automatiken. Det tidigare kontot arkiveras lokalt i webbläsaren. Det vanliga kryptokontot påverkas inte.</p>
     <details><summary>Historiskt test: 1× jämfört med 20×</summary>
     <p>Separata starter januari och juli 2025. Avgifter, slippage, funding och simulerad likvidation ingår. Detta är det tidigare testet med fast 20×; det testar inte dagens maxhävstång.</p>
     <div class="ai-scroll"><table><thead><tr><th>Period 2025</th><th>Hävstång</th><th>Netto</th><th>Max nedgång</th><th>Likvidationer</th></tr></thead><tbody>${MOMENTUM_RESEARCH.rows.map(r=>'<tr><td>'+(new Date(r.from).getUTCMonth()===0?'Januari–december':'Juli–december')+'</td><td>'+r.leverage+'×</td><td>'+signed(r.returnPct)+' %</td><td>'+r.maxDDPct.toFixed(1)+' %</td><td>'+r.liquidations+'</td></tr>').join('')}</tbody></table></div></details>
@@ -22,7 +24,7 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
   if(rulesRoot)rulesRoot.innerHTML=rulesHTML;
   else root.innerHTML+='<details><summary>Regler och historiska tester</summary>'+rulesHTML+'</details>';
   const toggle = root.querySelector('[data-momentum-toggle]');
-  let uid = null, account = null, snapshot = null, error = '', busy = false, lastCheck = -Infinity, generation = 0;
+  let uid = null, account = null, snapshot = null, error = '', busy = false, resetting = false, lastCheck = -Infinity, generation = 0;
   const key = user => 'riptide.momentum.20x.v1:'+encodeURIComponent(user);
   const exclusive = (user, callback) => {
     if (!locks?.request) return Promise.reject(Error('Automatiken kräver en webbläsare med stöd för säkra fliklås'));
@@ -35,8 +37,9 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     return uid;
   }
   function render() {
-    toggle.checked = account?.enabled === true; toggle.disabled = !uid || !account;
+    toggle.checked = account?.enabled === true; toggle.disabled = !uid || !account || resetting;
     root.querySelector('[data-momentum-export]').disabled = !uid || !account;
+    root.querySelector('[data-momentum-reset]').disabled = !uid || resetting;
     const value = account ? momentumValue(account,snapshot,now()) : null;
     root.querySelector('[data-momentum-status]').textContent = error || account?.waitReason || (!uid ? 'Logga in för momentumdemo.' :
       (account?.enabled ? 'Automatik på' : 'Automatik pausad') + (busy ? ' · hämtar dygnspriser…' : '') +
@@ -69,6 +72,7 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
       '</tbody></table><table><thead><tr><th>Stängd</th><th>Coin</th><th>Hävstång</th><th>Orsak</th><th>Nettoresultat</th></tr></thead><tbody>'+account.trades.slice(-20).reverse().map(t=>'<tr><td>'+date(t.at)+'</td><td>'+t.symbol+'</td><td>'+(t.leverage??20)+'×</td><td>'+(t.reason==='likvidation'?'Likvidation':'Veckosignal')+'</td><td>'+signed(t.pnl)+' $</td></tr>').join('')+'</tbody></table>' : '';
   }
   async function refresh(force=false) {
+    if(resetting)return;
     try { sync(); } catch(e) { account=null; error=e.message; render(); return; }
     render();
     if (!uid || !isActive() || busy || !force && now()-lastCheck<60000 || !account.enabled && !account.sleeves.some(s=>s.position)) return;
@@ -100,6 +104,30 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     } catch(e) { error='Inställningen kunde inte sparas: '+e.message; }
     await refresh(true);
   };
+  async function reset(){
+    const user=getUser();if(!user||resetting)return;
+    const token=++generation;resetting=true;render();
+    try{
+      await exclusive(user,()=>{
+        if(getUser()!==user||token!==generation)return;
+        const accountKey=key(user),raw=storage.getItem(accountKey),fresh=newMomentumAccount();
+        // Archive first. A failed archive or reset leaves the saved account intact.
+        if(raw!==null){
+          let suffix=now(),backupKey=accountKey+':before-reset:'+suffix;
+          while(storage.getItem(backupKey)!==null)backupKey=accountKey+':before-reset:'+(++suffix);
+          storage.setItem(backupKey,raw);
+        }
+        storage.setItem(accountKey,JSON.stringify(fresh));
+        uid=user;account=fresh;snapshot=null;error='';lastCheck=-Infinity;
+      });
+    }catch(e){if(getUser()===user)error='Återställningen misslyckades: '+e.message;}
+    finally{
+      resetting=false;
+      try{sync();}catch(e){account=null;error=e.message;}
+      render();
+    }
+  }
+  root.querySelector('[data-momentum-reset]').onclick=reset;
   root.querySelector('[data-momentum-export]').onclick=()=>{
     try {
       sync(); if(!account) return;
@@ -107,5 +135,5 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
       const a=document.createElement('a'); a.href=url;a.download='riptide-momentum.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     } catch(e) { error=e.message; render(); }
   };
-  return { refresh };
+  return { refresh, reset };
 }

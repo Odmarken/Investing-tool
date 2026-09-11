@@ -27,6 +27,39 @@ const storage = () => {const values=new Map();return {getItem:k=>values.get(k)??
 const locks = () => {let chain=Promise.resolve();return {request:(key,fn)=>{const p=chain.then(fn);chain=p.catch(()=>{});return p;}};};
 const root = () => {const nodes=new Map();return {innerHTML:'',querySelector:k=>{if(!nodes.has(k))nodes.set(k,{});return nodes.get(k);}};};
 
+test('reset archives only the current momentum account and persists a paused 100 dollar restart',async()=>{
+  const s=storage(),r=root(),key='riptide.momentum.20x.v1:one';
+  const previous=JSON.stringify(advanceMomentum(enabled(),snapshot(),now));
+  s.setItem(key,previous);s.setItem('riptide.momentum.20x.v1:two',previous);s.setItem('riptide.krypto.v1','ordinary');
+  const options={getUser:()=> 'one',isActive:()=>false,grab:fakeGrab(now),storage:s,locks:locks(),now:()=>now};
+  const ui=mountMomentum(r,options);await ui.refresh();await r.querySelector('[data-momentum-reset]').onclick();
+  assert.deepEqual(JSON.parse(s.getItem(key)),newMomentumAccount());
+  assert.equal(s.getItem(key+':before-reset:'+now),previous);
+  assert.equal(s.getItem('riptide.momentum.20x.v1:two'),previous);assert.equal(s.getItem('riptide.krypto.v1'),'ordinary');
+  assert.equal(r.querySelector('[data-momentum-toggle]').checked,false);
+  assert.match(r.querySelector('[data-momentum-balance]').innerHTML,/100\.00/);
+  await mountMomentum(root(),options).refresh();assert.equal(momentumValue(readMomentum(s,key),null,now),100);
+});
+
+test('failed reset writes leave original account intact and report the error',async()=>{
+  for(const failAt of ['archive','account']){
+    const s=storage(),r=root(),key='riptide.momentum.20x.v1:one',previous=JSON.stringify(enabled());
+    s.setItem(key,previous);const save=s.setItem;
+    s.setItem=(k,v)=>{if(failAt==='archive'||k===key)throw Error('storage full');save(k,v);};
+    const ui=mountMomentum(r,{getUser:()=> 'one',isActive:()=>false,grab:fakeGrab(now),storage:s,locks:locks(),now:()=>now});
+    await ui.refresh();await ui.reset();assert.equal(s.getItem(key),previous);
+    assert.match(r.querySelector('[data-momentum-status]').textContent,/storage full/);
+  }
+});
+
+test('a price request started before reset cannot repopulate the fresh account',async()=>{
+  const s=storage(),key='riptide.momentum.20x.v1:one';s.setItem(key,JSON.stringify(enabled()));
+  let release;const waiting=new Promise(resolve=>release=resolve);
+  const ui=mountMomentum(root(),{getUser:()=> 'one',isActive:()=>true,grab:async url=>{await waiting;return fakeGrab(now)(url);},storage:s,locks:locks(),now:()=>now});
+  const pending=ui.refresh();await ui.reset();release();await pending;
+  assert.deepEqual(JSON.parse(s.getItem(key)),newMomentumAccount());
+});
+
 test('each new momentum trade uses its coin maximum and freezes its entry rules',()=>{
   const q=snapshot();
   for(const [s,max] of Object.entries({BTC:150,ETH:100,SOL:75}))q.market[s].contract=contract(s,now,max);

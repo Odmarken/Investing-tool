@@ -29,6 +29,8 @@ Det vanliga kontot cachar gränser i tio minuter för BTCUSDT, ETHUSDT, SOLUSDT,
 
 ## Lagring och dubbla flikar
 
+**Återställ till 100 $** i AI-momentum börjar om med 100 dollar, inga öppna positioner, tom aktiv historik och pausad automatik. Det tidigare kontot sparas först under `riptide.momentum.20x.v1:<uid>:before-reset:<tid>` i samma webbläsare. Om lagringen misslyckas behålls det aktiva kontot. Återställningen använder samma fliklås som handeln och stoppar pågående prishämtningar från att återinföra gamla affärer. Andra användares momentumkonton och det vanliga kryptokontot påverkas inte.
+
 Kontot behåller lagringsnyckeln `riptide.momentum.20x.v1:<Firebase uid>` i localStorage för att bevara befintligt saldo och inställning. Versionen uppgraderas till `momentum-14-28-56-bybitmax-v2`; gamla positioner behåller 20× och sina ursprungliga villkor. Kontot är lokalt, separat från det gemensamma kryptokontot och från den tidigare AI-loggen. Att rensa webbläsardata kan radera det. Exportknappen sparar regler, hela beslutshistoriken, innehav och avslut som JSON.
 
 Web Locks serialiserar läsning, beslut och skrivning mellan flikar på samma origin. Den aktuella kontoversionen läses om under låset före varje uppdatering. Beslut identifieras per vecka. En misslyckad skrivning får inte synas som en sparad affär. Utloggning, byte av användare eller avmarkering under en prishämtning stoppar det försenade anropet. Webbläsare som saknar låsstöd kan inte starta automatiken.
