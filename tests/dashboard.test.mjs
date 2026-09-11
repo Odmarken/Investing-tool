@@ -94,8 +94,21 @@ test('selective mode blocks new entries, allows qualified entries and preserves 
   assert.match(ctx.krTagbar(s).skal,/test requirement/);
   ctx.kryptoTick();assert.equal(account.oppen,null);
   ctx.krReview=()=>({pass:true});ctx.kryptoTick();assert.equal(account.oppen.id,s.id);
+  assert.equal(account.oppen.kapitalFore,100);
   ctx.krReview=()=>{throw Error('Existing position must not be re-filtered');};
   state.ctx.BTC.px=98;ctx.kryptoTick();assert.equal(account.oppen,null);assert.equal(account.affarer.length,1);
+  assert.equal(account.affarer[0].kapitalFore,100);
+});
+
+test('full history is retained locally while the shared live snapshot stays bounded',()=>{
+  const account={start:100,kapital:750,startad:1,havstang:20,oppen:null,affarer:Array.from({length:650},(_,i)=>({id:String(i),pnl:1,stangd:i+1}))};
+  let local,remote;
+  const ctx=context(['krTillstand','krSparaLokalt','krSpara'],{
+    KRYPTO:account,KR_NYCKEL:'account',krLocalError:false,krSistSkrivet:0,coreRead:noop,
+    localStorage:{setItem:(_,value)=>local=JSON.parse(value)},
+    AUTH:{anvandare:{uid:'test'},db:{},fs:{doc:()=>({}),setDoc:(_,value)=>{remote=value;return Promise.resolve();}}}
+  });
+  ctx.krSpara();assert.equal(local.affarer.length,650);assert.equal(remote.affarer.length,300);assert.equal(account.affarer.length,650);
 });
 
 test('crypto score is a rule score and does not reuse Nasdaq measured success', () => {
@@ -157,6 +170,7 @@ test('simulated prices are not displayed as account losses or available for manu
   const { state, account } = cryptoFixture();
   const nodes = new Map();
   const ctx = context(['renderKrypto'], {
+    renderSummary:noop,
     STATE:state, KRYPTO:account, esc:x => String(x), krHandlarHar:() => true,
     $:key => { if(!nodes.has(key)) nodes.set(key, element()); return nodes.get(key); }
   });

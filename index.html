@@ -662,6 +662,7 @@ footer b{color:var(--muted)}
 #btnAuth.inloggad{border-color:rgba(0,229,140,.45);color:var(--green)}
 
 </style>
+<link rel="stylesheet" href="./account-summary.css">
 </head>
 <body>
 
@@ -682,12 +683,14 @@ footer b{color:var(--muted)}
       <div class="c"><b id="clkNy">--:--:--</b><i>New York</i></div>
     </div>
     <button class="btn primary" id="btnRefresh">↻ Uppdatera</button>
+    <a class="btn" id="btnSummary" href="#summary" aria-label="Öppna kryptokontots summary">◉ Summary</a>
     <button class="btn krypto" id="btnKrypto" title="Växla till krypto: samma motor och samma familjer för BTC, ETH, SOL, XRP, DOGE, SHIB och PEPE — dygnet runt, utan konto. Klicka igen för Nasdaq.">◈ Crypto</button>
     <button class="btn" id="btnAuth" title="Logga in för att se demokontot">Logga in</button>
     <button class="btn" id="btnSettings">⚙ Inställningar</button>
   </div>
   <div class="tape" id="tape"></div>
 </header>
+<main id="accountSummary" hidden aria-labelledby="summaryTitle"></main>
 
 <div class="banner warn" id="bnDemo">
   <span>⚠</span>
@@ -989,6 +992,8 @@ footer b{color:var(--muted)}
 "use strict";
 import * as MOTOR from './motor.js';
 import { CRYPTO_RULES, cryptoContext, reviewCrypto } from './crypto-quality.js';
+import { mergeHistory } from './account-history.js';
+import { mountSummary } from './account-summary.js';
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
@@ -3251,7 +3256,10 @@ async function firebaseStart(){
           renderKrypto(); return;
         }
         if((d.uppdaterad || 0) < (KRYPTO.uppdaterad || 0)) return;        // äldre än det vi själva just skrev
-        ['kapital','havstang','oppen','affarer','startad','uppdaterad','aktivEnhet','hjartslag'].forEach(k => { if(d[k] !== undefined) KRYPTO[k] = d[k]; });
+        const sameAccount = d.startad === KRYPTO.startad;
+        const previous = sameAccount ? KRYPTO.affarer : [];
+        ['start','kapital','havstang','oppen','startad','uppdaterad','aktivEnhet','hjartslag'].forEach(k => { if(d[k] !== undefined) KRYPTO[k] = d[k]; });
+        KRYPTO.affarer = mergeHistory(previous, d.affarer);
         KRYPTO.moln = true;
         krSparaLokalt();
         renderKrypto();
@@ -3360,6 +3368,23 @@ function demoNollstall(){
    ========================================================================== */
 const KR_NYCKEL = 'riptide.krypto.v1';
 const KRYPTO = { start:100, kapital:100, havstang:20, mmr:0.005, avgift:0.00055, oppen:null, affarer:[], startad:Date.now() };
+let krLocalError = false, summaryView = null;
+
+function renderSummary(){
+  if(location.hash === '#summary') summaryView?.render();
+}
+function summaryRoute(){
+  const open = location.hash === '#summary';
+  document.body.classList.toggle('summary', open);
+  $('#accountSummary').hidden = !open;
+  if(open){
+    if(STATE.lage !== 'krypto') tillLage('krypto');
+    if(!summaryView) summaryView = mountSummary($('#accountSummary'), () => KRYPTO, () => ({
+      cloud:!!AUTH.anvandare && !!KRYPTO.moln, localError:krLocalError
+    }));
+    renderSummary(); $('#summaryTitle').focus();
+  }
+}
 
 function krLadda(){
   try{ const d = JSON.parse(localStorage.getItem(KR_NYCKEL) || 'null'); if(d && isFinite(d.kapital)) Object.assign(KRYPTO, d); }catch(e){}
@@ -3369,11 +3394,11 @@ const KR_ENHET = (() => { try{ let e = localStorage.getItem('riptide.enhet'); if
 let krSistSkrivet = 0;
 
 function krTillstand(){
-  return { start:KRYPTO.start, kapital:KRYPTO.kapital, havstang:KRYPTO.havstang, oppen:KRYPTO.oppen, affarer:KRYPTO.affarer.slice(-300),
+  return { start:KRYPTO.start, kapital:KRYPTO.kapital, havstang:KRYPTO.havstang, oppen:KRYPTO.oppen, affarer:KRYPTO.affarer,
            startad:KRYPTO.startad, uppdaterad:KRYPTO.uppdaterad || 0, aktivEnhet:KRYPTO.aktivEnhet || null, hjartslag:KRYPTO.hjartslag || 0 };
 }
 function krSparaLokalt(){
-  try{ localStorage.setItem(KR_NYCKEL, JSON.stringify(krTillstand())); }catch(e){}
+  try{ localStorage.setItem(KR_NYCKEL, JSON.stringify(krTillstand())); krLocalError = false; }catch(e){ krLocalError = true; }
 }
 /* Skriver lokalt och, inloggad, till molnet. Stämpeln uppdaterad gör att en
    gammal ögonblicksbild från molnet inte kan skriva över det vi just gjorde. */
@@ -3382,7 +3407,7 @@ function krSpara(){
   krSparaLokalt();
   if(AUTH.anvandare && AUTH.db && AUTH.fs){
     krSistSkrivet = Date.now();
-    AUTH.fs.setDoc(AUTH.fs.doc(AUTH.db, 'riptide', 'krypto'), krTillstand()).catch(e => coreRead('kryptokonto: kunde inte skriva till molnet — ' + (e.message || e)));
+    AUTH.fs.setDoc(AUTH.fs.doc(AUTH.db, 'riptide', 'krypto'), {...krTillstand(),affarer:KRYPTO.affarer.slice(-300)}).catch(e => coreRead('kryptokonto: kunde inte skriva till molnet — ' + (e.message || e)));
   }
 }
 function krLikvidation(side, entry){
@@ -3476,7 +3501,7 @@ function kryptoTick(){
       const margin = KRYPTO.kapital, notional = margin*KRYPTO.havstang, enheter = notional/entry;
       const c = STATE.ctx[sig.inst], sista = (c && c.bars.length) ? c.bars[c.bars.length-1].t : Date.now();
       KRYPTO.oppen = { id:sig.id, inst:sig.inst, side:sig.side, grade:sig.grade, namn:sig.name, fam:sig.fam,
-        entry, entrySignal: sig.entryFyllt || sig.entry, sl:sig.sl, tp:sig.tp, liq: krLikvidation(sig.side, entry), enheter, notional, margin,
+        entry, entrySignal: sig.entryFyllt || sig.entry, sl:sig.sl, tp:sig.tp, liq: krLikvidation(sig.side, entry), enheter, notional, margin, kapitalFore:KRYPTO.kapital,
         oppnad: Date.now(), signalAktiv: sig.oppnad || null, kollad: sista, fyllStapel: sista };
       andrat = true;
       coreRead('kryptokonto: ' + (sig.side === 'long' ? 'KÖPT' : 'SÅLT') + ' ' + sig.inst + ' för ' + fmt(notional, 0) + ' $ @ ' + fmt(entry, INSTR[sig.inst].dec) +
@@ -3520,7 +3545,7 @@ function kryptoTick(){
         pnl = Math.max(pnl, -p.margin);                          // isolerad margin: aldrig mer än insatsen
         KRYPTO.kapital = Math.max(0, KRYPTO.kapital + pnl);
         KRYPTO.affarer.push({ id:p.id, inst:p.inst, side:p.side, grade:p.grade, namn:p.namn, entry:p.entry, exit, hur,
-          notional:p.notional, margin:p.margin, avgift: hur === 'likviderad' ? 0 : avgift, pnl, oppnad:p.oppnad, stangd:nar, kapitalEfter:KRYPTO.kapital });
+          notional:p.notional, margin:p.margin, kapitalFore:p.kapitalFore ?? p.margin, avgift: hur === 'likviderad' ? 0 : avgift, pnl, oppnad:p.oppnad, stangd:nar, kapitalEfter:KRYPTO.kapital });
         KRYPTO.oppen = null; andrat = true;
         coreRead('kryptokonto: ' + hur + ' · ' + fmtSigned(pnl, 2) + ' $ · saldo ' + fmt(KRYPTO.kapital, 2) + ' $');
       }
@@ -3530,6 +3555,7 @@ function kryptoTick(){
 }
 
 function renderKrypto(){
+  renderSummary();
   const el = $('#krStats'); if(!el) return;
   const p = KRYPTO.oppen;
   let oreal = 0;
@@ -4502,6 +4528,7 @@ function tick(){
 
 /* ---------- wiring ---------- */
 function wire(){
+  window.addEventListener('hashchange', summaryRoute);
   $('#cryptoSelective').onchange = e => {
     CFG.cryptoSelective = e.target.value === 'selective';
     saveCfg(); renderSignals(); renderKrypto();
@@ -4518,7 +4545,7 @@ function wire(){
     const pnl = Math.max(dir*(px - p.entry)*p.enheter - avgift, -p.margin);
     KRYPTO.kapital = Math.max(0, KRYPTO.kapital + pnl);
     KRYPTO.affarer.push({ id:p.id, inst:p.inst, side:p.side, grade:p.grade, namn:p.namn, entry:p.entry, exit:px, hur:'manuellt',
-      notional:p.notional, margin:p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
+      notional:p.notional, margin:p.margin, kapitalFore:p.kapitalFore ?? p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
     KRYPTO.oppen = null; krSpara(); renderKrypto();
   };
   // Delegerat eftersom positionsraden byggs om vid varje prisuppdatering.
@@ -4625,6 +4652,7 @@ window.RIPTIDE = {
 loadCfg();
 useLocalProxy();
 wire();
+summaryRoute();
 liveLadda();
 demoLadda();
 renderDemo();
