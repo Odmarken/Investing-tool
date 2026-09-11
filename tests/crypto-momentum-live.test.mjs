@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MOMENTUM, weekStart, momentumScore, newMomentumAccount, validateMomentumAccount, advanceMomentum, momentumValue, fetchMomentumSnapshot,readMomentum } from '../crypto-momentum.js';
+import {newActiveAccount,readActiveAccount} from '../crypto-momentum-active.js';
 import {CONTRACTS,CONTRACT_UNITS} from '../bybit-contracts.js';
 import {fetchDerivatives} from '../crypto-momentum-market.js';
 import { mountMomentum } from '../crypto-momentum-ui.js';
@@ -12,8 +13,8 @@ const snapshot = (time=now,score=.1,price=100) => ({ week:weekStart(time), marke
   contract:{...contract(s,time),tiers:[{id:1,cap:1e7,max:20,maintenance:.005,deduction:0}]},
   historyFrom:now-LEVERAGE.step,fundingThrough:time,funding:[],markBars:Array.from({length:Math.max(0,Math.floor((time-now)/LEVERAGE.step)+2)},(_,i)=>({t:now-LEVERAGE.step+i*LEVERAGE.step,o:100,h:100,l:100,c:100}))}])) });
 const enabled = () => ({...newMomentumAccount(),enabled:true});
-const dailyBars = time => Array.from({length:100},(_,i)=>{
-  const t=Math.floor(time/DAY)*DAY-(99-i)*DAY,c=100+i;
+const dailyBars = (time,step=DAY) => Array.from({length:100},(_,i)=>{
+  const t=Math.floor(time/step)*step-(99-i)*step,c=100+i;
   return {t,o:c,h:c+1,l:c-1,c,v:1};
 });
 const fakeGrab = time => async url => {
@@ -23,6 +24,7 @@ const fakeGrab = time => async url => {
   if(u.pathname.endsWith('/risk-limit'))return {retCode:0,time,result:{category:'linear',list:[{id:1,symbol,riskLimitValue:'10000000',maxLeverage:'20',maintenanceMargin:'.005',mmDeduction:''}]}};
   if(u.pathname.endsWith('/funding/history'))return {retCode:0,time,result:{list:Array.from({length:10},(_,i)=>({symbol,fundingRate:'0',fundingRateTimestamp:String(Math.floor(time/28800000)*28800000-i*28800000)}))}};
   if(u.pathname.endsWith('/mark-price-kline'))return {retCode:0,time,result:{category:'linear',symbol,list:Array.from({length:1000},(_,i)=>[Math.floor(time/300000)*300000-i*300000,199,199,199,199].map(String))}};
+  if(u.searchParams.get('interval')==='60')return {retCode:0,time,result:{category:'linear',symbol,list:dailyBars(time,3600000).reverse().map(b=>[b.t,b.o,b.h,b.l,b.c,b.v].map(String))}};
   return {retCode:0,time,result:{category:'spot',symbol,list:dailyBars(time).reverse().map(b=>[b.t,b.o,b.h,b.l,b.c,b.v].map(String))}};
 };
 const storage = () => {const values=new Map();return {getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),values};};
@@ -35,12 +37,12 @@ test('reset archives only the current momentum account and persists a paused 100
   s.setItem(key,previous);s.setItem('riptide.momentum.20x.v1:two',previous);s.setItem('riptide.krypto.v1','ordinary');
   const options={getUser:()=> 'one',isActive:()=>false,grab:fakeGrab(now),storage:s,locks:locks(),now:()=>now};
   const ui=mountMomentum(r,options);await ui.refresh();await r.querySelector('[data-momentum-reset]').onclick();
-  assert.deepEqual(JSON.parse(s.getItem(key)),newMomentumAccount());
+  assert.deepEqual(JSON.parse(s.getItem(key)),newActiveAccount());
   assert.equal(s.getItem(key+':before-reset:'+now),previous);
   assert.equal(s.getItem('riptide.momentum.20x.v1:two'),previous);assert.equal(s.getItem('riptide.krypto.v1'),'ordinary');
   assert.equal(r.querySelector('[data-momentum-toggle]').checked,false);
   assert.match(r.querySelector('[data-momentum-balance]').innerHTML,/100\.00/);
-  await mountMomentum(root(),options).refresh();assert.equal(momentumValue(readMomentum(s,key),null,now),100);
+  await mountMomentum(root(),options).refresh();assert.equal(momentumValue(readActiveAccount(s,key),null,now),100);
 });
 
 test('failed reset writes leave original account intact and report the error',async()=>{
@@ -55,11 +57,11 @@ test('failed reset writes leave original account intact and report the error',as
 });
 
 test('a price request started before reset cannot repopulate the fresh account',async()=>{
-  const s=storage(),key='riptide.momentum.20x.v1:one';s.setItem(key,JSON.stringify(enabled()));
+  const s=storage(),key='riptide.momentum.20x.v1:one';s.setItem(key,JSON.stringify({...newActiveAccount(),enabled:true}));
   let release;const waiting=new Promise(resolve=>release=resolve);
   const ui=mountMomentum(root(),{getUser:()=> 'one',isActive:()=>true,grab:async url=>{await waiting;return fakeGrab(now)(url);},storage:s,locks:locks(),now:()=>now});
   const pending=ui.refresh();await ui.reset();release();await pending;
-  assert.deepEqual(JSON.parse(s.getItem(key)),newMomentumAccount());
+  assert.deepEqual(JSON.parse(s.getItem(key)),newActiveAccount());
 });
 
 test('any of seven coins can win, uses its own maximum, and stays alone while positive',()=>{
@@ -221,40 +223,40 @@ test('checked UI starts demo, persists through reload, and does not inherit lega
   const ui=mountMomentum(r,opts);await ui.refresh();
   assert.equal(r.querySelector('[data-momentum-toggle]').checked,false);
   r.querySelector('[data-momentum-toggle]').checked=true;await r.querySelector('[data-momentum-toggle]').onchange();
-  const a=JSON.parse(s.getItem('riptide.momentum.20x.v1:one'));assert.equal(a.decisions.length,1);assert.equal(a.sleeves.filter(x=>x.position).length,1);
+  const a=JSON.parse(s.getItem('riptide.momentum.20x.v1:one'));assert.equal(a.activeDecisions.length,1);assert.equal(a.sleeves.filter(x=>x.position).length,1);
   const other=root();await mountMomentum(other,opts).refresh();
   assert.equal(other.querySelector('[data-momentum-toggle]').checked,true);
-  assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).decisions.length,1);
+  assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).activeDecisions.length,1);
 });
 
-test('two tabs share a lock and cannot duplicate weekly orders',async()=>{
-  const s=storage(),l=locks();s.setItem('riptide.momentum.20x.v1:one',JSON.stringify(enabled()));
+test('two tabs share a lock and cannot duplicate hourly orders',async()=>{
+  const s=storage(),l=locks();s.setItem('riptide.momentum.20x.v1:one',JSON.stringify({...newActiveAccount(),enabled:true}));
   const options={getUser:()=> 'one',isActive:()=>true,grab:fakeGrab(now),storage:s,locks:l,now:()=>now};
   await Promise.all([mountMomentum(root(),options).refresh(),mountMomentum(root(),options).refresh()]);
-  assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).decisions.length,1);
+  assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).activeDecisions.length,1);
   assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).sleeves.filter(s=>s.position).length,1);
 });
 
 test('pause or logout during a price request prevents delayed fills and clears private display',async()=>{
   for(const mode of ['pause','logout']){
-    const s=storage(),r=root();s.setItem('riptide.momentum.20x.v1:one',JSON.stringify(enabled()));
+    const s=storage(),r=root();s.setItem('riptide.momentum.20x.v1:one',JSON.stringify({...newActiveAccount(),enabled:true}));
     let user='one',release;const waiting=new Promise(resolve=>{release=resolve;});
     const ui=mountMomentum(r,{getUser:()=>user,isActive:()=>true,grab:async url=>{await waiting;return fakeGrab(now)(url);},storage:s,locks:locks(),now:()=>now});
     const pending=ui.refresh();
     if(mode==='pause'){r.querySelector('[data-momentum-toggle]').checked=false;await r.querySelector('[data-momentum-toggle]').onchange();}
     else user=null;
     release();await pending;
-    assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).decisions.length,0);
+    assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).activeDecisions.length,0);
     if(mode==='logout') assert.equal(r.querySelector('[data-momentum-positions]').innerHTML,'');
   }
 });
 
 test('storage failure does not expose unsaved fills; another user gets a separate empty account',async()=>{
-  const s=storage(),r=root(),l=locks();s.setItem('riptide.momentum.20x.v1:one',JSON.stringify(enabled()));
+  const s=storage(),r=root(),l=locks();s.setItem('riptide.momentum.20x.v1:one',JSON.stringify({...newActiveAccount(),enabled:true}));
   let user='one';const set=s.setItem;s.setItem=()=>{throw Error('full');};
   const ui=mountMomentum(r,{getUser:()=>user,isActive:()=>true,grab:fakeGrab(now),storage:s,locks:l,now:()=>now});
   await ui.refresh();assert.match(r.querySelector('[data-momentum-status]').textContent,/full/);
-  assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).decisions.length,0);
+  assert.equal(JSON.parse(s.getItem('riptide.momentum.20x.v1:one')).activeDecisions.length,0);
   s.setItem=set;user='two';await ui.refresh(true);
   assert.equal(r.querySelector('[data-momentum-toggle]').checked,false);
   assert.doesNotMatch(r.querySelector('[data-momentum-positions]').innerHTML,/köpt/);

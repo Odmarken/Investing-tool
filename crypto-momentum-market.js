@@ -2,7 +2,7 @@ import {LEVERAGE} from './crypto-leverage.js';
 import {CONTRACTS,CONTRACT_UNITS,fetchContract} from './bybit-contracts.js';
 const api='https://api.bybit.com/v5/market/';
 const valid=x=>Number.isFinite(x)&&x>0;
-export async function fetchDerivatives(grab,symbol,position,now){
+export async function fetchDerivatives(grab,symbol,position,now,{limits=true}={}){
   const contractSymbol=CONTRACTS[symbol],scale=CONTRACT_UNITS[symbol];
   if(!contractSymbol||!scale)throw Error('Okänt perpetualkontrakt');
   const get=async(path,params)=>{
@@ -11,7 +11,7 @@ export async function fetchDerivatives(grab,symbol,position,now){
       throw Error('Färskt derivatsvar saknas för '+symbol);
     return j;
   };
-  const [ticker,contract]=await Promise.all([get('tickers',{}),fetchContract(grab,symbol,now).catch(()=>null)]),quote=ticker.result.list.find(x=>x.symbol===contractSymbol);
+  const [ticker,contract]=await Promise.all([get('tickers',{}),limits?fetchContract(grab,symbol,now).catch(()=>null):null]),quote=ticker.result.list.find(x=>x.symbol===contractSymbol);
   const market={price:+quote?.lastPrice/scale,mark:+quote?.markPrice/scale,at:ticker.time,contract};
   if(!valid(market.price)||!valid(market.mark))throw Error('Ogiltigt derivatpris');
   if(!position)return market;
@@ -19,7 +19,8 @@ export async function fetchDerivatives(grab,symbol,position,now){
   const bars=new Map();let end=now(),pages=0;
   while(end>=from){
     if(++pages>40)throw Error('För lång frånvaro: markprishistoriken kunde inte återställas');
-    const j=await get('mark-price-kline',{interval:'5',limit:'1000',end:String(end)});
+    const limit=Math.min(1000,Math.max(2,Math.ceil((end-from)/step)+1));
+    const j=await get('mark-price-kline',{interval:'5',limit:String(limit),end:String(end)});
     if(j.result.category!=='linear'||j.result.symbol!==contractSymbol||!j.result.list.length)throw Error('Markpriser saknas');
     for(const r of j.result.list){const b={t:+r[0],o:+r[1]/scale,h:+r[2]/scale,l:+r[3]/scale,c:+r[4]/scale};
       if(!Number.isFinite(b.t)||b.t%step||![b.o,b.h,b.l,b.c].every(valid)||b.h<Math.max(b.o,b.l,b.c)||b.l>Math.min(b.o,b.c))throw Error('Ogiltig markprisstapel');
@@ -33,7 +34,8 @@ export async function fetchDerivatives(grab,symbol,position,now){
   const funds=new Map();end=now();pages=0;let covered=false;
   while(!covered){
     if(++pages>40)throw Error('Fundinghistoriken kunde inte återställas');
-    const j=await get('funding/history',{limit:'200',endTime:String(end)});
+    const limit=Math.min(200,Math.max(2,Math.ceil((end-position.fundingThrough)/interval)+2));
+    const j=await get('funding/history',{limit:String(limit),endTime:String(end)});
     if(!j.result.list.length)throw Error('Fundinghistorik saknas');
     for(const r of j.result.list){const f={t:+r.fundingRateTimestamp,rate:+r.fundingRate};
       if(r.symbol!==contractSymbol||!Number.isFinite(f.t)||f.t%step||!Number.isFinite(f.rate))throw Error('Ogiltig funding');
