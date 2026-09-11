@@ -1,5 +1,7 @@
 # AI-bedömning för krypto (experiment)
 
+**Ny koppling:** huvudrutan AI-experiment kan nu köra [automatisk momentumdemo med 20×](CRYPTO-MOMENTUM.md) på användarens begäran. Den använder ett eget lokalt demokonto och en egen kryssruta. Den tidigare AI-modellens logg finns kvar under **Tidigare AI-modell · signalbedömningar**; beskrivningen nedan gäller den loggen. Historiska resultat utan hävstång gäller inte 20×-versionen.
+
 Fortsättning 2026-09-11: [gemensam bedömning av momentum och kort AI](research/crypto-next-step.md). Nya kontroller undersöker momentumets startdatum och vinstkoncentration samt AI-modellernas rangordning på valideringsdata. Modell- och kontoreglerna är oförändrade.
 
 Senaste uppföljning: [AI v2 – bredare träning och förbättringstest](research/crypto-ai-v2-results.md). Sex kandidater tränades på den bredare kandidatinsamlingen; ingen klarade valideringen. Därför ersattes inte den nuvarande modellen och ingen automatisk AI-demohandel aktiverades. Resultatsammanfattningen finns under **Senaste förbättringstest** i AI-rutan.

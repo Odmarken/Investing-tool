@@ -1017,7 +1017,9 @@ import { mergeHistory } from './account-history.js';
 import { mountSummary } from './account-summary.js';
 import { CRYPTO_AI_MODEL } from './crypto-ai-model.js';
 import { mountCryptoAI } from './crypto-ai-ui.js';
+import { mountMomentum } from './crypto-momentum-ui.js';
 let cryptoAI;
+let momentumDemo;
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
@@ -2282,6 +2284,11 @@ function renderSignals(){
   if(crypto && AUTH.anvandare){
     if(!cryptoAI) cryptoAI = mountCryptoAI($('#cryptoAI'), CRYPTO_AI_MODEL,
       () => CFG.cryptoAIShadow, enabled => { CFG.cryptoAIShadow = enabled; saveCfg(); renderSignals(); });
+    if(!momentumDemo) momentumDemo = mountMomentum($('#cryptoAI').querySelector('[data-momentum-root]'), {
+      getUser: () => AUTH.anvandare?.uid || null, isActive: () => STATE.lage === 'krypto' && !!AUTH.anvandare,
+      grab: (url,options) => grab(url,options)
+    });
+    void momentumDemo.refresh();
     cryptoAI.update({userId:AUTH.anvandare.uid, signals:STATE.signals, contexts:STATE.ctx, now:reviewTime, snapshots});
   }
   if(crypto){
@@ -4560,6 +4567,7 @@ async function refresh(){
 let kalTick = 0;
 function tick(){
   if(++kalTick % 30 === 0) renderKalender();          // nedräkningen uppdateras varje halvminut
+  if(kalTick % 30 === 0 && momentumDemo) void momentumDemo.refresh();
   $('#clkSe').textContent = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   $('#clkNy').textContent = timeIn('America/New_York',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const s = sessionState();

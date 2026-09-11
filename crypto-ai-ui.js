@@ -30,7 +30,9 @@ export function readAILog(storage,key){
 }
 
 export function mountCryptoAI(root,model,getEnabled,setEnabled){
-  root.innerHTML=`<div class="ai-top"><label><input type="checkbox" data-ai-toggle> AI-bedömning · experiment</label>
+  root.innerHTML=`<div data-momentum-root></div>
+    <details><summary>Tidigare AI-modell · signalbedömningar</summary>
+    <div class="ai-top"><label><input type="checkbox" data-ai-toggle> Logga den tidigare AI-modellens bedömningar</label>
     <button type="button" class="btn" data-ai-export>Exportera AI-logg</button></div>
     <p>AI loggar sitt urval separat. Kontot följer fortfarande valt kryptofilter. Bedömningarna sparas lokalt för din inloggning.</p>
     <p data-ai-state role="status"></p><p data-ai-history></p>${researchHTML(CRYPTO_AI_RESEARCH)}
@@ -38,7 +40,7 @@ export function mountCryptoAI(root,model,getEnabled,setEnabled){
       <p>R = resultat delat med beräknad förlust vid stopp, efter 0,055 % avgift och 0,05 % slippage per sida, före funding.
       Hypotetiska signaler kan överlappa och är inte kontots avkastning. Stopp/mål låses vid loggning; högst 24 h. Beslutsstapeln hoppas över.</p>
       <p>Senaste 20 bedömningarna. Exporten innehåller hela den lokala loggen (högst ${AI_LOG_LIMIT}). Nya bedömningar kräver att kryptosidan är öppen och inloggad.</p>
-      <div class="ai-scroll" data-ai-rows></div></details>`;
+      <div class="ai-scroll" data-ai-rows></div></details></details>`;
   let rows=[],views=new Map(),error='',uid=null,dirty=false;
   const toggle=root.querySelector('[data-ai-toggle]');
   toggle.checked=getEnabled();
