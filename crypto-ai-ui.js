@@ -1,8 +1,21 @@
 import {assessAI,newShadow,settleShadow,shadowKey,shadowStats} from './crypto-ai.js';
+import {CRYPTO_AI_RESEARCH} from './crypto-ai-research.js';
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=x=>Number.isFinite(x)?x.toFixed(2):'–';
 const date=t=>new Date(t).toLocaleString('sv-SE',{timeZone:'Europe/Stockholm',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 export const AI_LOG_LIMIT=5000;
+
+export function researchHTML(report){
+  return '<details><summary>Senaste förbättringstest: '+(report.readyForDemo?'klarade forskningskraven':'ingen godkänd modell')+'</summary>'+
+    '<p>'+escape(report.conclusion)+'</p><p>'+report.candidates+' insamlade kandidater. Sex modellvarianter prövades. '+
+    'Validering '+new Date(report.validationFrom).toISOString().slice(0,10)+' till '+new Date(report.validationTo-1).toISOString().slice(0,10)+'.</p>'+
+    '<p>Samma '+report.paired[0].n+' signaler med olika stopp och innehavstid, före AI-urval. Avgifter, slippage och funding ingår. R mäter resultat relativt beräknad nettoförlust vid stopp.</p>'+
+    '<div class="ai-scroll"><table><thead><tr><th>Utförande</th><th>Snitt R</th><th>Dubbel slippage, R</th></tr></thead><tbody>'+
+    report.paired.map(p=>'<tr><td>'+escape(p.name)+'</td><td>'+number(p.meanR)+'</td><td>'+number(p.stressR)+'</td></tr>').join('')+'</tbody></table></div>'+
+    '<div class="ai-scroll"><table><thead><tr><th>Modell</th><th>Träningsexempel</th><th>AI skulle ta</th><th>Godkänd</th></tr></thead><tbody>'+
+    report.trials.map(t=>'<tr><td>'+escape(t.name)+'</td><td>'+t.trainN+'</td><td>'+t.selectedN+'</td><td>'+(t.pass?'Ja':'Nej')+'</td></tr>').join('')+'</tbody></table></div>'+
+    '<p>Historisk forskning, inte kontots avkastning. Noll trades räcker inte för godkännande. Automatisk demo kräver positiva resultat även på senare data och under högre kostnader.</p></details>';
+}
 
 export function readAILog(storage,key){
   const raw=storage.getItem(key);if(!raw)return [];
@@ -20,7 +33,7 @@ export function mountCryptoAI(root,model,getEnabled,setEnabled){
   root.innerHTML=`<div class="ai-top"><label><input type="checkbox" data-ai-toggle> AI-bedömning · experiment</label>
     <button type="button" class="btn" data-ai-export>Exportera AI-logg</button></div>
     <p>AI loggar sitt urval separat. Kontot följer fortfarande valt kryptofilter. Bedömningarna sparas lokalt för din inloggning.</p>
-    <p data-ai-state role="status"></p><p data-ai-history></p>
+    <p data-ai-state role="status"></p><p data-ai-history></p>${researchHTML(CRYPTO_AI_RESEARCH)}
     <details><summary>Jämför bedömningar och utfall</summary><div class="ai-scroll" data-ai-stats></div>
       <p>R = resultat delat med beräknad förlust vid stopp, efter 0,055 % avgift och 0,05 % slippage per sida, före funding.
       Hypotetiska signaler kan överlappa och är inte kontots avkastning. Stopp/mål låses vid loggning; högst 24 h. Beslutsstapeln hoppas över.</p>

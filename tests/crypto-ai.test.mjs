@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {AI_FEATURES,AI_STEP,aiFeatures,predictR,assessAI,newShadow,settleShadow,shadowStats,shadowKey} from '../crypto-ai.js';
 import {fitRidge} from '../crypto-ai-fit.js';
-import {readAILog,mountCryptoAI} from '../crypto-ai-ui.js';
+import {readAILog,mountCryptoAI,researchHTML} from '../crypto-ai-ui.js';
+import {CRYPTO_AI_RESEARCH} from '../crypto-ai-research.js';
 import {CRYPTO_AI_MODEL} from '../crypto-ai-model.js';
 
 function fixture(side='long'){
@@ -13,6 +14,16 @@ function fixture(side='long'){
 }
 const stubModel=now=>({features:AI_FEATURES,mean:AI_FEATURES.map(()=>0),scale:AI_FEATURES.map(()=>1),
   weights:AI_FEATURES.map(()=>0),bias:.5,version:'test',threshold:.1,symbols:['BTC'],trainEnd:0,dataEnd:now});
+
+test('failed research is shown separately without suggesting automatic trading is enabled',()=>{
+  const html=researchHTML(CRYPTO_AI_RESEARCH);
+  assert.equal(CRYPTO_AI_RESEARCH.readyForDemo,false);
+  assert.equal(CRYPTO_AI_RESEARCH.finalEvaluated,false);
+  assert.match(html,/ingen godkänd modell/);assert.match(html,/aktiverades inte/);
+  assert.equal(CRYPTO_AI_RESEARCH.trials.length,6);
+  assert.ok(CRYPTO_AI_RESEARCH.trials.every(t=>t.selectedN===0&&!t.pass));
+  assert.doesNotMatch(researchHTML({...CRYPTO_AI_RESEARCH,conclusion:'<script>bad</script>'}),/<script>/);
+});
 
 test('features and prediction do not read unfinished or future OHLCV',()=>{
   const {s,ctx,now}=fixture(),f=aiFeatures(s,ctx,now);

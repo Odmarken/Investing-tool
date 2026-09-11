@@ -1,0 +1,9 @@
+# Fryst AI-modell: utökad historisk kontroll
+
+Bestämt före uppspelningen: testa publicerad `crypto-ai-model.js` utan omträning eller ändrad tröskel. 12 juli–9 september 2026, sju coins, befintlig Bybit spot-cache. Kör `motor.js` med standardregler och grader A, neutrala nyheter, 2 000 avslutade femminutersstaplar och samma urval av signalkort som panelen. Orderstatus beräknas på avslutade staplar (`formandeStapel=false`); detta är en femminutersapproximation av webbläsaren, inte en exakt tickreproduktion.
+
+En observation per signal/modell vid första giltiga AI-bedömningen; även avböjda signaler. Samma `assessAI`, `newShadow` och `settleShadow` som på sidan. Jämför Alla loggade, Selektiv, AI, AI + Selektiv på samma kandidater, med låst SL/TP, avgifter, slippage, 24h och utelämnad beslutsstapel. Avslut efter testperioden räknas inte. Outredda slutobservationer visas separat. Inga kontoaffärer, omträningar, inställningsändringar eller serveranrop görs.
+
+Mät antal, avslutade/okända, positiv andel, genomsnittligt netto-R, per coin samt veckoblock-bootstrap för tillräckligt stora urval. Diagnostik: prognosfördelning, andel som når +0,10 R före/efter grundkraven, orsaker till avslag och rangordningens fem kvintiler. Kvintiler är efterhandsdiagnostik och används inte till att välja ny tröskel. Redovisa även dubbel slippage på samma frysta observationer. R under stress normaliseras med stressens beräknade stopprisk.
+
+Kandidaterna kan överlappa; medel-R är inte portföljavkastning eller verkliga kontoresultat. Funding, orderbok och perpetual-priser saknas. Perioden har granskats i tidigare forskning: resultatet är retrospektivt, inte ett nytt orört sluttest. Modellen tränades på ett snävare urval från basportföljen, så denna körning prövar även hur den fungerar på fler kandidater.
