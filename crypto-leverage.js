@@ -2,21 +2,25 @@
 export const LEVERAGE = Object.freeze({ leverage:20, fee:.00055, slip:.0005, maintenance:.005, step:300000 });
 export function openLeveraged(budget, price, at, rules=LEVERAGE) {
   const entry=price*(1+rules.slip), units=budget/(entry*(1/rules.leverage+rules.fee)), fee=units*entry*rules.fee;
-  return { budget, entry, units, fee, at, funding:0, fundingThrough:at, nextBar:(Math.floor(at/rules.step)+1)*rules.step };
+  return { budget, entry, units, fee, at, rules:{...rules}, funding:0, fundingThrough:at, nextBar:(Math.floor(at/rules.step)+1)*rules.step };
 }
 export function liquidationPrice(p,rules=LEVERAGE) {
-  return Math.max(0,(p.units*p.entry-p.budget+p.fee+p.funding)/(p.units*(1-rules.maintenance-rules.fee)));
+  rules={...rules,...p.rules};
+  return Math.max(0,(p.units*p.entry-p.budget+p.fee+p.funding-(rules.deduction??0))/(p.units*(1-rules.maintenance-rules.fee)));
 }
 export function leveragedValue(p,price,rules=LEVERAGE) {
+  rules={...rules,...p.rules};
   const exit=price*(1-rules.slip);
   return Math.max(0,p.budget+(exit-p.entry)*p.units-p.fee-p.units*exit*rules.fee-p.funding);
 }
 export function closeLeveraged(p,price,at,reason='signal',rules=LEVERAGE) {
+  rules={...rules,...p.rules};
   const exit=price*(1-rules.slip), exitFee=p.units*exit*rules.fee;
   const cash=reason==='likvidation'?0:leveragedValue(p,price,rules);
-  return { cash, exitFee, trade:{ opened:p.at, at, entry:p.entry, exit, pnl:cash-p.budget, fees:p.fee+exitFee, funding:p.funding, reason } };
+  return { cash, exitFee, trade:{ opened:p.at, at, entry:p.entry, exit, pnl:cash-p.budget, fees:p.fee+exitFee, funding:p.funding, reason,leverage:rules.leverage,rules:{...rules} } };
 }
 export function inspectLeveraged(p, market, now, rules=LEVERAGE) {
+  rules={...rules,...p.rules};
   const bars=market.markBars, funding=market.funding, step=rules.step;
   if(!Array.isArray(bars)||!Array.isArray(funding)||!Number.isFinite(market.historyFrom)||market.historyFrom>Math.min(p.nextBar,Math.floor(p.fundingThrough/step)*step)||
     !Number.isFinite(market.fundingThrough)||market.fundingThrough<now-120000) throw Error('Markpris- eller fundinghistorik saknas');

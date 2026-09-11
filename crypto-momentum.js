@@ -1,7 +1,8 @@
-// Forward demo only. Isolated 20x margin; no broker orders or backdated entries.
+// Forward demo only. Bybit per-contract isolated margin; no broker orders.
 import {LEVERAGE,openLeveraged,closeLeveraged,inspectLeveraged,leveragedValue,liquidationPrice} from './crypto-leverage.js';
 import {fetchDerivatives} from './crypto-momentum-market.js';
-export const MOMENTUM = Object.freeze({ version: 'momentum-14-28-56-20x-v1', symbols: ['BTC','ETH','SOL'], day: 86400000, ...LEVERAGE, start: 100 });
+import {maxLeverageFor} from './bybit-contracts.js';
+export const MOMENTUM = Object.freeze({ version: 'momentum-14-28-56-bybitmax-v2', symbols: ['BTC','ETH','SOL'], day: 86400000, ...LEVERAGE, leverage:null, leverageMode:'bybitMax', start: 100 });
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const positive = x => finite(x) && x > 0;
 export function weekStart(now) {
@@ -19,7 +20,7 @@ export function newMomentumAccount() {
     sleeves: MOMENTUM.symbols.map(symbol => ({ symbol, cash: MOMENTUM.start/3, position: null })), decisions: [], trades: [] };
 }
 export function validateMomentumAccount(a) {
-  if (!a || a.version !== MOMENTUM.version || typeof a.enabled !== 'boolean' ||
+  if (!a || ![MOMENTUM.version,'momentum-14-28-56-20x-v1'].includes(a.version) || typeof a.enabled !== 'boolean' ||
       !(a.startedAt === null || positive(a.startedAt)) || !(a.lastWeek === null || positive(a.lastWeek) && weekStart(a.lastWeek) === a.lastWeek) ||
       !finite(a.fees) || a.fees < 0 || !finite(a.funding) || !Array.isArray(a.sleeves) || a.sleeves.length !== 3 ||
       !Array.isArray(a.decisions) || !Array.isArray(a.trades)) throw Error('Momentumkontot kan inte läsas');
@@ -29,8 +30,9 @@ export function validateMomentumAccount(a) {
         p !== null && (!p || !positive(p.units) || !positive(p.entry) || !positive(p.budget) || !positive(p.at) || !finite(p.fee) || p.fee < 0 ||
           !finite(p.funding) || !finite(p.fundingThrough) || p.fundingThrough<p.at || !finite(p.nextBar) || p.nextBar<=p.at || p.nextBar%MOMENTUM.step))
       throw Error('Ogiltigt momentuminnehav');
-    if(p&&Math.abs(p.units*p.entry/MOMENTUM.leverage+p.fee-p.budget)>1e-7*Math.max(1,p.budget))
-      throw Error('Positionens marginal stämmer inte med 20×');
+    if(p&&p.rules&&(!positive(p.rules.leverage)||!positive(p.rules.maintenance)||p.rules.maintenance>=1||!finite(p.rules.fee)||p.rules.fee<0||!finite(p.rules.slip)||p.rules.slip<0||p.rules.step!==LEVERAGE.step||!finite(p.rules.deduction??0)||(p.rules.deduction??0)<0))throw Error('Ogiltiga låsta positionsregler');
+    if(p&&Math.abs(p.units*p.entry/(p.rules?.leverage??20)+p.fee-p.budget)>1e-7*Math.max(1,p.budget))
+      throw Error('Positionens marginal stämmer inte med låst hävstång');
   }
   if (a.trades.some(t => !t || !MOMENTUM.symbols.includes(t.symbol) || !finite(t.pnl) || !positive(t.at) ||
       !positive(t.opened) || t.at < t.opened || !positive(t.entry) || !positive(t.exit) || !finite(t.fees) || t.fees < 0 || !finite(t.funding)) ||
@@ -50,7 +52,10 @@ export function validateMomentumAccount(a) {
 }
 export function readMomentum(storage, key) {
   const raw = storage.getItem(key);
-  return raw === null ? newMomentumAccount() : validateMomentumAccount(JSON.parse(raw));
+  if(raw===null)return newMomentumAccount();
+  const a=validateMomentumAccount(JSON.parse(raw));
+  // Preserve the existing balance, enabled switch, weekly decisions and 20x positions.
+  return a.version===MOMENTUM.version?a:{...a,version:MOMENTUM.version};
 }
 export function validateSnapshot(snapshot, now) {
   if (!snapshot || snapshot.week !== weekStart(now)) throw Error('Prisdata tillhör fel beslutsvecka');
@@ -65,25 +70,40 @@ export function advanceMomentum(account, snapshot, now) {
   if (!account.enabled && !account.sleeves.some(s=>s.position)) return account;
   validateSnapshot(snapshot, now);
   const next = structuredClone(account);
-  const decide=account.enabled&&(account.lastWeek===null||account.lastWeek<snapshot.week);
-  if(decide)next.startedAt ??= now;
+  let decide=account.enabled&&(account.lastWeek===null||account.lastWeek<snapshot.week);
+  delete next.waitReason;
   const close=(s,price,time,reason)=>{
     const result=closeLeveraged(s.position,price,time,reason);
     s.cash+=result.cash;next.fees+=result.exitFee;next.trades.push({symbol:s.symbol,...result.trade});s.position=null;
   };
+  const liquidated=new Set(),plans=new Map();
+  // Risk monitoring commits even if public entry limits are unavailable.
+  for(const s of next.sleeves){
+    if(!s.position)continue;
+    const checked=inspectLeveraged(s.position,snapshot.market[s.symbol],now);
+    s.position=checked.position;next.funding+=checked.funding;
+    if(checked.liquidated){close(s,checked.liquidated.price,checked.liquidated.at,'likvidation');liquidated.add(s.symbol);}
+  }
+  if(decide){
+    try{
+      for(const s of next.sleeves){
+        const q=snapshot.market[s.symbol];
+        if(!s.position&&q.score>0&&s.cash>0)
+          plans.set(s.symbol,maxLeverageFor(q.contract,s.cash,{fee:LEVERAGE.fee,price:q.price*(1+LEVERAGE.slip),mark:q.mark},now));
+      }
+    }catch(e){decide=false;next.waitReason='Veckobeslut väntar: '+e.message;}
+  }
+  if(decide)next.startedAt ??= now;
   const signals = [];
   for (const s of next.sleeves) {
     const q = snapshot.market[s.symbol], wanted = q.score > 0;
-    let action = wanted ? 'behåll' : 'kontanter';
-    if(s.position){
-      const checked=inspectLeveraged(s.position,q,now);s.position=checked.position;next.funding+=checked.funding;
-      if(checked.liquidated){close(s,checked.liquidated.price,checked.liquidated.at,'likvidation');action='likvidation';}
-    }
+    let action = liquidated.has(s.symbol)?'likvidation':wanted ? 'behåll' : 'kontanter';
     if(!decide)continue;
     if (s.position && !wanted) {
       close(s,q.price,now,'signal');action='sälj';
     } else if (!s.position && wanted && s.cash > 0) {
-      const p=openLeveraged(s.cash,q.price,now);
+      const selected=plans.get(s.symbol);
+      const p=openLeveraged(s.cash,q.price,now,{...LEVERAGE,...selected});
       if(q.mark>liquidationPrice(p)){s.position=p;s.cash=0;next.fees+=p.fee;action='köp';}
       else action='kontanter';
     }

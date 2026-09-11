@@ -1018,6 +1018,9 @@ import { mountSummary } from './account-summary.js';
 import { CRYPTO_AI_MODEL } from './crypto-ai-model.js';
 import { mountCryptoAI } from './crypto-ai-ui.js';
 import { mountMomentum } from './crypto-momentum-ui.js';
+import { CONTRACTS, createContractCache, maxLeverageFor, isolatedLevel } from './bybit-contracts.js';
+const bybitContracts = createContractCache((url,options) => grab(url,options));
+let krLimitsBusy = false, krLimitsAt = -Infinity;
 let cryptoAI;
 let momentumDemo;
 const {
@@ -2207,7 +2210,7 @@ function pabloText(s){
   const rr = nz(s.rr) ? s.rr : 0, riskA = s.risk/A, malA = s.ptsTp/A;
   rader.push('Geometrin: stoppen ' + fmt(s.risk, 1) + ' p bort (' + riskA.toFixed(1) + ' ATR), målet ' + fmt(s.ptsTp, 1) + ' p (' + malA.toFixed(1) + ' ATR), R:R ' + rr.toFixed(2) + '. ' +
     (function(){ const k = grupp(INSTR[s.inst]) === 'crypto' ? kryptoStorlek(s) : null;
-       return k ? 'Kryptokontot: ' + fmt(k.margin, 2) + ' $ margin, ' + fmt(k.notional, 0) + ' $ notional vid ' + KRYPTO.havstang + '× — ' + fmt(k.risk, 2) + ' $ (' + k.riskPct.toFixed(1) + ' % av marginen) vid stopp, +' + fmt(k.mal, 2) + ' $ vid mål, likvidation ' + k.liqPct.toFixed(1) + ' % bort.' + (k.bortomLiq ? ' Stoppen ligger bortom likvidationen.' : '')
+       return k ? 'Kryptokontot: ' + fmt(k.margin, 2) + ' $ margin, ' + fmt(k.notional, 0) + ' $ notional vid ' + k.leverage + '× — ' + fmt(k.risk, 2) + ' $ (' + k.riskPct.toFixed(1) + ' % av marginen) vid stopp, +' + fmt(k.mal, 2) + ' $ vid mål, likvidation ' + k.liqPct.toFixed(1) + ' % bort.' + (k.bortomLiq ? ' Stoppen ligger bortom likvidationen.' : '')
                 : s.kontrakt + ' kontrakt ger ' + Math.round(s.riskUsd) + ' $ i risk och ' + Math.round(s.malUsd) + ' $ vid målet.'; })() + (s.tpBasis ? ' Målet: ' + s.tpBasis + '.' : ''));
   if(riskA < 0.7) minus.push('Stoppen är tajt (' + riskA.toFixed(1) + ' ATR) — brus räcker för att ta den.');
   if(rr >= 2) plus.push('R:R över 2: en träff på tre räcker till noll.');
@@ -2282,6 +2285,7 @@ function renderSignals(){
   }
   $('#cryptoTools').hidden = !crypto;
   if(crypto && AUTH.anvandare){
+    void refreshCryptoContracts();
     if(!cryptoAI) cryptoAI = mountCryptoAI($('#cryptoAI'), CRYPTO_AI_MODEL,
       () => CFG.cryptoAIShadow, enabled => { CFG.cryptoAIShadow = enabled; saveCfg(); renderSignals(); });
     if(!momentumDemo) momentumDemo = mountMomentum($('#cryptoAI').querySelector('[data-momentum-root]'), {
@@ -2298,7 +2302,7 @@ function renderSignals(){
     $('#cryptoQualityNote').textContent = (CFG.cryptoSelective
       ? 'Selektivt: denna webbläsare öppnar bara nya demoaffärer som klarar alla krav. Öppna positioner behåller sina stopp och mål.'
       : 'Granskning: kontot följer nuvarande regler. Välj Selektivt för att kräva filtret vid nya demoaffärer i denna webbläsare.') +
-      ' Experimentellt, ännu inte lönsamhetsvaliderat. Hela saldot och ' + KRYPTO.havstang + '× exponering gäller fortfarande.';
+      ' Experimentellt, ännu inte lönsamhetsvaliderat. Nya affärer använder hela marginalbudgeten med Bybits maxhävstång för respektive coin och positionsstorlek.';
   }
   let list = STATE.signals.filter(synligGrad);
   if(STATE.sigFilter === 'A' || STATE.sigFilter === 'B' || STATE.sigFilter === 'C'){
@@ -2375,10 +2379,10 @@ function renderSignals(){
         <div class="m"><i>R:R</i><b class="${s.rr>=2?'pos':s.rr<1.3?'neg':''}">${s.rr.toFixed(2)}</b></div>
         ${(function(){ if(grupp(INSTR[s.inst]) !== 'crypto') return ''; const k = kryptoStorlek(s); if(!k) return '';
           return `<div class="m"><i>${k.oppen ? 'Margin' : 'Saldo'}</i><b title="${k.oppen ? 'Marginen i den öppna affären' : 'Kryptokontots realiserade saldo — hela summan sätts in'}">${fmt(k.margin, 2)} $</b></div>
-        <div class="m"><i>Notional</i><b title="margin × ${KRYPTO.havstang}">${fmt(k.notional, 0)} $</b></div>
+        <div class="m"><i>Notional</i><b title="margin × ${k.leverage}">${fmt(k.notional, 0)} $</b></div>
         <div class="m"><i>Risk</i><b class="neg" title="Förlust vid stopp, netto avgifter${k.bortomLiq ? ' — stoppen ligger bortom likvidationen: hela marginen' : ''}">−${fmt(k.risk, 2)} $ <span class="dim" style="font-size:9.5px;font-weight:600">${k.riskPct.toFixed(1)} %</span></b></div>
         <div class="m"><i>Mål</i><b class="pos" title="Vinst vid mål, netto avgifter">+${fmt(k.mal, 2)} $</b></div>
-        <div class="m"><i>Likv.</i><b class="neg" title="Likvidationspris vid ${KRYPTO.havstang}×">${fmt(k.liq, s.dec)} <span class="dim" style="font-size:9.5px;font-weight:600">${k.liqPct.toFixed(1)} %</span></b></div>`; })()}
+        <div class="m"><i>Likv.</i><b class="neg" title="Likvidationspris vid ${k.leverage}×">${fmt(k.liq, s.dec)} <span class="dim" style="font-size:9.5px;font-weight:600">${k.liqPct.toFixed(1)} %</span></b></div>`; })()}
         ${grupp(INSTR[s.inst]) === 'crypto' ? '' : `<div class="m"><i>Kontrakt</i><b title="Så många MNQ ryms under ${fmt(MAX_RISK,0)} $ risk med den här stoppen">${s.kontrakt} <span class="dim" style="font-size:9.5px;font-weight:600">MNQ</span></b></div>`}
         ${grupp(INSTR[s.inst]) === 'crypto' ? '' : `<div class="m"><i>Risk</i><b class="neg" title="${fmt(s.riskPerKontrakt,0)} $ per kontrakt × ${s.kontrakt}${s.overRisk ? ' — stoppen är så vid att ett enda kontrakt går över taket' : ''}">${fmt(s.riskUsd, 0)} $${s.overRisk ? ' <span class="dim" style="font-size:9px">över taket</span>' : ''}</b></div>
         <div class="m"><i>Mål</i><b class="pos" title="${s.rr.toFixed(2)} × risken">${fmt(s.malUsd, 0)} $</b></div>`}
@@ -3454,7 +3458,20 @@ function krSpara(){
     AUTH.fs.setDoc(AUTH.fs.doc(AUTH.db, 'riptide', 'krypto'), {...krTillstand(),affarer:KRYPTO.affarer.slice(-300)}).catch(e => coreRead('kryptokonto: kunde inte skriva till molnet — ' + (e.message || e)));
   }
 }
-function krLikvidation(side, entry){
+async function refreshCryptoContracts(){
+  if(!AUTH.anvandare || STATE.lage !== 'krypto' || krLimitsBusy || Date.now()-krLimitsAt<60000) return;
+  const uid=AUTH.anvandare.uid,version=STATE.modeVersion;
+  krLimitsBusy=true;krLimitsAt=Date.now();
+  try{
+    await Promise.all(Object.keys(CONTRACTS).map(s=>bybitContracts.load(s)));
+    if(AUTH.anvandare?.uid===uid&&STATE.modeVersion===version&&STATE.lage==='krypto'){if(!STATE.loading)kryptoTick();renderKrypto();}
+  }finally{krLimitsBusy=false;}
+}
+function krMaxPlan(inst,entry,budget=KRYPTO.kapital){
+  try{return maxLeverageFor(bybitContracts.get(inst),budget,{price:entry});}catch(e){return null;}
+}
+function krLikvidation(side, entry, plan=null, margin=KRYPTO.kapital){
+  if(plan)return isolatedLevel(side,entry,margin,margin*plan.leverage/entry,KRYPTO.avgift,plan);
   return side === 'long' ? entry*(1 - 1/KRYPTO.havstang + KRYPTO.mmr) : entry*(1 + 1/KRYPTO.havstang - KRYPTO.mmr);
 }
 
@@ -3472,6 +3489,8 @@ function krTagbar(sig){
   if(c && c.simulated) return { ok:false, px:null, skal:'simulerad data — handeln är pausad' };
   const px = c && isFinite(c.px) && c.px > 0 ? c.px : null;
   if(px === null) return { ok:false, px:null, skal:'inget pris' };
+  const plan=krMaxPlan(sig.inst,px);
+  if(!plan)return {ok:false,px,skal:'Bybits aktuella hävstångs- och riskgränser saknas eller positionen är för stor'};
   const dir = sig.side === 'long' ? 1 : -1;
   const innanfor = dir > 0 ? (px > sig.sl && px < sig.tp) : (px < sig.sl && px > sig.tp);
   const kvarRR = Math.abs(sig.tp - px) / Math.max(Math.abs(px - sig.sl), 1e-12);
@@ -3481,12 +3500,13 @@ function krTagbar(sig){
     const review = krReview(sig);
     if(!review.pass) return { ok:false, px, kvarRR, skal:'kryptofiltret: ' + review.reason };
   }
-  return { ok:true, px, kvarRR };
+  return { ok:true, px, kvarRR, plan };
 }
 
 function krReview(sig, now = Date.now(), snapshot){
+  const plan=krMaxPlan(sig.inst,STATE.ctx[sig.inst]?.px||sig.entry);
   return reviewCrypto(sig, STATE.ctx[sig.inst], now, {
-    ...CRYPTO_RULES, fee:KRYPTO.avgift, leverage:KRYPTO.havstang, maintenance:KRYPTO.mmr
+    ...CRYPTO_RULES, fee:KRYPTO.avgift, leverage:plan?.leverage??NaN, maintenance:plan?.maintenance??NaN
   }, snapshot);
 }
 
@@ -3542,11 +3562,12 @@ function kryptoTick(){
                                         && !KRYPTO.affarer.some(a => a.id === x.id) && krTagbar(x).ok)
                                 .sort((a, b) => (a.oppnad || 0) - (b.oppnad || 0))[0];
     if(sig){
-      const entry = krTagbar(sig).px;                       // marknadspris nu — inte signalens gamla fyllning
-      const margin = KRYPTO.kapital, notional = margin*KRYPTO.havstang, enheter = notional/entry;
+      const {px:entry,plan} = krTagbar(sig);                // lås coinets aktuella gräns vid inträde
+      const margin = KRYPTO.kapital, notional = margin*plan.leverage, enheter = notional/entry;
       const c = STATE.ctx[sig.inst], sista = (c && c.bars.length) ? c.bars[c.bars.length-1].t : Date.now();
       KRYPTO.oppen = { id:sig.id, inst:sig.inst, side:sig.side, grade:sig.grade, namn:sig.name, fam:sig.fam,
-        entry, entrySignal: sig.entryFyllt || sig.entry, sl:sig.sl, tp:sig.tp, liq: krLikvidation(sig.side, entry), enheter, notional, margin, kapitalFore:KRYPTO.kapital,
+        entry, entrySignal: sig.entryFyllt || sig.entry, sl:sig.sl, tp:sig.tp, liq: krLikvidation(sig.side, entry,plan,margin), enheter, notional, margin, kapitalFore:KRYPTO.kapital,
+        havstang:plan.leverage,mmr:plan.maintenance,bybitPlan:plan,
         oppnad: Date.now(), signalAktiv: sig.oppnad || null, kollad: sista, fyllStapel: sista };
       andrat = true;
       coreRead('kryptokonto: ' + (sig.side === 'long' ? 'KÖPT' : 'SÅLT') + ' ' + sig.inst + ' för ' + fmt(notional, 0) + ' $ @ ' + fmt(entry, INSTR[sig.inst].dec) +
@@ -3590,7 +3611,7 @@ function kryptoTick(){
         pnl = Math.max(pnl, -p.margin);                          // isolerad margin: aldrig mer än insatsen
         KRYPTO.kapital = Math.max(0, KRYPTO.kapital + pnl);
         KRYPTO.affarer.push({ id:p.id, inst:p.inst, side:p.side, grade:p.grade, namn:p.namn, entry:p.entry, exit, hur,
-          notional:p.notional, margin:p.margin, kapitalFore:p.kapitalFore ?? p.margin, avgift: hur === 'likviderad' ? 0 : avgift, pnl, oppnad:p.oppnad, stangd:nar, kapitalEfter:KRYPTO.kapital });
+          notional:p.notional, margin:p.margin, havstang:p.havstang??p.notional/p.margin,bybitPlan:p.bybitPlan??null, kapitalFore:p.kapitalFore ?? p.margin, avgift: hur === 'likviderad' ? 0 : avgift, pnl, oppnad:p.oppnad, stangd:nar, kapitalEfter:KRYPTO.kapital });
         KRYPTO.oppen = null; andrat = true;
         coreRead('kryptokonto: ' + hur + ' · ' + fmtSigned(pnl, 2) + ' $ · saldo ' + fmt(KRYPTO.kapital, 2) + ' $');
       }
@@ -3610,15 +3631,15 @@ function renderKrypto(){
   const eget = Math.max(0, KRYPTO.kapital + oreal), a = KRYPTO.affarer, v = a.filter(x => x.pnl > 0).length, likv = a.filter(x => x.hur === 'likviderad').length;
   let topp = KRYPTO.start, dd = 0; for(const x of a){ topp = Math.max(topp, x.kapitalEfter); dd = Math.max(dd, topp ? (topp - x.kapitalEfter)/topp : 0); }
   const tile = (e, w, cls) => '<div class="btstat"><i>' + e + '</i><b class="' + (cls||'') + '">' + w + '</b></div>';
-  const nastaNotional = KRYPTO.kapital*KRYPTO.havstang, avgiftRt = nastaNotional*KRYPTO.avgift*2;
+  const heldLeverage=p?(p.havstang??p.notional/p.margin):null;
   el.innerHTML =
     tile('Saldo', fmt(eget, 2) + ' $', eget >= KRYPTO.start ? 'pos' : 'neg') +
     tile('Resultat', fmtSigned(eget - KRYPTO.start, 2) + ' $', eget >= KRYPTO.start ? 'pos' : 'neg') +
     tile('Avkastning', pct((eget - KRYPTO.start)/KRYPTO.start*100, 1), eget >= KRYPTO.start ? 'pos' : 'neg') +
-    tile('Hävstång', KRYPTO.havstang + '×') +
-    tile('Nästa affär', fmt(nastaNotional, 0) + ' $ notional') +
-    tile('Avgifter/affär', '≈ ' + fmt(avgiftRt, 2) + ' $ (' + (KRYPTO.avgift*2*KRYPTO.havstang*100).toFixed(1) + ' % av saldot)') +
-    tile('Likvidation vid', '±' + ((1/KRYPTO.havstang - KRYPTO.mmr)*100).toFixed(1) + ' %') +
+    tile('Hävstång', heldLeverage?fmt(heldLeverage,2)+'×':'Bybit max per coin') +
+    tile('Nästa affär', 'Max enligt coinets risknivå') +
+    tile('Avgift per sida', (KRYPTO.avgift*100).toFixed(3)+' % av notional') +
+    tile('Likvidation', p?fmt(Math.abs(p.entry-p.liq)/p.entry*100,2)+' % från entry':'Beräknas per affär') +
     tile('Affärer', String(a.length)) +
     tile('Träffsäkerhet', a.length ? Math.round(v/a.length*100) + ' %' : '–') +
     tile('Likviderade', String(likv), likv ? 'neg' : '') +
@@ -3630,7 +3651,7 @@ function renderKrypto(){
     const d = INSTR[p.inst].dec, dir = p.side === 'long' ? 1 : -1, px = c ? c.px : p.entry;
     const tillLiq = Math.abs(px - p.liq)/px*100, riskStopp = Math.abs(dir*(p.sl - p.entry))*p.enheter;
     opp.innerHTML = '<div class="oppen"><span class="tag ' + p.side + '">' + (p.side === 'long' ? 'LONG' : 'SHORT') + '</span><b>' + esc(p.inst) + '</b>' +
-      '<span>' + fmt(p.notional, 0) + ' $ notional · margin ' + fmt(p.margin, 2) + ' $</span>' +
+      '<span>' + fmt(p.notional, 0) + ' $ notional · '+fmt(heldLeverage,2)+'× · margin ' + fmt(p.margin, 2) + ' $</span>' +
       '<span>in på <b>' + fmt(p.entry, d) + '</b>' + (p.entrySignal && Math.abs(p.entrySignal - p.entry) > 0 ? ' <span class="dim">(signalen fylldes ' + fmt(p.entrySignal, d) + ')</span>' : '') + ' · stopp ' + fmt(p.sl, d) + ' (−' + fmt(riskStopp, 2) + ' $) · mål ' + fmt(p.tp, d) + '</span>' +
       '<span>likvidation <b class="neg">' + fmt(p.liq, d) + '</b> · ' + tillLiq.toFixed(2) + ' % bort' + (Math.abs(p.sl - p.entry) > Math.abs(p.liq - p.entry) ? ' · <b class="neg">stoppen ligger bortom likvidationen</b>' : '') + '</span>' +
       '<span class="' + (oreal >= 0 ? 'pos' : 'neg') + '"><b>' + fmtSigned(oreal, 2) + ' $</b> (' + fmtSigned(oreal/p.margin*100, 1) + ' % av marginen)</span>' +
@@ -3656,16 +3677,12 @@ function renderKrypto(){
   $('#krLista').innerHTML = senaste.length
     ? '<div class="dlista"><div class="rad hd"><span>Tid</span><span>Sida</span><span>Grad</span><span>Setup</span><span>Utfall</span><span>Resultat</span></div>' +
       senaste.map(x => '<div class="rad"><span>' + new Date(x.stangd).toLocaleTimeString('sv-SE', { hour:'2-digit', minute:'2-digit' }) + '</span>' +
-        '<span class="' + x.side + '">' + (x.side === 'long' ? 'LONG' : 'SHORT') + '</span><span>' + x.grade + '</span><span>' + esc(x.inst + ' · ' + (x.namn || '').slice(0, 36)) + '</span>' +
+        '<span class="' + x.side + '">' + (x.side === 'long' ? 'LONG' : 'SHORT') + '</span><span>' + x.grade + '</span><span>' + esc(x.inst + ' · ' + (x.havstang??x.notional/x.margin) + '× · ' + (x.namn || '').slice(0, 36)) + '</span>' +
         '<span class="' + (x.pnl >= 0 ? 'pos' : 'neg') + '">' + x.hur + '</span><span class="' + (x.pnl >= 0 ? 'pos' : 'neg') + '">' + fmtSigned(x.pnl, 2) + ' $</span></div>').join('') + '</div>'
     : '';
   $('#krStamp').textContent = 'sedan ' + new Date(KRYPTO.startad).toLocaleDateString('sv-SE') +
     (KRYPTO.moln ? (krHandlarHar() ? ' · molnet · handlas här' : ' · molnet · handlas på en annan enhet, visas här') : ' · bara den här webbläsaren — logga in för att synka');
-  $('#krNote').innerHTML = 'Bybit-isolerad margin på USDT-perpetuals: hela saldot är margin, notional är saldot × ' + KRYPTO.havstang +
-    ', avgiften är ' + (KRYPTO.avgift*100).toFixed(3) + ' % av notional per sida — vid ' + KRYPTO.havstang + '× blir det ' + (KRYPTO.avgift*2*KRYPTO.havstang*100).toFixed(1) +
-    ' % av saldot per affär bara i avgifter. <b>Margin call</b> finns inte som varning på isolerad margin: positionen likvideras när förlusten når marginen minus underhållsmarginen (' +
-    (KRYPTO.mmr*100).toFixed(1) + ' %), alltså när priset gått ' + ((1/KRYPTO.havstang - KRYPTO.mmr)*100).toFixed(1) + ' % emot. Motorns stoppar ligger normalt långt innanför det, men ligger en stopp bortom likvidationen står det på positionen. ' +
-    'Nås likvidation, stopp och mål i samma stapel räknas de i den ordningen. Funding är utelämnad; priserna är Bybits spotstaplar. Hävstången ändras i <code>KRYPTO.havstang</code>.';
+  $('#krNote').textContent = 'Nya demoaffärer använder Bybits offentliga maxhävstång per USDT-perpetual och positionsstorlek. Hävstång, underhållsmarginal och risknivå låses vid inträde. Saknade eller gamla gränser stoppar nya affärer. Öppna affärer behåller sina ursprungliga villkor. Detta vanliga demokonto använder fortfarande spotstaplar och utelämnar funding; momentumkontot har separat perpetual- och fundinguppföljning. Ingen hävstång ändras på ditt Bybit-konto.';
 }
 
 /* Storlek för en kryptosignal, ur kryptokontot i stället för MAX_RISK och
@@ -3679,13 +3696,15 @@ function kryptoStorlek(s){
   const c0 = STATE.ctx[s.inst];
   const entry = p ? p.entry : (s.status === 'ACTIVE' && c0 && isFinite(c0.px) && c0.px > 0) ? c0.px : s.entry;   // aktiv utan position: vad den kostar nu
   if(!isFinite(entry) || entry <= 0) return null;
-  const margin = p ? p.margin : KRYPTO.kapital, notional = p ? p.notional : margin*KRYPTO.havstang, enheter = p ? p.enheter : notional/entry;
-  const liq = p ? p.liq : krLikvidation(s.side, entry), dir = s.side === 'long' ? 1 : -1;
+  const plan=p?null:krMaxPlan(s.inst,entry);if(!p&&!plan)return null;
+  const leverage=p?(p.havstang??p.notional/p.margin):plan.leverage;
+  const margin = p ? p.margin : KRYPTO.kapital, notional = p ? p.notional : margin*leverage, enheter = p ? p.enheter : notional/entry;
+  const liq = p ? p.liq : krLikvidation(s.side, entry,plan,margin), dir = s.side === 'long' ? 1 : -1;
   const avg = px => KRYPTO.avgift*(notional + px*enheter);
   const bortomLiq = dir > 0 ? s.sl <= liq : s.sl >= liq;
   const risk = bortomLiq ? margin : Math.min(margin, Math.abs(entry - s.sl)*enheter + avg(s.sl));
   const mal  = Math.abs(s.tp - entry)*enheter - avg(s.tp);
-  return { margin, notional, enheter, liq, risk, mal, bortomLiq, liqPct: Math.abs(liq - entry)/entry*100, riskPct: risk/margin*100, malPct: mal/margin*100, oppen: !!p };
+  return { margin, leverage, notional, enheter, liq, risk, mal, bortomLiq, liqPct: Math.abs(liq - entry)/entry*100, riskPct: risk/margin*100, malPct: mal/margin*100, oppen: !!p };
 }
 
 /* ==========================================================================
@@ -4601,7 +4620,7 @@ function wire(){
     const pnl = Math.max(dir*(px - p.entry)*p.enheter - avgift, -p.margin);
     KRYPTO.kapital = Math.max(0, KRYPTO.kapital + pnl);
     KRYPTO.affarer.push({ id:p.id, inst:p.inst, side:p.side, grade:p.grade, namn:p.namn, entry:p.entry, exit:px, hur:'manuellt',
-      notional:p.notional, margin:p.margin, kapitalFore:p.kapitalFore ?? p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
+      notional:p.notional, margin:p.margin, havstang:p.havstang??p.notional/p.margin,bybitPlan:p.bybitPlan??null, kapitalFore:p.kapitalFore ?? p.margin, avgift, pnl, oppnad:p.oppnad, stangd:Date.now(), kapitalEfter:KRYPTO.kapital });
     KRYPTO.oppen = null; krSpara(); renderKrypto();
   };
   // Delegerat eftersom positionsraden byggs om vid varje prisuppdatering.

@@ -3,6 +3,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as motor from '../motor.js';
+import {isolatedLevel} from '../bybit-contracts.js';
 
 // Run the dashboard's actual functions, with DOM/network/storage boundaries
 // replaced by in-memory fixtures. No requests or account writes are made.
@@ -80,7 +81,8 @@ function cryptoFixture() {
   let saves = 0;
   const ctx = context(['krTagbar','krLikvidation','kryptoTick','riktigaPriser'], {
     STATE:state, KRYPTO:account, CFG:{cryptoSelective:false}, KR_ENHET:'test', krHandlarHar:() => true,
-    krSpara:() => saves++, coreRead:noop, aktivaSyms:() => ['BTC','ETH']
+    krSpara:() => saves++, coreRead:noop, aktivaSyms:() => ['BTC','ETH'],isolatedLevel,
+    krMaxPlan:()=>({leverage:20,maintenance:.005,deduction:0})
   });
   return { ctx, state, account, saves:() => saves };
 }
@@ -113,6 +115,19 @@ test('simulated entries are blocked without blocking healthy instruments', () =>
   state.ctx.BTC.simulated = false;
   ctx.kryptoTick();
   assert.equal(account.oppen.id, 'entry');
+});
+
+test('ordinary crypto demo requires limits, uses per-coin maximum and preserves it on exit',()=>{
+  const {ctx,state,account}=cryptoFixture();account.oppen=null;
+  state.ctx.BTC={simulated:false,px:100,bars:[{t:1000,o:100,h:100,l:100,c:100}]};
+  state.signals=[{id:'max',inst:'BTC',side:'long',status:'ACTIVE',grade:'A',sl:99,tp:102}];
+  ctx.krMaxPlan=()=>null;ctx.kryptoTick();assert.equal(account.oppen,null);
+  ctx.krMaxPlan=()=>({leverage:150,maintenance:.0033,deduction:0});
+  ctx.kryptoTick();assert.equal(account.oppen.havstang,150);assert.equal(account.oppen.notional,15000);
+  const liq=account.oppen.liq;
+  ctx.krMaxPlan=()=>null;ctx.kryptoTick();assert.equal(account.oppen.liq,liq);
+  state.ctx.BTC.px=103;ctx.kryptoTick();assert.equal(account.oppen,null);assert.equal(account.affarer[0].havstang,150);
+  assert.equal(account.affarer[0].bybitPlan.maintenance,.0033);
 });
 
 test('selective mode blocks new entries, allows qualified entries and preserves open-position exits', () => {

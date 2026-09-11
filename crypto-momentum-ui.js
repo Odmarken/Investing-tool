@@ -5,18 +5,18 @@ const money = n => n === null ? '–' : n.toFixed(2)+' $';
 const date = t => t ? new Date(t).toLocaleString('sv-SE',{timeZone:'Europe/Stockholm'}) : '–';
 const signed = n => (n>=0?'+':'')+n.toFixed(2);
 export function mountMomentum(root, { getUser, isActive, grab, storage = {getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)}, locks = navigator.locks, now = () => Date.now() }) {
-  root.innerHTML = `<div class="ai-top"><label><input type="checkbox" data-momentum-toggle> AI-experiment · automatisk momentumdemo 20×</label>
+  root.innerHTML = `<div class="ai-top"><label><input type="checkbox" data-momentum-toggle> AI-experiment · momentumdemo med Bybit max</label>
     <button type="button" class="btn" data-momentum-export>Exportera momentumkonto</button></div>
-    <p>Momentum 14/28/56 dagar · BTC, ETH och SOL · 20× isolerad marginal i USDT-perpetuals. Eget demokonto med 100 $ vid start, en tredjedel i marginal per coin. Det vanliga kryptokontot fortsätter separat.</p>
+    <p>Momentum 14/28/56 dagar · BTC, ETH och SOL · högsta hävstång enligt Bybits offentliga USDT-perpetualgränser för coin och positionsstorlek. Eget demokonto med 100 $ vid start, en tredjedel i isolerad marginal per coin. Öppna affärer behåller sin hävstång. Det vanliga kryptokontot fortsätter separat.</p>
     <p>Ibockad: köper, behåller eller säljer enligt veckosignalen. Avmarkerad: pausar strategins köp och sälj; innehaven ligger kvar och funding och likvidation följs fortfarande. Första beslutet tas när du aktiverar, sedan en gång per vecka från måndag 00:00 UTC.</p>
     <p>Kör när du är inloggad och kryptosidan är öppen. Missade beslut utförs till aktuellt pris när du återkommer. Kontot och inställningen sparas för din inloggning i denna webbläsare, inte mellan enheter.</p>
     <p data-momentum-status role="status" aria-live="polite"></p><p data-momentum-balance></p>
     <div class="ai-scroll" data-momentum-positions></div>
     <details><summary>Momentumets beslut och affärer</summary><div class="ai-scroll" data-momentum-history></div></details>
     <details><summary>Historiskt test: 1× jämfört med 20×</summary>
-    <p>Separata starter januari och juli 2025. Avgifter, slippage, funding och simulerad likvidation ingår. 20× är inte lönsamhetsvaliderad.</p>
+    <p>Separata starter januari och juli 2025. Avgifter, slippage, funding och simulerad likvidation ingår. Detta är det tidigare testet med fast 20×; det testar inte dagens maxhävstång.</p>
     <div class="ai-scroll"><table><thead><tr><th>Period 2025</th><th>Hävstång</th><th>Netto</th><th>Max nedgång</th><th>Likvidationer</th></tr></thead><tbody>${MOMENTUM_RESEARCH.rows.map(r=>'<tr><td>'+(new Date(r.from).getUTCMonth()===0?'Januari–december':'Juli–december')+'</td><td>'+r.leverage+'×</td><td>'+signed(r.returnPct)+' %</td><td>'+r.maxDDPct.toFixed(1)+' %</td><td>'+r.liquidations+'</td></tr>').join('')}</tbody></table></div></details>
-    <p class="dim">Ny 20×-version: tidigare +44,7 % gäller utan hävstång. Signalen använder spotpriser; demofyllningar använder perpetualpriser. Avgift 0,055 % och antagen slippage 0,05 % per sida. Historisk funding och markpriser används för öppna innehav. Underhållsmarginal antas vara 0,5 %; vid simulerad likvidation förloras hela den positionens marginal. Det är en förenklad modell, inte börsens exakta risktrappor.</p>
+    <p class="dim">Bybit max är inte lönsamhetsvaliderad. Tidigare +44,7 % gäller utan hävstång. Signalen använder spotpriser; demofyllningar använder perpetualpriser. Avgift 0,055 % och antagen slippage 0,05 % per sida. Historisk funding och markpriser används för öppna innehav. Underhållsmarginal och marginalavdrag hämtas från positionens risknivå vid inträde och hålls fasta i denna förenklade modell. Vid simulerad likvidation förloras hela positionens marginal. Inga order eller ändringar skickas till ditt Bybit-konto.</p>
     <p class="dim">Saldo inkluderar bokförd funding och uppskattade säljkostnader. Likvidation följs med femminutersstaplar och aktuellt markpris. Inträdesstapelns tidigare extrempriser hoppas över, vilket kan missa en snabb likvidation mellan observationer. Saknad historik pausar beräkningen.</p>`;
   const toggle = root.querySelector('[data-momentum-toggle]');
   let uid = null, account = null, snapshot = null, error = '', busy = false, lastCheck = -Infinity, generation = 0;
@@ -35,19 +35,19 @@ export function mountMomentum(root, { getUser, isActive, grab, storage = {getIte
     toggle.checked = account?.enabled === true; toggle.disabled = !uid || !account;
     root.querySelector('[data-momentum-export]').disabled = !uid || !account;
     const value = account ? momentumValue(account,snapshot,now()) : null;
-    root.querySelector('[data-momentum-status]').textContent = error || (!uid ? 'Logga in för momentumdemo.' :
+    root.querySelector('[data-momentum-status]').textContent = error || account?.waitReason || (!uid ? 'Logga in för momentumdemo.' :
       (account?.enabled ? 'Automatik på' : 'Automatik pausad') + (busy ? ' · hämtar dygnspriser…' : '') +
       (account?.lastWeek ? ' · senaste beslut '+date(account.decisions.at(-1).at)+'. Nästa veckobeslut från '+date(account.lastWeek+7*MOMENTUM.day)+'.' : ' · ingen affär ännu.')+
       (account?.sleeves.some(s=>s.position) && value===null ? ' Färskt pris saknas; innehavens värde visas inte.' : ''));
     root.querySelector('[data-momentum-balance]').textContent = account ? 'Momentumkonto: '+money(value)+' · nettoresultat '+(value===null?'–':signed(value-MOMENTUM.start)+' $')+
       ' · bokförda avgifter '+money(account.fees)+' · fundingkostnad '+money(account.funding)+' · '+account.trades.length+' avslutade affärer.' : '';
-    root.querySelector('[data-momentum-positions]').innerHTML = account ? '<table><thead><tr><th>Coin</th><th>Innehav 20×</th><th>Beräknad likvidation</th><th>Kontanter</th><th>Veckomomentum</th></tr></thead><tbody>'+account.sleeves.map(s=>{
+    root.querySelector('[data-momentum-positions]').innerHTML = account ? '<table><thead><tr><th>Coin</th><th>Innehav och hävstång</th><th>Beräknad likvidation</th><th>Kontanter</th><th>Veckomomentum</th></tr></thead><tbody>'+account.sleeves.map(s=>{
       const q=snapshot?.week===weekStart(now())?snapshot.market[s.symbol]:null;
-      return '<tr><td>'+s.symbol+'</td><td>'+(s.position?money(s.position.units*s.position.entry)+' · marginalbudget '+money(s.position.budget)+' · köpt '+date(s.position.at):'Inget')+'</td><td>'+(s.position?money(liquidationPrice(s.position)):'–')+'</td><td>'+money(s.cash)+'</td><td>'+(q?signed(q.score*100)+' %':'–')+'</td></tr>';
+      return '<tr><td>'+s.symbol+'</td><td>'+(s.position?(s.position.rules?.leverage??20)+'× · '+money(s.position.units*s.position.entry)+' · marginalbudget '+money(s.position.budget)+' · köpt '+date(s.position.at):'Inget · max bestäms vid köp')+'</td><td>'+(s.position?money(liquidationPrice(s.position)):'–')+'</td><td>'+money(s.cash)+'</td><td>'+(q?signed(q.score*100)+' %':'–')+'</td></tr>';
     }).join('')+'</tbody></table>' : '';
     root.querySelector('[data-momentum-history]').innerHTML = account ? '<p>Senaste 20 beslut och 20 avslut. Exporten innehåller hela historiken.</p><table><thead><tr><th>Beslut</th><th>Utfört</th><th>Åtgärder</th></tr></thead><tbody>'+
       account.decisions.slice(-20).reverse().map(d=>'<tr><td>'+date(d.week)+'</td><td>'+date(d.at)+'</td><td>'+d.signals.map(s=>s.symbol+': '+({köp:'köp',sälj:'sälj',behåll:'behåll',kontanter:'kontanter',likvidation:'likvidation'}[s.action]??'–')+' ('+signed(s.score*100)+' %)').join(' · ')+'</td></tr>').join('')+
-      '</tbody></table><table><thead><tr><th>Stängd</th><th>Coin</th><th>Orsak</th><th>Nettoresultat</th></tr></thead><tbody>'+account.trades.slice(-20).reverse().map(t=>'<tr><td>'+date(t.at)+'</td><td>'+t.symbol+'</td><td>'+(t.reason==='likvidation'?'Likvidation':'Veckosignal')+'</td><td>'+signed(t.pnl)+' $</td></tr>').join('')+'</tbody></table>' : '';
+      '</tbody></table><table><thead><tr><th>Stängd</th><th>Coin</th><th>Hävstång</th><th>Orsak</th><th>Nettoresultat</th></tr></thead><tbody>'+account.trades.slice(-20).reverse().map(t=>'<tr><td>'+date(t.at)+'</td><td>'+t.symbol+'</td><td>'+(t.leverage??20)+'×</td><td>'+(t.reason==='likvidation'?'Likvidation':'Veckosignal')+'</td><td>'+signed(t.pnl)+' $</td></tr>').join('')+'</tbody></table>' : '';
   }
   async function refresh(force=false) {
     try { sync(); } catch(e) { account=null; error=e.message; render(); return; }

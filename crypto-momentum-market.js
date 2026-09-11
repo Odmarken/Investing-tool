@@ -1,4 +1,5 @@
 import {LEVERAGE} from './crypto-leverage.js';
+import {fetchContract} from './bybit-contracts.js';
 const api='https://api.bybit.com/v5/market/';
 const valid=x=>Number.isFinite(x)&&x>0;
 export async function fetchDerivatives(grab,symbol,position,now){
@@ -8,8 +9,8 @@ export async function fetchDerivatives(grab,symbol,position,now){
       throw Error('Färskt derivatsvar saknas för '+symbol);
     return j;
   };
-  const ticker=await get('tickers',{}),quote=ticker.result.list.find(x=>x.symbol===symbol+'USDT');
-  const market={price:+quote?.lastPrice,mark:+quote?.markPrice,at:ticker.time};
+  const [ticker,contract]=await Promise.all([get('tickers',{}),fetchContract(grab,symbol,now).catch(()=>null)]),quote=ticker.result.list.find(x=>x.symbol===symbol+'USDT');
+  const market={price:+quote?.lastPrice,mark:+quote?.markPrice,at:ticker.time,contract};
   if(!valid(market.price)||!valid(market.mark))throw Error('Ogiltigt derivatpris');
   if(!position)return market;
   const step=LEVERAGE.step,from=Math.min(position.nextBar,Math.floor(position.fundingThrough/step)*step);
