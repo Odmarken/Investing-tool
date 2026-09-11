@@ -10,7 +10,7 @@ const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const noop = () => {};
 const element = () => ({ classList: { toggle:noop, add:noop, remove:noop } });
 function context(names, values) {
-  const ctx = vm.createContext({ ...motor, ...values });
+  const ctx = vm.createContext({ ...motor, AUTH:{anvandare:{uid:'test'}}, ...values });
   for (const name of names) {
     const match = html.match(new RegExp('(?:async )?function ' + name + '\\([^]*?\\n\\}'));
     assert.ok(match, name);
@@ -38,6 +38,37 @@ test('saved settings and subsequent edits reach the engine, even if storage fail
   assert.equal(engine.minPts, 70);
   assert.equal(engine.maxPts, 500);
   assert.equal(engine.risk, 'normal');
+});
+
+test('signed-out visitors do not run account ticks, polling or dashboard refresh',async()=>{
+  const ctx=context(['kryptoTick','demoTick','pollaKrypto','pollaLive','refresh'],{AUTH:{anvandare:null}});
+  ctx.kryptoTick();ctx.demoTick();await ctx.pollaKrypto();await ctx.pollaLive();await ctx.refresh();
+  // No account/market/DOM globals exist here: reaching any side effect would fail.
+});
+
+test('authentication swaps landing/panel, resumes once, and invalidates pending work on logout',()=>{
+  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0;
+  const auth={anvandare:null},state={modeVersion:5,refreshPending:true};
+  const ctx=context(['authRitaOm'],{
+    AUTH:auth,STATE:state,document:{body:{classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key)}}},
+    $:key=>{if(!nodes.has(key))nodes.set(key,{...element(),style:{}});return nodes.get(key);},
+    summaryRoute:()=>routes++,renderDemo:noop,refresh:()=>refreshes++
+  });
+  ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,false);assert.equal(refreshes,0);
+  auth.anvandare={email:'member@example.com'};ctx.authRitaOm();assert.ok(!classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,true);assert.equal(refreshes,1);
+  ctx.authRitaOm();assert.equal(refreshes,1);
+  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);
+});
+
+test('login always signs into an existing account even if a legacy signup mode is supplied',async()=>{
+  const nodes=new Map();let logins=0,creates=0;
+  const auth={auth:{},lage:'ny',modul:{signInWithEmailAndPassword:async()=>logins++,createUserWithEmailAndPassword:async()=>creates++,setPersistence:async()=>{},browserLocalPersistence:{},browserSessionPersistence:{}}};
+  const ctx=context(['authLage','authKor'],{
+    AUTH:auth,AUTH_FEL:{},authSakerstall:async()=>true,authMeddela:noop,
+    $:key=>{if(!nodes.has(key))nodes.set(key,{...element(),value:key==='#authEpost'?'member@example.com':'password',checked:true,setAttribute:noop});return nodes.get(key);}
+  });
+  ctx.authLage('ny');assert.equal(auth.lage,'in');assert.equal(nodes.get('#authKor').textContent,'Logga in');
+  auth.lage='ny';await ctx.authKor();assert.equal(logins,1);assert.equal(creates,0);assert.equal(nodes.get('#authLosen').value,'');
 });
 
 function cryptoFixture() {

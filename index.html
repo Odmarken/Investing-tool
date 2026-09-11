@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Riptide Investments Panel — NQ</title>
+<title>Riptide Investments</title>
 <style>
 /* ============================================================
    DESIGNSYSTEM — scarlet / ljusblå / mörkblå terminal
@@ -647,11 +647,6 @@ footer b{color:var(--muted)}
 
 /* Inloggning */
 .modal .box.smal{width:min(400px,100%)}
-.authflik{display:flex;gap:6px;margin-bottom:4px}
-.authflik button{flex:1;background:transparent;border:1px solid var(--line-2);color:var(--muted);
-  border-radius:7px;padding:8px 10px;font:inherit;font-size:11px;font-weight:800;letter-spacing:.6px;
-  text-transform:uppercase;cursor:pointer;transition:.15s}
-.authflik button.on{border-color:var(--lblue);color:var(--lblue);background:rgba(var(--lb),.10)}
 .authkryss{display:flex;align-items:center;gap:8px;margin:14px 0 2px;font-size:11px;color:var(--text-2);cursor:pointer}
 .authkryss input{width:auto;margin:0;accent-color:var(--lblue)}
 .authfel{display:none;margin-top:12px;padding:8px 10px;border-radius:7px;font-size:11px;line-height:1.5;
@@ -662,8 +657,35 @@ footer b{color:var(--muted)}
 
 </style>
 <link rel="stylesheet" href="./account-summary.css">
+<link rel="stylesheet" href="./landing.css">
 </head>
-<body>
+<body class="landing">
+
+<main id="landingPage" aria-labelledby="landingTitle">
+  <div class="landing-art" aria-hidden="true">
+    <div class="landing-grid"></div><div class="landing-glow"></div>
+    <svg class="landing-network" viewBox="0 0 900 900" fill="none">
+      <defs><radialGradient id="landingHalo"><stop stop-color="#3cd79d" stop-opacity=".09"/><stop offset="1" stop-color="#3cd79d" stop-opacity="0"/></radialGradient><linearGradient id="landingStroke" x1="100" y1="100" x2="780" y2="760" gradientUnits="userSpaceOnUse"><stop stop-color="#255949"/><stop offset=".5" stop-color="#6ee9b2"/><stop offset="1" stop-color="#1f6873"/></linearGradient></defs>
+      <circle cx="450" cy="450" r="410" fill="url(#landingHalo)"/>
+      <g stroke="url(#landingStroke)" stroke-width=".8" opacity=".5"><circle cx="450" cy="450" r="310"/><circle cx="450" cy="450" r="345" stroke-dasharray="1 12"/><ellipse cx="450" cy="450" rx="310" ry="100"/><ellipse cx="450" cy="450" rx="310" ry="210"/><ellipse cx="450" cy="450" rx="100" ry="310"/><ellipse cx="450" cy="450" rx="210" ry="310"/><path d="M140 450H760M450 140V760"/></g>
+      <g class="orbit" stroke="url(#landingStroke)"><ellipse cx="450" cy="450" rx="370" ry="140" transform="rotate(-38 450 450)" opacity=".6"/><ellipse class="signal" cx="450" cy="450" rx="370" ry="140" transform="rotate(-38 450 450)" stroke="#b3ffda" stroke-width="2"/><circle cx="741" cy="222" r="4" fill="#9effcf" stroke="none"/></g>
+      <g class="orbit reverse" stroke="url(#landingStroke)"><ellipse cx="450" cy="450" rx="390" ry="175" transform="rotate(46 450 450)" opacity=".5"/><ellipse class="signal second" cx="450" cy="450" rx="390" ry="175" transform="rotate(46 450 450)" stroke="#75dce5" stroke-width="1.5"/></g>
+      <g stroke="#57b998" stroke-width=".7" opacity=".4"><path d="M198 267L450 140L661 225L760 450L670 669L450 760L222 654L140 450L198 267L670 669L661 225L222 654L198 267M140 450L661 225M450 140L670 669M222 654L760 450"/></g>
+      <g fill="#99ffcf"><circle class="node" cx="198" cy="267" r="3"/><circle cx="661" cy="225" r="2.5"/><circle class="node" cx="670" cy="669" r="3"/><circle cx="222" cy="654" r="2"/><circle class="node" cx="450" cy="140" r="3"/></g>
+    </svg>
+    <div class="landing-shade"></div>
+  </div>
+  <nav class="landing-nav" aria-label="Riptide"><div class="landing-brand"><span class="landing-mark">RI</span>RIPTIDE</div><span class="landing-access">PRIVATE ACCESS</span></nav>
+  <section class="landing-hero">
+    <div class="landing-eyebrow"><i></i>A new perspective on markets</div>
+    <h1 id="landingTitle">Join an innovation of <span>AI investment</span></h1>
+    <p class="landing-description">Market signals. Connected insights.<br>Your next perspective starts here.</p>
+    <button id="landingLogin" class="landing-login" type="button">Log in <span aria-hidden="true">↗</span></button>
+    <div class="landing-member">Access for existing members.</div>
+    <noscript><p class="landing-description">Aktivera JavaScript för att logga in.</p></noscript>
+  </section>
+  <div class="landing-footer"><span>RIPTIDE INVESTMENTS</span><button type="button" id="landingMotion" class="landing-motion" aria-pressed="false">Pause motion</button></div>
+</main>
 
 <header class="topbar">
   <div class="tb-row">
@@ -899,21 +921,16 @@ footer b{color:var(--muted)}
 </footer>
 
 <!-- ============ INSTÄLLNINGAR ============ -->
-<div class="modal" id="authModal">
+<div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authRubrik">
   <div class="box smal">
     <div class="ph"><span class="accent"></span><h2 id="authRubrik">Logga in</h2>
       <span class="right"><button class="btn" id="authStang">✕ Stäng</button></span></div>
     <div class="pb">
-      <div class="authflik">
-        <button data-lage="in" class="on">Jag har konto</button>
-        <button data-lage="ny">Skapa konto</button>
-      </div>
-
       <label for="authEpost">E-post</label>
       <input id="authEpost" type="email" autocomplete="email" placeholder="du@exempel.se">
 
       <label for="authLosen">Lösenord</label>
-      <input id="authLosen" type="password" autocomplete="current-password" placeholder="minst sex tecken">
+      <input id="authLosen" type="password" autocomplete="current-password" placeholder="Ditt lösenord">
 
       <label class="authkryss" for="authKom">
         <input type="checkbox" id="authKom" checked>
@@ -925,8 +942,7 @@ footer b{color:var(--muted)}
 
       <div style="height:16px"></div>
       <button class="btn primary" id="authKor" style="width:100%;padding:10px">Logga in</button>
-      <div class="hint" style="margin-top:10px">Kontot styr bara vem som får se demokontots siffror. Panelen, grafen och
-        signalerna är öppna för alla.</div>
+      <div class="hint" style="margin-top:10px">Logga in med ditt befintliga konto för att öppna panelen.</div>
     </div>
   </div>
 </div>
@@ -3076,8 +3092,7 @@ async function firebaseKonfig(){
 
 /* --------------------------------------------------------------------------
    Inloggning.
-   Kontot avgör en enda sak: vem som får se demokontots siffror. Resten av
-   panelen är öppen. Samma demokonto för alla inloggade — det finns bara ett,
+   Inloggning öppnar panelen från startsidan. Samma demokonto för alla inloggade — det finns bara ett,
    och molnet räknar på det dygnet runt.
 
    "Kom ihåg mig" är skillnaden mellan browserLocalPersistence, som överlever
@@ -3090,11 +3105,10 @@ const AUTH_FEL = {
   'auth/invalid-email': 'Det där ser inte ut som en e-postadress.',
   'auth/missing-password': 'Fyll i ett lösenord.',
   'auth/weak-password': 'Lösenordet måste vara minst sex tecken.',
-  'auth/email-already-in-use': 'Det finns redan ett konto med den adressen. Byt till "Jag har konto".',
   'auth/invalid-credential': 'Fel e-post eller lösenord.',
   'auth/invalid-login-credentials': 'Fel e-post eller lösenord.',
   'auth/wrong-password': 'Fel lösenord.',
-  'auth/user-not-found': 'Ingen användare med den adressen. Skapa ett konto i stället.',
+  'auth/user-not-found': 'Fel e-post eller lösenord.',
   'auth/too-many-requests': 'För många försök. Vänta en stund och prova igen.',
   'auth/network-request-failed': 'Nådde inte Firebase. Kolla nätet.',
   'auth/operation-not-allowed': 'E-postinloggning är inte påslagen i projektet.'
@@ -3108,12 +3122,11 @@ function authMeddela(text, klar){
   el.classList.toggle('authklar', !!klar);
 }
 
-function authLage(lage){
-  AUTH.lage = lage;
-  $$('.authflik button').forEach(b => b.classList.toggle('on', b.dataset.lage === lage));
-  $('#authRubrik').textContent = lage === 'ny' ? 'Skapa konto' : 'Logga in';
-  $('#authKor').textContent    = lage === 'ny' ? 'Skapa konto' : 'Logga in';
-  $('#authLosen').setAttribute('autocomplete', lage === 'ny' ? 'new-password' : 'current-password');
+function authLage(){
+  AUTH.lage = 'in';
+  $('#authRubrik').textContent = 'Logga in';
+  $('#authKor').textContent = 'Logga in';
+  $('#authLosen').setAttribute('autocomplete', 'current-password');
   authMeddela('');
 }
 
@@ -3144,19 +3157,19 @@ async function authOppna(lage){
 
 async function authKor(){
   if(!(await authSakerstall())){ authMeddela(authSaknasText()); return; }
+  if($('#authKor').disabled) return;
   const epost = ($('#authEpost').value || '').trim();
   const losen = $('#authLosen').value || '';
   if(!epost || !losen){ authMeddela('Fyll i både e-post och lösenord.'); return; }
 
-  const { signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  const { signInWithEmailAndPassword,
           setPersistence, browserLocalPersistence, browserSessionPersistence } = AUTH.modul;
   const knapp = $('#authKor');
   knapp.disabled = true;
   authMeddela('');
   try{
     await setPersistence(AUTH.auth, $('#authKom').checked ? browserLocalPersistence : browserSessionPersistence);
-    if(AUTH.lage === 'ny') await createUserWithEmailAndPassword(AUTH.auth, epost, losen);
-    else                   await signInWithEmailAndPassword(AUTH.auth, epost, losen);
+    await signInWithEmailAndPassword(AUTH.auth, epost, losen);
     $('#authLosen').value = '';
     $('#authModal').classList.remove('show');
   }catch(e){
@@ -3169,6 +3182,13 @@ async function authKor(){
 /* Vad som syns beror på om någon är inloggad. */
 function authRitaOm(){
   const inne = !!AUTH.anvandare;
+  const justIn = inne && !AUTH.panelOpen;
+  if(!inne && AUTH.panelOpen){ STATE.modeVersion++; STATE.refreshPending = false; }
+  AUTH.panelOpen = inne;
+  document.body.classList.toggle('landing', !inne);
+  $('#landingPage').hidden = inne;
+  if(inne) $('#authModal').classList.remove('show');
+  summaryRoute();
   const knapp = $('#btnAuth');
   if(knapp){
     knapp.textContent = inne ? (AUTH.anvandare.email || 'Inloggad') : 'Logga in';
@@ -3178,6 +3198,7 @@ function authRitaOm(){
   const sektion = $('#demoSektion');
   if(sektion) sektion.style.display = inne ? '' : 'none';
   if(inne) renderDemo();
+  if(justIn) refresh();
 }
 
 /* Färsk id-token att skicka till /api/konto när sidan inte pratar Firestore. */
@@ -3373,7 +3394,7 @@ function renderSummary(){
   if(location.hash === '#summary') summaryView?.render();
 }
 function summaryRoute(){
-  const open = location.hash === '#summary';
+  const open = location.hash === '#summary' && !!AUTH.anvandare;
   document.body.classList.toggle('summary', open);
   $('#accountSummary').hidden = !open;
   if(open){
@@ -3476,6 +3497,7 @@ function kryptoNollstall(){
 }
 
 function kryptoTick(){
+  if(!AUTH.anvandare) return;
   if(STATE.lage !== 'krypto') return;
   if(!krHandlarHar()) return;                                        // en annan enhet handlar — vi visar
   let andrat = false;
@@ -3716,6 +3738,7 @@ function bevakaAktiveringar(){
 }
 
 function demoTick(){
+  if(!AUTH.anvandare) return;
   if(KONTO.server) return;                 // servern sköter öppning och stängning
   let andrat = false;
 
@@ -4089,6 +4112,7 @@ function taEmotLive(bar){
    som taEmotLive gör för NQ. */
 let kryptoPollar = false;
 async function pollaKrypto(){
+  if(!AUTH.anvandare) return;
   if(STATE.lage !== 'krypto' || STATE.loading || kryptoPollar) return;
   kryptoPollar = true;
   const version = STATE.modeVersion;
@@ -4122,6 +4146,7 @@ async function pollaKrypto(){
 
 /* Utan Firestore — localhost, GitHub Pages — frågar vi efter samma stapel. */
 async function pollaLive(){
+  if(!AUTH.anvandare) return;
   if(STATE.liveKalla === 'firestore') return;
   const bas = feedAdress();
   if(!bas) return;
@@ -4467,6 +4492,7 @@ function paint(){
 }
 
 async function refresh(){
+  if(!AUTH.anvandare) return;
   if(STATE.loading){ STATE.refreshPending = true; return; }
   STATE.loading = true;
   STATE.refreshPending = false;
@@ -4527,6 +4553,12 @@ function tick(){
 
 /* ---------- wiring ---------- */
 function wire(){
+  $('#landingLogin').onclick = () => authOppna('in');
+  $('#landingMotion').onclick = () => {
+    const paused = $('#landingPage').classList.toggle('motion-paused');
+    $('#landingMotion').setAttribute('aria-pressed', String(paused));
+    $('#landingMotion').textContent = paused ? 'Resume motion' : 'Pause motion';
+  };
   window.addEventListener('hashchange', summaryRoute);
   $('#cryptoSelective').onchange = e => {
     CFG.cryptoSelective = e.target.value === 'selective';
@@ -4565,7 +4597,18 @@ function wire(){
   };
   $('#authStang').onclick = () => $('#authModal').classList.remove('show');
   $('#authModal').addEventListener('click', e => { if(e.target.id === 'authModal') $('#authModal').classList.remove('show'); });
-  $$('.authflik button').forEach(b => b.onclick = () => authLage(b.dataset.lage));
+  $('#authModal').addEventListener('keydown', e => {
+    if(e.key === 'Escape'){
+      $('#authModal').classList.remove('show');
+      (AUTH.anvandare ? $('#btnAuth') : $('#landingLogin')).focus();
+    }
+    if(e.key === 'Tab'){
+      const fields = [...$('#authModal').querySelectorAll('button:not(:disabled), input:not(:disabled)')];
+      const first = fields[0], last = fields.at(-1);
+      if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    }
+  });
   $('#authKor').onclick = authKor;
   ['#authEpost','#authLosen'].forEach(sel => $(sel).addEventListener('keydown', e => {
     if(e.key === 'Enter') authKor();
