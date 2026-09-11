@@ -14,12 +14,13 @@ En redan öppen position behåller entry, stopp, mål och ordinarie utträdeshan
 1. Riktiga, färska priser och sammanhängande historik. Minst 50 fullständiga timstaplar; endast avslutade 5m-staplar används till indikatorer.
 2. Giltig entry mellan stopp och mål, med stopp före kontomodellens uppskattade likvidationspris.
 3. Minst 1,5:1 kvar efter kontoavgiften och antagen slippage 0,05 % per sida. Funding ingår inte i denna framåtriktade beräkning.
-4. Uppskattade öppnings-/stängningskostnader högst 25 % av avståndet till stopp.
-5. Avslutad timtrend stödjer riktningen: EMA20/EMA50 och timstängning relativt EMA50.
-6. Volymen i senaste avslutade 5m-stapel är minst medelvärdet för de föregående 20.
-7. Avslutad 5m-stapel stänger i riktningen mot både öppningen och föregående stängning, i översta/nedersta tredjedelen av sitt spann.
-8. Aktiv entry är högst 0,75 ATR sämre än signalens ursprungliga fyllning eller planerade entry. ATR14 beräknas från avslutade 5m-staplar.
-9. En aktiv signal får vara högst 30 minuter gammal.
+4. Avslutad timtrend stödjer riktningen: EMA20/EMA50 och timstängning relativt EMA50.
+5. Volymen i senaste avslutade 5m-stapel är minst medelvärdet för de föregående 20.
+6. Avslutad 5m-stapel stänger i riktningen mot både öppningen och föregående stängning, i översta/nedersta tredjedelen av sitt spann.
+7. Aktiv entry är högst 0,75 ATR sämre än signalens ursprungliga fyllning eller planerade entry. ATR14 beräknas från avslutade 5m-staplar.
+8. En aktiv signal får vara högst 30 minuter gammal.
+
+Det finns inget separat tak för kostnadernas andel av stoppavståndet. Avgifter och antagen slippage ingår fortfarande i netto-R:R enligt krav 3.
 
 Väntande kort bedöms vid planerad entry och prövas på nytt vid faktiskt marknadspris när en demoaffär kan öppnas. Markeringen **Klarar kryptofiltret** betyder endast att dessa regler är uppfyllda just nu. Det är inte samma sak som en aktiv signal, en kontofyllning eller en uppmätt vinstchans.
 

@@ -1,7 +1,7 @@
 // Experimental entry checks for crypto. Passing is not a probability or a
 // calibrated forecast. Pure functions shared by the dashboard and tests.
 export const CRYPTO_RULES = Object.freeze({
-  fee:0.00055, slippage:0.0005, minNetRR:1.5, maxCostShare:0.25,
+  fee:0.00055, slippage:0.0005, minNetRR:1.5,
   maxAgeMs:30*60e3, maxChaseATR:0.75, minRelativeVolume:1,
   leverage:20, maintenance:0.005
 });
@@ -50,7 +50,6 @@ export function reviewCrypto(signal,ctx,now=Date.now(),rules=CRYPTO_RULES,snapsh
   const risk=dir*(entry-stopFill)+rules.fee*(entry+stopFill);
   const reward=dir*(targetFill-entry)-rules.fee*(entry+targetFill);
   const netRR=geometry&&risk>0?reward/risk:null;
-  const costShare=geometry?2*(rules.fee+rules.slippage)*raw/(dir*(raw-stop)):null;
   const last=market.last,prev=market.prev;
   const trigger=!!last&&!!prev&&dir*(last.c-last.o)>0&&dir*(last.c-prev.c)>0&&
     (last.h>last.l)&&(dir>0?(last.c-last.l)/(last.h-last.l):(last.h-last.c)/(last.h-last.l))>=2/3;
@@ -62,7 +61,6 @@ export function reviewCrypto(signal,ctx,now=Date.now(),rules=CRYPTO_RULES,snapsh
     {key:'data',label:'Färsk, sammanhängande prisdata',ok:!!ctx&&!ctx.simulated&&market.valid&&market.fresh&&valid(raw)&&raw>0},
     {key:'geometry',label:'Stopp före likvidation och mål framför entry',ok:geometry&&dir*(stop-liquidation)>0},
     {key:'net',label:'Minst 1,5:1 efter avgifter och antagen slippage',ok:netRR!==null&&netRR>=rules.minNetRR},
-    {key:'cost',label:'Kostnader högst 25 % av avståndet till stopp',ok:valid(costShare)&&costShare>0&&costShare<=rules.maxCostShare},
     {key:'trend',label:'Avslutad 1h-trend stödjer riktningen',ok:market.valid&&market.trend===dir&&dir!==0},
     {key:'volume',label:'Senaste avslutade 5m har minst normal volym',ok:valid(market.relativeVolume)&&market.relativeVolume>=rules.minRelativeVolume},
     {key:'trigger',label:'Avslutad 5m bekräftar riktningen',ok:trigger},
@@ -70,6 +68,6 @@ export function reviewCrypto(signal,ctx,now=Date.now(),rules=CRYPTO_RULES,snapsh
     {key:'age',label:'Aktiv signal högst 30 minuter gammal',ok:!active||age!==null&&age>=0&&age<=rules.maxAgeMs}
   ];
   const failed=checks.filter(x=>!x.ok);
-  return {pass:!failed.length,checks,failed,netRR,costShare,trend:market.trend,relativeVolume:market.relativeVolume,
+  return {pass:!failed.length,checks,failed,netRR,trend:market.trend,relativeVolume:market.relativeVolume,
     basis:active?'marknadspris nu':'planerad entry',reason:failed.map(x=>x.label).join(' · ')};
 }

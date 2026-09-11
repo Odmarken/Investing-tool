@@ -25,9 +25,15 @@ test('missing, gapped, stale, future-dated and synthetic data fail closed',()=>{
   for(const c of cases)assert.ok(reviewCrypto(s,c,now).failed.some(x=>x.key==='data'));
   assert.ok(reviewCrypto(s,ctx,now+11*60000).failed.some(x=>x.key==='data'));
 });
-test('cost gate rejects a nominally attractive target with an expensive tiny stop',()=>{
-  const {ctx,s,now}=fixture();s.sl=ctx.px*.999;s.tp=ctx.px*1.03;
-  const r=reviewCrypto(s,ctx,now);assert.ok(r.netRR>1.5);assert.ok(r.failed.some(x=>x.key==='cost'));
+test('tight stops can pass without a cost-share cap, but net RR still includes costs',()=>{
+  for(const dir of [1,-1]){
+    const {ctx,s,now}=fixture(dir);s.sl=ctx.px*(1-dir*.001);s.tp=ctx.px*(1+dir*.03);
+    const r=reviewCrypto(s,ctx,now);assert.ok(r.netRR>1.5);assert.equal(r.pass,true);
+    assert.equal(r.checks.length,8);
+    s.tp=ctx.px*(1+dir*.003);
+    const smallTarget=reviewCrypto(s,ctx,now);
+    assert.equal(smallTarget.pass,false);assert.ok(smallTarget.failed.some(x=>x.key==='net'));
+  }
 });
 test('net RR independently reconciles long/short fees and adverse fills',()=>{
   for(const dir of [1,-1]){const {ctx,s,now}=fixture(dir),r=reviewCrypto(s,ctx,now),{fee,slippage}=CRYPTO_RULES;
