@@ -273,6 +273,8 @@ body.krypto #demoSektion{display:none !important}
 .crypto-ai{flex-basis:100%;min-width:0;border-top:1px solid var(--line);padding-top:10px}
 .crypto-ai .ai-top{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:8px}
 .crypto-ai p{margin:7px 0}.crypto-ai summary{cursor:pointer;color:var(--text);padding:8px 0}
+.crypto-ai>summary{font-weight:700}.crypto-ai>summary:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+#kryptoSektion{scroll-margin-top:90px}
 .crypto-ai .ai-scroll{overflow-x:auto;max-width:100%}.crypto-ai table{width:100%;border-collapse:collapse;white-space:nowrap}
 .crypto-ai th,.crypto-ai td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
 .crypto-quality{padding:7px 10px;border-top:1px solid var(--line);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
@@ -839,7 +841,12 @@ footer b{color:var(--muted)}
           </select>
           <span id="cryptoQualitySummary" role="status"></span>
           <p id="cryptoQualityNote"></p>
-          <section id="cryptoAI" class="crypto-ai" aria-label="Experimentella AI-bedömningar"></section>
+          <a class="btn" href="#kryptoSektion">Visa vanliga kryptokontot ↓</a>
+          <details class="crypto-ai" id="cryptoExperiment">
+            <summary>AI-experiment · momentumkonto och historik</summary>
+            <p>Du kan fälla ihop rutan utan att pausa handeln. Automatiken styrs av kryssrutan nedan.</p>
+            <section id="cryptoAI" aria-label="Experimentella AI-bedömningar"></section>
+          </details>
         </div>
         <div class="pb" style="padding:11px" id="sigList">
           <div class="empty"><span class="spin"></span> Beräknar setups…</div>
