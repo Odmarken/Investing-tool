@@ -277,6 +277,10 @@ body.krypto #demoSektion{display:none !important}
 .momentum-position .position-top,.momentum-position .position-prices{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:7px}
 .momentum-position .position-top strong{margin-left:auto;font-family:var(--mono)}
 .momentum-position .position-meta{font-size:10px;color:var(--muted);line-height:1.6}
+.momentum-position .position-live{display:flex;flex-wrap:wrap;gap:12px 24px;padding:12px;margin:10px 0;background:var(--panel-2);border:1px solid var(--line);border-radius:8px}
+.momentum-position .position-live>div{flex:1 1 150px;min-width:0}
+.momentum-position .position-live span,.momentum-position .position-live small{display:block;font-size:10px;color:var(--muted)}
+.momentum-position .position-live strong{display:block;margin:4px 0;font:800 22px var(--mono);overflow-wrap:anywhere}
 #sigList .empty, #sigList .votes{grid-column:1/-1}
 .crypto-tools{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 11px;border-bottom:1px solid var(--line);font-size:11px}
 .crypto-tools[hidden]{display:none}
@@ -4647,6 +4651,7 @@ let kalTick = 0;
 function tick(){
   if(++kalTick % 30 === 0) renderKalender();          // nedräkningen uppdateras varje halvminut
   if(kalTick % 30 === 0 && momentumDemo) void momentumDemo.refresh();
+  if(kalTick % 5 === 0 && momentumDemo) void momentumDemo.refreshLive();
   $('#clkSe').textContent = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   $('#clkNy').textContent = timeIn('America/New_York',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const s = sessionState();
