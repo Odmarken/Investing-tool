@@ -1,6 +1,6 @@
 # Automatisk momentumdemo med Bybit max
 
-I Crypto → **Kryptokonton · saldo, positioner och historik** väljer du **AI-momentum** under **Visa konto**. Där finns kryssrutan **AI-experiment · momentumdemo med Bybit max**. Den är avmarkerad första gången och sparas separat för varje inloggning i denna webbläsare. Samma kontoväljare visar det vanliga kryptokontot. Att byta vy eller fälla ihop rutan påverkar inte handeln; vyvalet sparas i webbläsaren. Den tidigare AI-loggningens kryssruta ligger kvar i en egen öppningsbar sektion och aktiverar inte handel.
+I Crypto finns panelen **Kryptokonton** ovanför signalerna. Flikarna **Vanliga kontot**, **AI-momentum** och **Regler & inställningar** växlar mellan kontovyer och regler. AI-momentum visar saldorutor, öppna positioner med nettoresultat och avslutade affärer. Där finns kryssrutan **AI-momentum · automatisk demo med Bybit max**. Den är avmarkerad första gången och sparas separat för varje inloggning i denna webbläsare. Att byta vy eller fälla ihop panelen påverkar inte handeln; vyvalet sparas i webbläsaren. Beskrivningar, historiska tester och den tidigare AI-loggen ligger i regelfliken.
 
 Ibockad körs 14/28/56-momentum med Bybits maxhävstång per coin och positionsstorlek i ett eget demokonto med 100 dollar vid start. BTC, ETH och SOL får en tredjedel av startkapitalet var i isolerad marginal. Varje kapitaldel återinvesteras separat. Inga order skickas till börsen. Det vanliga kryptodemokontot är separat och använder också API-gränserna för nya affärer.
 

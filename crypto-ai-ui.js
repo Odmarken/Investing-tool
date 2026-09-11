@@ -29,9 +29,8 @@ export function readAILog(storage,key){
   return rows;
 }
 
-export function mountCryptoAI(root,model,getEnabled,setEnabled){
-  root.innerHTML=`<div data-momentum-root></div>
-    <details><summary>Tidigare AI-modell · signalbedömningar</summary>
+export function mountCryptoAI(root,model,getEnabled,setEnabled,rulesRoot=null){
+  const legacyHTML=`<details><summary>Tidigare AI-modell · signalbedömningar</summary>
     <div class="ai-top"><label><input type="checkbox" data-ai-toggle> Logga den tidigare AI-modellens bedömningar</label>
     <button type="button" class="btn" data-ai-export>Exportera AI-logg</button></div>
     <p>AI loggar sitt urval separat. Kontot följer fortfarande valt kryptofilter. Bedömningarna sparas lokalt för din inloggning.</p>
@@ -41,11 +40,14 @@ export function mountCryptoAI(root,model,getEnabled,setEnabled){
       Hypotetiska signaler kan överlappa och är inte kontots avkastning. Stopp/mål låses vid loggning; högst 24 h. Beslutsstapeln hoppas över.</p>
       <p>Senaste 20 bedömningarna. Exporten innehåller hela den lokala loggen (högst ${AI_LOG_LIMIT}). Nya bedömningar kräver att kryptosidan är öppen och inloggad.</p>
       <div class="ai-scroll" data-ai-rows></div></details></details>`;
+  root.innerHTML='<div data-momentum-root></div>'+(rulesRoot?'':legacyHTML);
+  if(rulesRoot)rulesRoot.innerHTML=legacyHTML;
+  const logRoot=rulesRoot??root;
   let rows=[],views=new Map(),error='',uid=null,dirty=false;
-  const toggle=root.querySelector('[data-ai-toggle]');
+  const toggle=logRoot.querySelector('[data-ai-toggle]');
   toggle.checked=getEnabled();
   toggle.onchange=()=>setEnabled(toggle.checked);
-  root.querySelector('[data-ai-export]').onclick=()=>{
+  logRoot.querySelector('[data-ai-export]').onclick=()=>{
     if(!uid)return;
     const blob=new Blob([JSON.stringify({format:'riptide-ai-shadow-v1',exportedAt:new Date().toISOString(),model,rows},null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='riptide-ai-logg.json';a.click();
@@ -82,18 +84,18 @@ export function mountCryptoAI(root,model,getEnabled,setEnabled){
       toggle.checked=getEnabled();
       const current=rows.filter(r=>r.version===model.version);
       const pending=current.filter(r=>r.status==='pending').length;
-      root.querySelector('[data-ai-state]').textContent=error||
+      logRoot.querySelector('[data-ai-state]').textContent=error||
         (getEnabled()?'AI-loggning på':'Nya AI-bedömningar pausade')+' · '+current.length+' loggade · '+pending+' väntar på utfall.'+
         (rows.length>=AI_LOG_LIMIT?' Loggen är full; exportera den. Inga nya bedömningar sparas.':'')+
         (now>model.dataEnd+30*86400000?' Modellen är äldre än 30 dagar; nya bedömningar kräver omträning.':'');
       const historical=model.evaluation.stats,all=historical[0],ai=historical.find(s=>s.label==='AI skulle ta');
-      root.querySelector('[data-ai-history]').textContent='Preliminärt historiskt test: '+model.training.n+' träningsexempel, '+all.n+
+      logRoot.querySelector('[data-ai-history]').textContent='Preliminärt historiskt test: '+model.training.n+' träningsexempel, '+all.n+
         ' senare testexempel. AI skulle ta '+ai.n+' av dem'+(ai.n?' (snitt '+number(ai.meanR)+' R)':'')+
         '. Alla testexempel: '+number(all.meanR)+' R i snitt. Ingen påvisad lönsamhet. Testperioden har granskats tidigare.';
-      root.querySelector('[data-ai-stats]').innerHTML='<table><thead><tr><th>Urval</th><th>Loggade</th><th>Avslutade</th><th>Okända</th><th>Vinstandel</th><th>Snitt R</th></tr></thead><tbody>'+
+      logRoot.querySelector('[data-ai-stats]').innerHTML='<table><thead><tr><th>Urval</th><th>Loggade</th><th>Avslutade</th><th>Okända</th><th>Vinstandel</th><th>Snitt R</th></tr></thead><tbody>'+
         shadowStats(current).map(s=>'<tr><td>'+s.label+'</td><td>'+s.n+'</td><td>'+s.closed+'</td><td>'+s.unknown+'</td><td>'+
           (s.winRate===null?'–':(100*s.winRate).toFixed(1)+' %')+'</td><td>'+number(s.meanR)+'</td></tr>').join('')+'</tbody></table>';
-      root.querySelector('[data-ai-rows]').innerHTML='<table><thead><tr><th>Tid</th><th>Signal</th><th>AI:s beslut</th><th>Modellens R</th><th>Selektiv</th><th>Utfall R</th></tr></thead><tbody>'+
+      logRoot.querySelector('[data-ai-rows]').innerHTML='<table><thead><tr><th>Tid</th><th>Signal</th><th>AI:s beslut</th><th>Modellens R</th><th>Selektiv</th><th>Utfall R</th></tr></thead><tbody>'+
         current.slice(-20).reverse().map(r=>'<tr><td>'+date(r.at)+'</td><td>'+escape(r.inst)+' '+escape(r.side.toUpperCase())+'</td><td>'+escape(r.reason)+
           '</td><td>'+number(r.expectedR)+'</td><td>'+(r.selective?'Godkänd':'Avstår')+'</td><td>'+
           (r.status==='closed'?number(r.netR)+' · '+escape(r.reasonOutcome):r.status==='unknown'?'Okänt':'Väntar')+'</td></tr>').join('')+'</tbody></table>';

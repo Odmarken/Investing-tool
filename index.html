@@ -263,7 +263,20 @@ body.krypto #demoSektion{display:none !important}
 
 /* Rutnätet: signalerna ligger som små rutor bredvid varandra så att alla syns
    utan att man scrollar. Den man klickar på fäller ut sig över hela bredden. */
-#sigList{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:8px;align-content:start}
+#sigList{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:8px;align-content:start;align-items:start}
+.closed-signals{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:6px;align-items:start}
+.closed-signals-label{grid-column:1/-1;font-size:10px;color:var(--muted);margin:8px 0 2px}
+.crypto-accounts[hidden],.account-view[hidden]{display:none}
+.crypto-accounts>details>summary{cursor:pointer;font-weight:800;padding:14px 16px;color:var(--green);border-bottom:1px solid var(--line)}
+.account-tabs{padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.account-tabs .ct{font-size:12px;padding:10px 14px}
+.account-view{padding:12px 14px;min-width:0}
+.account-view.crypto-ai{border-top:0;padding-top:12px}
+.account-view h3{font-size:12px;margin:16px 0 10px;color:var(--text)}
+.oppen.momentum-position{display:block}
+.momentum-position .position-top,.momentum-position .position-prices{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:7px}
+.momentum-position .position-top strong{margin-left:auto;font-family:var(--mono)}
+.momentum-position .position-meta{font-size:10px;color:var(--muted);line-height:1.6}
 #sigList .empty, #sigList .votes{grid-column:1/-1}
 .crypto-tools{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 11px;border-bottom:1px solid var(--line);font-size:11px}
 .crypto-tools[hidden]{display:none}
@@ -338,7 +351,17 @@ body.krypto #demoSektion{display:none !important}
   50%    {box-shadow:0 0 0 1px rgba(255,46,76,.55), 0 0 40px rgba(255,46,76,.32)}
 }
 .sig.triggered{border-color:rgba(var(--lb),.5);box-shadow:0 0 0 1px rgba(var(--lb),.2),0 0 20px rgba(var(--lb),.12)}
-.sig.done{opacity:.5}
+.sig.done{opacity:.75}
+.sig.done.oppen{opacity:1}
+.sig.done:not(.oppen){padding:7px 10px;min-height:36px}
+.sig.done:not(.oppen)>:not(.edge):not(.sig-top){display:none}
+.sig.done:not(.oppen) .sig-top{margin:0;gap:7px;flex-wrap:nowrap;min-height:22px}
+.sig.done:not(.oppen) .sig-top .strat,.sig.done:not(.oppen) .sig-top .fam,
+.sig.done:not(.oppen) .sig-inst .dim,.sig.done:not(.oppen) .sedan,
+.sig.done:not(.oppen) .stjarna,.sig.done:not(.oppen) .ejhandlas{display:none}
+.sig.done:not(.oppen) .sig-inst{font-size:11px}
+.sig.done:not(.oppen) .sig-dir,.sig.done:not(.oppen) .status{font-size:8px;padding:3px 5px;white-space:nowrap}
+.sig:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 
 .sig-top{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}
 .strat{
@@ -821,6 +844,53 @@ footer b{color:var(--muted)}
         </div>
       </div>
 
+      <div class="col account-signal-column">
+      <!-- Konton ligger alltid ovanför signalerna; flikarna byter bara vy. -->
+      <div class="panel crypto-accounts" id="cryptoTools" hidden>
+        <details id="cryptoExperiment" open>
+          <summary>Kryptokonton</summary>
+          <div class="chart-tabs account-tabs" role="group" aria-label="Konton och regler">
+            <button type="button" class="ct on" data-crypto-view="standard" aria-pressed="true" aria-controls="cryptoStandardView">Vanliga kontot</button>
+            <button type="button" class="ct" data-crypto-view="momentum" aria-pressed="false" aria-controls="cryptoMomentumView">AI-momentum</button>
+            <button type="button" class="ct" data-crypto-view="rules" aria-pressed="false" aria-controls="cryptoRulesView">Regler &amp; inställningar</button>
+          </div>
+            <div id="cryptoStandardView" class="account-view">
+              <div id="kryptoSektion">
+                <div class="ph">
+                  <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
+                  <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button></span>
+                </div>
+                <div class="pb">
+                  <div class="btstats" id="krStats"></div>
+                  <h3>Öppen position</h3><div id="krOppen"></div>
+                  <h3>Senaste avslutade affärer</h3><div id="krLista"></div>
+
+                </div>
+              </div>
+            </div>
+          <div id="cryptoMomentumView" class="account-view crypto-ai" hidden>
+            <section id="cryptoAI" aria-label="AI-momentumkonto"></section>
+          </div>
+          <div id="cryptoRulesView" class="account-view crypto-ai" hidden>
+            <p>Flikarna och den hopfällbara panelen styr bara vad du ser. Kontona fortsätter följa sina respektive handelsinställningar.</p>
+            <h3>Vanliga kryptokontot</h3>
+            <div class="crypto-tools">
+              <label for="cryptoSelective">Kryptofilter</label>
+              <select id="cryptoSelective">
+                <option value="review">Granska signalerna</option>
+                <option value="selective">Selektivt · nya demoaffärer</option>
+              </select>
+              <span id="cryptoQualitySummary" role="status"></span>
+              <p id="cryptoQualityNote"></p>
+            </div>
+            <div class="btnote" id="krNote"></div>
+            <h3>AI-momentum · regler och historiska tester</h3>
+            <div id="momentumRules"></div>
+            <div id="cryptoLegacyRules"></div>
+          </div>
+        </details>
+      </div>
+
       <!-- Signaler -->
       <div class="panel">
         <div class="ph">
@@ -833,43 +903,6 @@ footer b{color:var(--muted)}
           <span class="right"><span id="sigStamp">–</span></span>
         </div>
         <div class="nybias" id="nyBias"></div>
-        <div class="crypto-tools" id="cryptoTools" hidden>
-          <label for="cryptoSelective">Kryptofilter</label>
-          <select id="cryptoSelective">
-            <option value="review">Granska signalerna</option>
-            <option value="selective">Selektivt · nya demoaffärer</option>
-          </select>
-          <span id="cryptoQualitySummary" role="status"></span>
-          <p id="cryptoQualityNote"></p>
-          <details class="crypto-ai" id="cryptoExperiment">
-            <summary>Kryptokonton · saldo, positioner och historik</summary>
-            <div class="ai-top">
-              <label for="cryptoAccountView">Visa konto</label>
-              <select id="cryptoAccountView" aria-controls="cryptoStandardView cryptoMomentumView">
-                <option value="standard">Vanliga kryptokontot</option>
-                <option value="momentum">AI-momentum</option>
-              </select>
-            </div>
-            <p>Byt konto för att se dess saldo, positioner och historik. Att byta vy eller fälla ihop rutan pausar inte handeln.</p>
-            <div id="cryptoStandardView">
-              <div id="kryptoSektion">
-                <div class="ph">
-                  <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
-                  <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button></span>
-                </div>
-                <div class="pb">
-                  <div class="btstats" id="krStats"></div>
-                  <div id="krOppen"></div>
-                  <div id="krLista"></div>
-                  <div class="btnote" id="krNote"></div>
-                </div>
-              </div>
-            </div>
-            <div id="cryptoMomentumView" hidden>
-              <section id="cryptoAI" aria-label="AI-momentum och experimentella bedömningar"></section>
-            </div>
-          </details>
-        </div>
         <div class="pb" style="padding:11px" id="sigList">
           <div class="empty"><span class="spin"></span> Beräknar setups…</div>
         </div>
@@ -881,6 +914,7 @@ footer b{color:var(--muted)}
             <span class="fam brott">BROTT</span> range · <span class="fam ict">ICT</span> svep + MSS + FVG ·
             <span class="fam orb">ORB</span> öppningsrange</span>
         </div>
+      </div>
       </div>
     </div>
   </div>
@@ -2090,6 +2124,11 @@ function kopplaSignalKlick(){
   const el = $('#sigList');
   if(!el || el.dataset.klick) return;
   el.dataset.klick = '1';
+  el.addEventListener('keydown',e=>{
+    if(!e.target.matches('.sig')||!['Enter',' '].includes(e.key))return;
+    e.preventDefault();const id=e.target.dataset.sig;e.target.click();
+    [...el.querySelectorAll('[data-sig]')].find(card=>card.dataset.sig===id)?.focus();
+  });
   el.addEventListener('click', e => {
     const kort = e.target.closest('.sig');
     if(!kort || !kort.dataset.sig) return;
@@ -2296,10 +2335,10 @@ function renderSignals(){
   if(crypto && AUTH.anvandare){
     void refreshCryptoContracts();
     if(!cryptoAI) cryptoAI = mountCryptoAI($('#cryptoAI'), CRYPTO_AI_MODEL,
-      () => CFG.cryptoAIShadow, enabled => { CFG.cryptoAIShadow = enabled; saveCfg(); renderSignals(); });
+      () => CFG.cryptoAIShadow, enabled => { CFG.cryptoAIShadow = enabled; saveCfg(); renderSignals(); }, $('#cryptoLegacyRules'));
     if(!momentumDemo) momentumDemo = mountMomentum($('#cryptoAI').querySelector('[data-momentum-root]'), {
       getUser: () => AUTH.anvandare?.uid || null, isActive: () => STATE.lage === 'krypto' && !!AUTH.anvandare,
-      grab: (url,options) => grab(url,options)
+      grab: (url,options) => grab(url,options), rulesRoot:$('#momentumRules')
     });
     void momentumDemo.refresh();
     cryptoAI.update({userId:AUTH.anvandare.uid, signals:STATE.signals, contexts:STATE.ctx, now:reviewTime, snapshots});
@@ -2349,11 +2388,11 @@ function renderSignals(){
     return `<span><b>${(INSTR[k] && INSTR[k].kort) || k}</b> ${Object.keys(FAM).map(cell).join(' · ')}</span>`;
   }).join('');
 
-  el.innerHTML = `<div class="votes">${strip}<span style="margin-left:auto">A = minst 3 av ${FAM_N} familjer · B = 2 · C = 1 eller ingen</span></div>` + list.map((s,ix)=>{
+  const cards = list.map((s,ix)=>{
     const dirTxt = s.side==='long' ? 'LONG' : 'SHORT';
     const stCls = ['ACTIVE','NÄRA','LÖPANDE','TP','SL'].includes(s.status)?s.status:'';
     const pnl = nz(s.openPnl) ? `<div class="m"><i>Öppen</i><b class="${s.openPnl>=0?'pos':'neg'}">${fmtSigned(s.openPnl/s.risk,2)} R</b></div>` : '';
-    return `<div data-sig="${esc(s.id)}" class="sig ${s.side} ${STATE.oppnaSignaler.has(s.id) ? 'oppen' : ''} ${STATE.stjarnor.has(s.id) ? 'stjarnad' : ''} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
+    return `<div data-sig="${esc(s.id)}" tabindex="0" aria-expanded="${STATE.oppnaSignaler.has(s.id)}" aria-label="${esc(instEtikett(s).kort+' '+dirTxt+' '+(s.statusTxt||s.status))}" class="sig ${s.side} ${STATE.oppnaSignaler.has(s.id) ? 'oppen' : ''} ${STATE.stjarnor.has(s.id) ? 'stjarnad' : ''} ${FAM_HANDLAS[s.fam] === false ? 'ohandlad' : ''} ${s.status==='ACTIVE'?'active':''} ${s.status==='LÖPANDE'?'triggered':''} ${(s.status==='TP'||s.status==='SL')?'done':''}">
       <span class="edge"></span>
       <div class="sig-top">
         <span class="strat ${s.grade}" title="${s.backN} av ${FAM_N} strategifamiljer bakom riktningen">${s.grade}</span>
@@ -2401,7 +2440,11 @@ function renderSignals(){
       <div class="rationale">${rationaleHTML(s)}</div>
       </div>
     </div>`;
-  }).join('');
+  });
+  const done=s=>s.status==='TP'||s.status==='SL';
+  el.innerHTML = `<div class="votes">${strip}<span style="margin-left:auto">A = minst 3 av ${FAM_N} familjer · B = 2 · C = 1 eller ingen</span></div>`+
+    cards.filter((_,i)=>!done(list[i])).join('')+
+    (list.some(done)?'<div class="closed-signals"><div class="closed-signals-label">Avslutade signaler · klicka för att visa detaljer</div>'+cards.filter((_,i)=>done(list[i])).join('')+'</div>':'');
 
   // rita minigrafer
   requestAnimationFrame(()=>{
@@ -3428,10 +3471,12 @@ const KRYPTO = { start:100, kapital:100, havstang:20, mmr:0.005, avgift:0.00055,
 let krLocalError = false, summaryView = null;
 
 function setCryptoAccountView(value){
-  const view=value==='momentum'?'momentum':'standard';
-  $('#cryptoAccountView').value=view;
-  $('#cryptoStandardView').hidden=view!=='standard';
-  $('#cryptoMomentumView').hidden=view!=='momentum';
+  const view=['standard','momentum','rules'].includes(value)?value:'standard';
+  for(const button of $$('[data-crypto-view]')){
+    const selected=button.dataset.cryptoView===view;
+    button.classList.toggle('on',selected);button.setAttribute('aria-pressed',String(selected));
+    document.getElementById(button.getAttribute('aria-controls')).hidden=!selected;
+  }
 }
 function renderSummary(){
   if(location.hash === '#summary') summaryView?.render();
@@ -4624,10 +4669,10 @@ function wire(){
     saveCfg(); renderSignals(); renderKrypto();
   };
   try{setCryptoAccountView(localStorage.getItem('riptide.cryptoAccountView'));}catch(e){setCryptoAccountView('standard');}
-  $('#cryptoAccountView').onchange = e => {
-    setCryptoAccountView(e.target.value);
-    try{localStorage.setItem('riptide.cryptoAccountView',e.target.value);}catch(e){}
-  };
+  $$('[data-crypto-view]').forEach(button=>{button.onclick=()=>{
+    setCryptoAccountView(button.dataset.cryptoView);
+    try{localStorage.setItem('riptide.cryptoAccountView',button.dataset.cryptoView);}catch(e){}
+  };});
   $('#btnRefresh').onclick = refresh;
   $('#btnKrypto').onclick = () => tillLage(STATE.lage === 'krypto' ? 'nq' : 'krypto');
   krLadda(); renderKrypto();
