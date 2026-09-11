@@ -2,22 +2,26 @@ import { MOMENTUM, readMomentum, newMomentumAccount, advanceMomentum, fetchMomen
 import {liquidationPrice,leveragedValue} from './crypto-leverage.js';
 import {MOMENTUM_RESEARCH} from './crypto-momentum-research.js';
 const money = n => !Number.isFinite(n) ? '–' : n.toFixed(2)+' $';
+const price = n => !Number.isFinite(n) ? '–' : n.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:n<.01?10:n<1?6:2})+' $';
 const date = t => t ? new Date(t).toLocaleString('sv-SE',{timeZone:'Europe/Stockholm'}) : '–';
 const signed = n => (n>=0?'+':'')+n.toFixed(2);
 export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null, storage = {getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)}, locks = navigator.locks, now = () => Date.now() }) {
   root.innerHTML = `<div class="ai-top"><label><input type="checkbox" data-momentum-toggle> AI-momentum · automatisk demo med Bybit max</label>
     <button type="button" class="btn" data-momentum-export>Exportera momentumkonto</button>
     <button type="button" class="btn" data-momentum-reset title="Arkivera nuvarande momentumkonto och börja om med 100 $, utan öppna positioner och med automatiken pausad">Återställ till 100 $</button></div>
+    <p class="dim">7 coins · högst 1 position · hela saldot som marginal · ingen fast SL eller TP</p>
     <p data-momentum-status role="status" aria-live="polite"></p>
     <div class="btstats" data-momentum-balance></div>
     <h3>Öppna positioner</h3><div data-momentum-positions></div>
     <details><summary>Avslutade affärer och veckobeslut</summary><div class="ai-scroll" data-momentum-history></div></details>`;
-  const rulesHTML=`    <p>Momentum 14/28/56 dagar · BTC, ETH och SOL · högsta hävstång enligt Bybits offentliga USDT-perpetualgränser för coin och positionsstorlek. Eget demokonto med 100 $ vid start, en tredjedel i isolerad marginal per coin. Öppna affärer behåller sin hävstång. Det vanliga kryptokontot fortsätter separat.</p>
+  const rulesHTML=`    <p>Momentum 14/28/56 dagar · BTC, ETH, SOL, XRP, DOGE, SHIB och PEPE · högsta hävstång enligt Bybits offentliga USDT-perpetualgränser för coin och positionsstorlek. Eget demokonto med 100 $ vid start. Högst en öppen position; hela det lediga saldot används som isolerad marginal inklusive köpavgiften. Öppna affärer behåller sin hävstång. Det vanliga kryptokontot fortsätter separat.</p>
+    <p>När kontot är ledigt köps coin med högst positivt veckomomentum. Positionen behålls så länge dess veckomomentum är positivt, även om en annan coin blir starkare. Vid noll eller negativt momentum säljs positionen vid veckobeslutet; då kan nästa positiva coin köpas. Om ingen är positiv ligger saldot i kontanter.</p>
+    <p>SL (stop loss) och TP (take profit): inga fasta prisnivåer används i denna momentumstrategi. Strategins exit styrs av veckosignalen. Simulerad likvidation kan inträffa innan dess och förbruka hela marginalbudgeten. Likvidationsnivån visas separat för positionen.</p>
     <p>Ibockad: köper, behåller eller säljer enligt veckosignalen. Avmarkerad: pausar strategins köp och sälj; innehaven ligger kvar och funding och likvidation följs fortfarande. Första beslutet tas när du aktiverar, sedan en gång per vecka från måndag 00:00 UTC.</p>
     <p>Kör när du är inloggad och kryptosidan är öppen. Missade beslut utförs till aktuellt pris när du återkommer. Kontot och inställningen sparas för din inloggning i denna webbläsare, inte mellan enheter.</p>
     <p>Återställ till 100 $ börjar om med ett tomt momentumkonto och pausar automatiken. Det tidigare kontot arkiveras lokalt i webbläsaren. Det vanliga kryptokontot påverkas inte.</p>
     <details><summary>Historiskt test: 1× jämfört med 20×</summary>
-    <p>Separata starter januari och juli 2025. Avgifter, slippage, funding och simulerad likvidation ingår. Detta är det tidigare testet med fast 20×; det testar inte dagens maxhävstång.</p>
+    <p>Separata starter januari och juli 2025. Avgifter, slippage, funding och simulerad likvidation ingår. Detta är det tidigare testet med BTC, ETH och SOL i separata kapitaldelar och fast 20×; det testar inte dagens sju coins, en position eller maxhävstång.</p>
     <div class="ai-scroll"><table><thead><tr><th>Period 2025</th><th>Hävstång</th><th>Netto</th><th>Max nedgång</th><th>Likvidationer</th></tr></thead><tbody>${MOMENTUM_RESEARCH.rows.map(r=>'<tr><td>'+(new Date(r.from).getUTCMonth()===0?'Januari–december':'Juli–december')+'</td><td>'+r.leverage+'×</td><td>'+signed(r.returnPct)+' %</td><td>'+r.maxDDPct.toFixed(1)+' %</td><td>'+r.liquidations+'</td></tr>').join('')}</tbody></table></div></details>
     <p class="dim">Bybit max är inte lönsamhetsvaliderad. Tidigare +44,7 % gäller utan hävstång. Signalen använder spotpriser; demofyllningar använder perpetualpriser. Avgift 0,055 % och antagen slippage 0,05 % per sida. Historisk funding och markpriser används för öppna innehav. Underhållsmarginal och marginalavdrag hämtas från positionens risknivå vid inträde och hålls fasta i denna förenklade modell. Vid simulerad likvidation förloras hela positionens marginal. Inga order eller ändringar skickas till ditt Bybit-konto.</p>
     <p class="dim">Saldo inkluderar bokförd funding och uppskattade säljkostnader. Likvidation följs med femminutersstaplar och aktuellt markpris. Inträdesstapelns tidigare extrempriser hoppas över, vilket kan missa en snabb likvidation mellan observationer. Saknad historik pausar beräkningen.</p>`;
@@ -45,6 +49,7 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
       (account?.enabled ? 'Automatik på' : 'Automatik pausad') + (busy ? ' · hämtar dygnspriser…' : '') +
       (account?.lastWeek ? ' · senaste beslut '+date(account.decisions.at(-1).at)+'. Nästa veckobeslut från '+date(account.lastWeek+7*MOMENTUM.day)+'.' : ' · ingen affär ännu.')+
       (account?.sleeves.some(s=>s.position) && value===null ? ' Färskt pris saknas; innehavens värde visas inte.' : ''));
+    if(account?.singlePending)root.querySelector('[data-momentum-status]').textContent+=' Äldre positioner anpassas till en vid nästa kompletta prisuppdatering.';
     const tile=(label,text,cls='')=>'<div class="btstat"><i>'+label+'</i><b class="'+cls+'">'+text+'</b></div>';
     const net=value===null?null:value-MOMENTUM.start, cls=net===null?'':net>=0?'pos':'neg';
     root.querySelector('[data-momentum-balance]').innerHTML = account ?
@@ -63,13 +68,14 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
         const pnl=q?leveragedValue(p,q.price)-p.budget:null;
         return '<div class="oppen momentum-position"><div class="position-top"><span class="tag long">LONG</span><b>'+s.symbol+'</b><span>'+(p.rules?.leverage??20)+'× · '+money(p.units*p.entry)+' notional</span>'+
           '<strong class="'+(pnl===null?'dim':pnl>=0?'pos':'neg')+'">Öppet netto '+(pnl===null?'–':signed(pnl)+' $')+'</strong></div>'+
-          '<div class="position-prices"><span>Entry <b>'+money(p.entry)+'</b></span><span>Markpris <b>'+money(q?.mark)+'</b></span><span>Likvidation <b class="neg">'+money(liquidationPrice(p))+'</b></span><span>Marginalbudget <b>'+money(p.budget)+'</b></span></div>'+
-          '<div class="position-meta">Köpt '+date(p.at)+' · exit vid negativ veckosignal eller likvidation · funding '+money(p.funding)+(q?' · veckomomentum '+signed(q.score*100)+' %':' · färskt pris saknas')+'</div></div>';
+          '<div class="position-prices"><span>Entry <b>'+price(p.entry)+'</b></span><span>Markpris <b>'+price(q?.mark)+'</b></span><span>Likvidation <b class="neg">'+price(liquidationPrice(p))+'</b></span><span>Marginalbudget <b>'+money(p.budget)+'</b></span></div>'+
+          '<div class="position-meta">SL: ingen fast · TP: ingen fast · exit vid veckomomentum ≤ 0 eller likvidation</div>'+
+          '<div class="position-meta">Köpt '+date(p.at)+' · funding '+money(p.funding)+(q?' · veckomomentum '+signed(q.score*100)+' %':' · färskt pris saknas')+'</div></div>';
       }).join(''):'<div class="empty">Inga öppna positioner. '+(account.enabled?'Väntar på nästa köp enligt veckosignalen.':'Aktivera kryssrutan för att köra AI-momentum.')+'</div>')+
-      '<p class="dim">Ledigt per coin: '+account.sleeves.map(s=>s.symbol+' '+money(s.cash)).join(' · ')+'. Saldo och öppet netto inkluderar bokförd funding och beräknade säljkostnader.</p>' : '';
+      '<p class="dim">Bevakar '+MOMENTUM.symbols.join(', ')+'. Ledigt kapital används gemensamt vid nästa köp. Saldo och öppet netto inkluderar bokförd funding och beräknade säljkostnader.</p>' : '';
     root.querySelector('[data-momentum-history]').innerHTML = account ? '<p>Senaste 20 beslut och 20 avslut. Exporten innehåller hela historiken.</p><table><thead><tr><th>Beslut</th><th>Utfört</th><th>Åtgärder</th></tr></thead><tbody>'+
       account.decisions.slice(-20).reverse().map(d=>'<tr><td>'+date(d.week)+'</td><td>'+date(d.at)+'</td><td>'+d.signals.map(s=>s.symbol+': '+({köp:'köp',sälj:'sälj',behåll:'behåll',kontanter:'kontanter',likvidation:'likvidation'}[s.action]??'–')+' ('+signed(s.score*100)+' %)').join(' · ')+'</td></tr>').join('')+
-      '</tbody></table><table><thead><tr><th>Stängd</th><th>Coin</th><th>Hävstång</th><th>Orsak</th><th>Nettoresultat</th></tr></thead><tbody>'+account.trades.slice(-20).reverse().map(t=>'<tr><td>'+date(t.at)+'</td><td>'+t.symbol+'</td><td>'+(t.leverage??20)+'×</td><td>'+(t.reason==='likvidation'?'Likvidation':'Veckosignal')+'</td><td>'+signed(t.pnl)+' $</td></tr>').join('')+'</tbody></table>' : '';
+      '</tbody></table><table><thead><tr><th>Stängd</th><th>Coin</th><th>Hävstång</th><th>Orsak</th><th>Nettoresultat</th></tr></thead><tbody>'+account.trades.slice(-20).reverse().map(t=>'<tr><td>'+date(t.at)+'</td><td>'+t.symbol+'</td><td>'+(t.leverage??20)+'×</td><td>'+(t.reason==='likvidation'?'Likvidation':t.reason==='single-position'?'Byte till en position':'Veckosignal')+'</td><td>'+signed(t.pnl)+' $</td></tr>').join('')+'</tbody></table>' : '';
   }
   async function refresh(force=false) {
     if(resetting)return;

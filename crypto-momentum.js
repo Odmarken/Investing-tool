@@ -1,8 +1,10 @@
 // Forward demo only. Bybit per-contract isolated margin; no broker orders.
 import {LEVERAGE,openLeveraged,closeLeveraged,inspectLeveraged,leveragedValue,liquidationPrice} from './crypto-leverage.js';
 import {fetchDerivatives} from './crypto-momentum-market.js';
-import {maxLeverageFor} from './bybit-contracts.js';
-export const MOMENTUM = Object.freeze({ version: 'momentum-14-28-56-bybitmax-v2', symbols: ['BTC','ETH','SOL'], day: 86400000, ...LEVERAGE, leverage:null, leverageMode:'bybitMax', start: 100 });
+import {CONTRACTS,maxLeverageFor} from './bybit-contracts.js';
+const LEGACY_SYMBOLS=['BTC','ETH','SOL'];
+const LEGACY_VERSIONS=['momentum-14-28-56-20x-v1','momentum-14-28-56-bybitmax-v2'];
+export const MOMENTUM = Object.freeze({ version: 'momentum-14-28-56-single-v3', symbols: Object.keys(CONTRACTS), day: 86400000, ...LEVERAGE, leverage:null, leverageMode:'bybitMax', maxPositions:1, allocation:1, exitMode:'weekly-momentum', start: 100 });
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const positive = x => finite(x) && x > 0;
 export function weekStart(now) {
@@ -17,16 +19,18 @@ export function momentumScore(bars, week) {
 }
 export function newMomentumAccount() {
   return { version: MOMENTUM.version, enabled: false, startedAt: null, lastWeek: null, fees: 0, funding:0,
-    sleeves: MOMENTUM.symbols.map(symbol => ({ symbol, cash: MOMENTUM.start/3, position: null })), decisions: [], trades: [] };
+    // Cash is pooled for entries; these buckets preserve older account history.
+    sleeves: MOMENTUM.symbols.map((symbol,i) => ({ symbol, cash: i===0?MOMENTUM.start:0, position: null })), decisions: [], trades: [] };
 }
 export function validateMomentumAccount(a) {
-  if (!a || ![MOMENTUM.version,'momentum-14-28-56-20x-v1'].includes(a.version) || typeof a.enabled !== 'boolean' ||
+  const symbols=LEGACY_VERSIONS.includes(a?.version)?LEGACY_SYMBOLS:MOMENTUM.symbols;
+  if (!a || ![MOMENTUM.version,...LEGACY_VERSIONS].includes(a.version) || typeof a.enabled !== 'boolean' ||
       !(a.startedAt === null || positive(a.startedAt)) || !(a.lastWeek === null || positive(a.lastWeek) && weekStart(a.lastWeek) === a.lastWeek) ||
-      !finite(a.fees) || a.fees < 0 || !finite(a.funding) || !Array.isArray(a.sleeves) || a.sleeves.length !== 3 ||
+      !finite(a.fees) || a.fees < 0 || !finite(a.funding) || !Array.isArray(a.sleeves) || a.sleeves.length !== symbols.length ||
       !Array.isArray(a.decisions) || !Array.isArray(a.trades)) throw Error('Momentumkontot kan inte läsas');
   for (const [i,s] of a.sleeves.entries()) {
     const p = s.position;
-    if (s.symbol !== MOMENTUM.symbols[i] || !finite(s.cash) || s.cash < 0 ||
+    if (s.symbol !== symbols[i] || !finite(s.cash) || s.cash < 0 ||
         p !== null && (!p || !positive(p.units) || !positive(p.entry) || !positive(p.budget) || !positive(p.at) || !finite(p.fee) || p.fee < 0 ||
           !finite(p.funding) || !finite(p.fundingThrough) || p.fundingThrough<p.at || !finite(p.nextBar) || p.nextBar<=p.at || p.nextBar%MOMENTUM.step))
       throw Error('Ogiltigt momentuminnehav');
@@ -34,10 +38,13 @@ export function validateMomentumAccount(a) {
     if(p&&Math.abs(p.units*p.entry/(p.rules?.leverage??20)+p.fee-p.budget)>1e-7*Math.max(1,p.budget))
       throw Error('Positionens marginal stämmer inte med låst hävstång');
   }
+  const held=a.sleeves.filter(s=>s.position);
+  if(a.version===MOMENTUM.version&&held.length>1&&!(a.singlePending===true&&held.length<=3&&held.every(s=>LEGACY_SYMBOLS.includes(s.symbol))))
+    throw Error('Momentumkontot får bara ha en öppen position');
   if (a.trades.some(t => !t || !MOMENTUM.symbols.includes(t.symbol) || !finite(t.pnl) || !positive(t.at) ||
       !positive(t.opened) || t.at < t.opened || !positive(t.entry) || !positive(t.exit) || !finite(t.fees) || t.fees < 0 || !finite(t.funding)) ||
       a.decisions.some(d => !d || !positive(d.week) || !positive(d.at) || d.at < d.week || weekStart(d.week) !== d.week ||
-        !Array.isArray(d.signals) || d.signals.length !== 3 || d.signals.some((s,i) => s.symbol !== MOMENTUM.symbols[i] || !finite(s.score))))
+        !Array.isArray(d.signals) || ![LEGACY_SYMBOLS.length,MOMENTUM.symbols.length].includes(d.signals.length) || d.signals.some((s,i) => s.symbol !== MOMENTUM.symbols[i] || !finite(s.score))))
     throw Error('Ogiltig momentumhistorik');
   if ((a.decisions.at(-1)?.week ?? null) !== a.lastWeek || a.decisions.some((d,i) => i && d.week <= a.decisions[i-1].week))
     throw Error('Momentumets beslutshistorik stämmer inte');
@@ -54,8 +61,14 @@ export function readMomentum(storage, key) {
   const raw = storage.getItem(key);
   if(raw===null)return newMomentumAccount();
   const a=validateMomentumAccount(JSON.parse(raw));
-  // Preserve the existing balance, enabled switch, weekly decisions and 20x positions.
-  return a.version===MOMENTUM.version?a:{...a,version:MOMENTUM.version};
+  return upgradeMomentum(a);
+}
+function upgradeMomentum(a){
+  if(a.version===MOMENTUM.version)return a;
+  // Preserve all money, positions and history. Extra legacy positions are closed
+  // at fresh observed prices by advanceMomentum, never removed during loading.
+  return validateMomentumAccount({...a,version:MOMENTUM.version,singlePending:a.sleeves.filter(s=>s.position).length>1,
+    sleeves:[...a.sleeves,...MOMENTUM.symbols.slice(3).map(symbol=>({symbol,cash:0,position:null}))]});
 }
 export function validateSnapshot(snapshot, now) {
   if (!snapshot || snapshot.week !== weekStart(now)) throw Error('Prisdata tillhör fel beslutsvecka');
@@ -67,6 +80,7 @@ export function validateSnapshot(snapshot, now) {
 }
 export function advanceMomentum(account, snapshot, now) {
   validateMomentumAccount(account);
+  account=upgradeMomentum(account);
   if (!account.enabled && !account.sleeves.some(s=>s.position)) return account;
   validateSnapshot(snapshot, now);
   const next = structuredClone(account);
@@ -76,40 +90,46 @@ export function advanceMomentum(account, snapshot, now) {
     const result=closeLeveraged(s.position,price,time,reason);
     s.cash+=result.cash;next.fees+=result.exitFee;next.trades.push({symbol:s.symbol,...result.trade});s.position=null;
   };
-  const liquidated=new Set(),plans=new Map();
+  const actions=new Map(MOMENTUM.symbols.map(s=>[s,'kontanter']));
   // Risk monitoring commits even if public entry limits are unavailable.
   for(const s of next.sleeves){
     if(!s.position)continue;
     const checked=inspectLeveraged(s.position,snapshot.market[s.symbol],now);
     s.position=checked.position;next.funding+=checked.funding;
-    if(checked.liquidated){close(s,checked.liquidated.price,checked.liquidated.at,'likvidation');liquidated.add(s.symbol);}
+    if(checked.liquidated){close(s,checked.liquidated.price,checked.liquidated.at,'likvidation');actions.set(s.symbol,'likvidation');}
+  }
+  const ranked=sleeves=>[...sleeves].sort((a,b)=>snapshot.market[b.symbol].score-snapshot.market[a.symbol].score||MOMENTUM.symbols.indexOf(a.symbol)-MOMENTUM.symbols.indexOf(b.symbol));
+  if(next.singlePending){
+    const held=ranked(next.sleeves.filter(s=>s.position)),keep=held.find(s=>snapshot.market[s.symbol].score>0);
+    for(const s of held)if(s!==keep){close(s,snapshot.market[s.symbol].price,now,'single-position');actions.set(s.symbol,'sälj');}
+    delete next.singlePending;
   }
   if(decide){
-    try{
-      for(const s of next.sleeves){
-        const q=snapshot.market[s.symbol];
-        if(!s.position&&q.score>0&&s.cash>0)
-          plans.set(s.symbol,maxLeverageFor(q.contract,s.cash,{fee:LEVERAGE.fee,price:q.price*(1+LEVERAGE.slip),mark:q.mark},now));
+    const held=next.sleeves.find(s=>s.position);
+    if(held&&snapshot.market[held.symbol].score<=0){close(held,snapshot.market[held.symbol].price,now,'signal');actions.set(held.symbol,'sälj');}
+    if(!next.sleeves.some(s=>s.position)){
+      const candidate=ranked(next.sleeves).find(s=>snapshot.market[s.symbol].score>0);
+      const budget=next.sleeves.reduce((sum,s)=>sum+s.cash,0);
+      if(candidate&&budget>0){
+        const q=snapshot.market[candidate.symbol];
+        try{
+          if(q.contract?.symbol!==candidate.symbol)throw Error('Kontraktsgräns saknas för '+candidate.symbol);
+          const selected=maxLeverageFor(q.contract,budget,{fee:LEVERAGE.fee,price:q.price*(1+LEVERAGE.slip),mark:q.mark},now);
+          const p=openLeveraged(budget,q.price,now,{...LEVERAGE,...selected});
+          if(q.mark>liquidationPrice(p)){
+            for(const s of next.sleeves)s.cash=0;
+            candidate.position=p;next.fees+=p.fee;actions.set(candidate.symbol,'köp');
+          }
+        }catch(e){decide=false;next.waitReason='Veckobeslut väntar: '+e.message;}
       }
-    }catch(e){decide=false;next.waitReason='Veckobeslut väntar: '+e.message;}
-  }
-  if(decide)next.startedAt ??= now;
-  const signals = [];
-  for (const s of next.sleeves) {
-    const q = snapshot.market[s.symbol], wanted = q.score > 0;
-    let action = liquidated.has(s.symbol)?'likvidation':wanted ? 'behåll' : 'kontanter';
-    if(!decide)continue;
-    if (s.position && !wanted) {
-      close(s,q.price,now,'signal');action='sälj';
-    } else if (!s.position && wanted && s.cash > 0) {
-      const selected=plans.get(s.symbol);
-      const p=openLeveraged(s.cash,q.price,now,{...LEVERAGE,...selected});
-      if(q.mark>liquidationPrice(p)){s.position=p;s.cash=0;next.fees+=p.fee;action='köp';}
-      else action='kontanter';
     }
-    signals.push({ symbol:s.symbol, score:q.score, action, price:q.price });
   }
-  if(decide){next.lastWeek=snapshot.week;next.decisions.push({week:snapshot.week,at:now,signals});}
+  if(decide){
+    next.startedAt ??= now;next.lastWeek=snapshot.week;
+    const signals=next.sleeves.map(s=>({symbol:s.symbol,score:snapshot.market[s.symbol].score,price:snapshot.market[s.symbol].price,
+      action:s.position&&actions.get(s.symbol)==='kontanter'?'behåll':actions.get(s.symbol)}));
+    next.decisions.push({week:snapshot.week,at:now,signals});
+  }
   return validateMomentumAccount(next);
 }
 export function momentumValue(account, snapshot, now) {

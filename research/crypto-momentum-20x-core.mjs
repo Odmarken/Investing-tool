@@ -1,7 +1,8 @@
 import {MOMENTUM,momentumScore} from '../crypto-momentum.js';
 import {LEVERAGE,openLeveraged,closeLeveraged,liquidationPrice,leveragedValue} from '../crypto-leverage.js';
 export function simulateLeveraged(data,{from,to,leverage=20,slip=.0005,step=900000}){
-  const rules={...LEVERAGE,leverage,slip,step},symbols=MOMENTUM.symbols;
+  // Published 2025 comparison keeps its original three independent sleeves.
+  const rules={...LEVERAGE,leverage,slip,step},symbols=['BTC','ETH','SOL'];
   const sleeves=symbols.map(symbol=>({symbol,cash:100/3,position:null})),trades=[],curve=[];
   const indices=Object.fromEntries(symbols.map(s=>[s,new Map(data[s].bars.map((b,i)=>[b.t,i]))]));
   const marks=Object.fromEntries(symbols.map(s=>[s,new Map(data[s].marks.map(b=>[b.t,b]))]));

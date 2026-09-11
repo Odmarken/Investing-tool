@@ -1,5 +1,7 @@
 // Public contract limits only. No account credentials or leverage-setting API.
 export const CONTRACTS=Object.freeze({BTC:'BTCUSDT',ETH:'ETHUSDT',SOL:'SOLUSDT',XRP:'XRPUSDT',DOGE:'DOGEUSDT',SHIB:'SHIB1000USDT',PEPE:'1000PEPEUSDT'});
+// Perpetual prices for these contracts quote 1000 underlying tokens.
+export const CONTRACT_UNITS=Object.freeze({BTC:1,ETH:1,SOL:1,XRP:1,DOGE:1,SHIB:1000,PEPE:1000});
 export const LIMIT_TTL=10*60000;
 const positive=x=>Number.isFinite(x)&&x>0;
 export function parseContract(symbol,info,risk,at){
