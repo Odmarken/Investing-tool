@@ -841,11 +841,33 @@ footer b{color:var(--muted)}
           </select>
           <span id="cryptoQualitySummary" role="status"></span>
           <p id="cryptoQualityNote"></p>
-          <a class="btn" href="#kryptoSektion">Visa vanliga kryptokontot ↓</a>
           <details class="crypto-ai" id="cryptoExperiment">
-            <summary>AI-experiment · momentumkonto och historik</summary>
-            <p>Du kan fälla ihop rutan utan att pausa handeln. Automatiken styrs av kryssrutan nedan.</p>
-            <section id="cryptoAI" aria-label="Experimentella AI-bedömningar"></section>
+            <summary>Kryptokonton · saldo, positioner och historik</summary>
+            <div class="ai-top">
+              <label for="cryptoAccountView">Visa konto</label>
+              <select id="cryptoAccountView" aria-controls="cryptoStandardView cryptoMomentumView">
+                <option value="standard">Vanliga kryptokontot</option>
+                <option value="momentum">AI-momentum</option>
+              </select>
+            </div>
+            <p>Byt konto för att se dess saldo, positioner och historik. Att byta vy eller fälla ihop rutan pausar inte handeln.</p>
+            <div id="cryptoStandardView">
+              <div id="kryptoSektion">
+                <div class="ph">
+                  <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
+                  <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button></span>
+                </div>
+                <div class="pb">
+                  <div class="btstats" id="krStats"></div>
+                  <div id="krOppen"></div>
+                  <div id="krLista"></div>
+                  <div class="btnote" id="krNote"></div>
+                </div>
+              </div>
+            </div>
+            <div id="cryptoMomentumView" hidden>
+              <section id="cryptoAI" aria-label="AI-momentum och experimentella bedömningar"></section>
+            </div>
           </details>
         </div>
         <div class="pb" style="padding:11px" id="sigList">
@@ -889,26 +911,6 @@ footer b{color:var(--muted)}
 <!-- ============ DEMOKONTO ============
      Hela sektionen finns bara för inloggade. Den ligger dold från början, så
      den hinner aldrig blinka förbi medan Firebase avgör om någon är inloggad. -->
-<!-- ============ KRYPTOKONTO ============
-     Lokalt demokonto för kryptoläget. Bybit-isolerad margin: hela saldot är
-     margin på varje affär, notional = margin × hävstång, avgift per sida på
-     notional, likvidation när förlusten närmar sig marginen. Syns bara i
-     kryptoläget; molnkontot rörs inte. -->
-<div class="wrap bottom" id="kryptoSektion">
-  <div class="panel">
-    <div class="ph">
-      <span class="accent"></span><h2>Kryptokonto · demo · hela saldot varje affär</h2>
-      <span class="right"><span id="krStamp" class="dim">–</span> <button class="btn" id="krStang" title="Stäng den öppna positionen till senaste pris">Stäng</button></span>
-    </div>
-    <div class="pb">
-      <div class="btstats" id="krStats"></div>
-      <div id="krOppen"></div>
-      <div id="krLista"></div>
-      <div class="btnote" id="krNote"></div>
-    </div>
-  </div>
-</div>
-
 <div class="wrap bottom" id="demoSektion" style="display:none">
 
   <div class="panel">
@@ -3425,6 +3427,12 @@ const KR_NYCKEL = 'riptide.krypto.v1';
 const KRYPTO = { start:100, kapital:100, havstang:20, mmr:0.005, avgift:0.00055, oppen:null, affarer:[], startad:Date.now() };
 let krLocalError = false, summaryView = null;
 
+function setCryptoAccountView(value){
+  const view=value==='momentum'?'momentum':'standard';
+  $('#cryptoAccountView').value=view;
+  $('#cryptoStandardView').hidden=view!=='standard';
+  $('#cryptoMomentumView').hidden=view!=='momentum';
+}
 function renderSummary(){
   if(location.hash === '#summary') summaryView?.render();
 }
@@ -4614,6 +4622,11 @@ function wire(){
   $('#cryptoSelective').onchange = e => {
     CFG.cryptoSelective = e.target.value === 'selective';
     saveCfg(); renderSignals(); renderKrypto();
+  };
+  try{setCryptoAccountView(localStorage.getItem('riptide.cryptoAccountView'));}catch(e){setCryptoAccountView('standard');}
+  $('#cryptoAccountView').onchange = e => {
+    setCryptoAccountView(e.target.value);
+    try{localStorage.setItem('riptide.cryptoAccountView',e.target.value);}catch(e){}
   };
   $('#btnRefresh').onclick = refresh;
   $('#btnKrypto').onclick = () => tillLage(STATE.lage === 'krypto' ? 'nq' : 'krypto');
