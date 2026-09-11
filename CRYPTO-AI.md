@@ -1,5 +1,7 @@
 # AI-bedömning för krypto (experiment)
 
+Fortsättning 2026-09-11: [gemensam bedömning av momentum och kort AI](research/crypto-next-step.md). Nya kontroller undersöker momentumets startdatum och vinstkoncentration samt AI-modellernas rangordning på valideringsdata. Modell- och kontoreglerna är oförändrade.
+
 Senaste uppföljning: [AI v2 – bredare träning och förbättringstest](research/crypto-ai-v2-results.md). Sex kandidater tränades på den bredare kandidatinsamlingen; ingen klarade valideringen. Därför ersattes inte den nuvarande modellen och ingen automatisk AI-demohandel aktiverades. Resultatsammanfattningen finns under **Senaste förbättringstest** i AI-rutan.
 
 Kryptosidan har en separat, initialt påslagen ruta **AI-bedömning · experiment** under Kryptofilter. Den ändrar inte `krTagbar`, Selektiv, order, saldo, hävstång eller exits. Kryssrutan pausar nya observationer; redan loggade observationer följs fortfarande när kryptosidan uppdateras. Nasdaq-modellen används inte.

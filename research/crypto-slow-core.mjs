@@ -12,10 +12,10 @@ export function choice(variant,data,index){
   if(variant==='rotation28')return [scored.filter(s=>s.score!==null&&s.score>0).sort((a,b)=>b.score-a.score||a.symbol.localeCompare(b.symbol))[0]?.symbol??null];
   return scored.map(s=>s.score!==null&&s.score>0?s.symbol:null);
 }
-export function simulate(variant,data,from,to,slip=.0005,fee=FEE){
+export function simulate(variant,data,from,to,slip=.0005,fee=FEE,policy=null){
   const symbols=Object.keys(data),first=data[symbols[0]].findIndex(b=>b.t===from),last=data[symbols[0]].findIndex(b=>b.t===to-DAY);
   if(first<85||last<first)throw Error('Missing warmup or period');
-  const rotation=variant==='rotation28',count=rotation?1:symbols.length;
+  const rotation=variant==='rotation28',count=policy?.sleeveCount??(rotation?1:symbols.length);
   const sleeves=Array.from({length:count},()=>({cash:100/count,position:null}));
   const trades=[],daily=[];let turnover=0,totalFees=0;
   const close=(s,raw,time,reason)=>{
@@ -24,20 +24,21 @@ export function simulate(variant,data,from,to,slip=.0005,fee=FEE){
     trades.push({symbol:p.symbol,opened:p.at,closed:time,entry:p.entry,exit:fill,pnl:proceeds-p.budget,
       fees:p.entryFee+exitFee,days:(time-p.at)/DAY,reason});s.position=null;
   };
-  const open=(s,symbol,raw,time)=>{
-    const budget=s.cash,fill=raw*(1+slip),units=budget/(fill*(1+fee)),entryFee=units*fill*fee;
-    s.position={symbol,at:time,entry:fill,units,budget,entryFee};s.cash=0;totalFees+=entryFee;turnover+=units*fill;
+  const open=(s,symbol,raw,time,fraction=1)=>{
+    if(!Number.isFinite(fraction)||fraction<=0||fraction>1)throw Error('Invalid entry fraction');
+    const budget=s.cash*fraction,fill=raw*(1+slip),units=budget/(fill*(1+fee)),entryFee=units*fill*fee;
+    s.position={symbol,at:time,entry:fill,units,budget,entryFee};s.cash-=budget;totalFees+=entryFee;turnover+=units*fill;
   };
   for(let i=first;i<=last;i++){
     const time=data[symbols[0]][i].t;
-    const rebalance=new Date(time).getUTCDay()===1;
+    const rebalance=policy?policy.shouldDecide(time):new Date(time).getUTCDay()===1;
     if(variant==='buyhold'&&i===first)symbols.forEach((symbol,j)=>open(sleeves[j],symbol,data[symbol][i].o,time));
     else if(rebalance&&variant!=='buyhold'){
-      const wanted=choice(variant,data,i);
+      const wanted=policy?policy.wanted(data,i,sleeves.map(s=>s.position?.symbol??null)):choice(variant,data,i);
       sleeves.forEach((s,j)=>{
         const symbol=wanted[j];if((s.position?.symbol??null)===symbol)return;
         if(s.position)close(s,data[s.position.symbol][i].o,time,'signal');
-        if(symbol)open(s,symbol,data[symbol][i].o,time);
+        if(symbol)open(s,symbol,data[symbol][i].o,time,policy?.fraction(data[symbol],i)??1);
       });
     }
     let held=0,equity=0;
