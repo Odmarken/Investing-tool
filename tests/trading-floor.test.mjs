@@ -4,7 +4,7 @@ import {FLOOR,ROOMS,newFirm,validateFirm,readFirm,firmKey,equityKey,firmPosition
 import {ACTIVE} from '../crypto-momentum-active.js';
 import {LEVERAGE} from '../crypto-leverage.js';
 import {CONTRACTS} from '../bybit-contracts.js';
-import {AISLES,ROOM_GEOMETRY,DESK_GEOMETRY,FIKA,allLocations,onNetwork,routeBetween,routeTo,createAgents,stepAgents,REGIONS,hitAt,project,SCREENS} from '../trading-floor-scene.js';
+import {AISLES,ROOM_GEOMETRY,DESK_GEOMETRY,FIKA,allLocations,onNetwork,routeBetween,routeTo,createAgents,stepAgents,REGIONS,hitAt,project,SCREENS,deskCelebration,celebrationPose} from '../trading-floor-scene.js';
 import {mountFloor} from '../trading-floor-ui.js';
 
 const TIME=Date.parse('2026-09-22T12:00:00Z'),HOUR=3600000,STEP=LEVERAGE.step;
@@ -294,4 +294,53 @@ test('the office renderer runs on desktop and mobile and reopening cannot double
   canvas.clientWidth=390;canvas.clientHeight=700;frames.shift()();assert.equal(frames.length,1);
   assert.equal(canvas.width,390);assert.equal(canvas.height,700);
   ui.hide();frames.shift()();assert.equal(frames.length,0);
+});
+
+test('celebrations follow open return thresholds, downgrade and stop on close or stale quotes',()=>{
+  const desk={status:'trade',pnl:1000,openReturn:.1999,celebrationUntil:TIME+15000};
+  for(const [value,mode] of [[.1999,null],[.2,'money'],[.4999,'money'],[.5,'lounge'],[.8,'lounge'],[.3,'money'],[.19,null],[-.2,null],[null,null],[NaN,null],[Infinity,null]]){
+    assert.equal(deskCelebration({...desk,openReturn:value},TIME),mode);
+  }
+  assert.equal(deskCelebration({...desk,openReturn:1,status:'waiting'},TIME),null);
+  assert.equal(deskCelebration({...desk,openReturn:1},TIME+15001),null);
+  assert.equal(deskCelebration({...desk,openReturn:1},TIME+15000),'lounge');
+  assert.equal(deskCelebration({...desk,openReturn:1,celebrationUntil:undefined},TIME),null);
+});
+
+test('all four traders jump on their own table and recline without changing simulation state',()=>{
+  const agents=createAgents(seeded()),before=structuredClone(agents);
+  for(const a of agents){
+    const pose=celebrationPose(a,'money',TIME);
+    if(a.kind==='staff'){assert.equal(pose,null);continue;}
+    const d=DESK_GEOMETRY.find(d=>d.symbol===a.desk);
+    assert.ok(pose.x>d.x0&&pose.x<d.x1&&pose.y>d.y0&&pose.y<d.y1);assert.ok(pose.z>=24&&pose.z<=34);
+    const lounge=celebrationPose(a,'lounge',TIME);
+    assert.equal(lounge.x,a.home.x);assert.equal(lounge.y,a.home.y);assert.ok(Math.abs(lounge.lean)>.2);
+    assert.equal(celebrationPose(a,null,TIME),null);
+    assert.deepEqual(celebrationPose(a,'money',TIME,true),celebrationPose(a,'money',TIME+1234,true));
+  }
+  assert.deepEqual(agents,before);
+});
+
+test('live quotes drive cash guns and bags, then remove them on falling profit, stale prices and trade close',async()=>{
+  const s=storage(),runtime={at:TIME,user:'one',active:true};
+  const local=mountFloor(root(),{getUser:()=>runtime.user,isActive:()=>true,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at});
+  await local.refresh();let firm=readFirm(s,firmKey('one'),TIME),emit;
+  const r=root(),frames=[],paint=[];
+  const ctx={measureText:s=>({width:String(s).length*6}),createLinearGradient:()=>({addColorStop(){}}),createRadialGradient:()=>({addColorStop(){}})};
+  for(const method of ['beginPath','moveTo','lineTo','closePath','fill','stroke','fillRect','roundRect','arc','ellipse','fillText','setLineDash','save','restore','rect','clip','strokeRect','setTransform','transform']){
+    ctx[method]=(...args)=>{for(const arg of args)if(typeof arg==='number')assert.ok(Number.isFinite(arg),method);if(method==='fill')paint.push(ctx.fillStyle);};
+  }
+  Object.assign(r.querySelector('[data-floor-canvas]'),{clientWidth:1440,clientHeight:900,getContext:()=>ctx});
+  let quote=199;
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>true,isVisible:()=>true,now:()=>runtime.at,raf:fn=>frames.push(fn),storage:s,
+    cloud:{available:()=>true,subscribe:(_,cb)=>{emit=()=>cb({firm,equity:[]});queueMicrotask(emit);return ()=>{};}},
+    grab:async url=>reply(new URL(url).searchParams.get('symbol'),runtime.at,quote)});
+  ui.show();await Promise.resolve();
+  const draw=()=>{paint.length=0;frames.shift()();return {guns:paint.filter(c=>c==='#d8b35d').length,bags:paint.filter(c=>c==='#b49455').length};};
+  const expect=async(price,mode)=>{quote=price;runtime.at+=6000;await ui.refreshLive();const p=draw();assert.equal(p.guns,mode==='money'?24:0);assert.equal(p.bags,mode==='lounge'?24:0);};
+  await expect(199,null);await expect(201,'money');await expect(205,'lounge');await expect(201,'money');await expect(199,null);
+  await expect(205,'lounge');runtime.at+=15001;assert.deepEqual(draw(),{guns:0,bags:0});
+  await expect(201,'money');firm=newFirm(runtime.at);emit();assert.deepEqual(draw(),{guns:0,bags:0});
+  ui.hide();
 });

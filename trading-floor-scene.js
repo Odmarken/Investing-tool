@@ -12,6 +12,22 @@ export const WALL_H=190;
 export const AISLES=Object.freeze({vertical:Object.freeze([6.5,11,15.5,20]),horizontal:Object.freeze([1.4,8,15])});
 export const project=(x,y,z=0)=>({x:ORIGIN.x+(x-y)*TILE.w/2,y:ORIGIN.y+(x+y)*TILE.h/2-z});
 const near=(a,b)=>Math.abs(a-b)<1e-6;
+// Derived from the current open trade, never from accumulated desk profits.
+// No stored celebration state: closing, losing the threshold or stale prices
+// removes the props on the very next frame, including any airborne banknotes.
+export function deskCelebration(desk,now){
+  if(desk?.status!=='trade'||!Number.isFinite(desk.openReturn)||!Number.isFinite(desk.celebrationUntil)||now>desk.celebrationUntil)return null;
+  return desk.openReturn>=.5?'lounge':desk.openReturn>=.2?'money':null;
+}
+export function celebrationPose(agent,mode,now,reduced=false){
+  if(agent.kind!=='trader'||!mode)return null;
+  const desk=DESK_GEOMETRY.find(d=>d.symbol===agent.desk),seat=desk?.seats.findIndex(s=>s.key===agent.home.key);
+  if(!desk||seat<0)return null;
+  const phase=reduced?agent.phase:now/420+agent.phase;
+  if(mode==='money')return {mode,x:desk.x0+(seat<2 ? .5 : 1),y:desk.y0+.75+(seat%2)*2.1,
+    z:24+(reduced?0:Math.abs(Math.sin(phase))*10),lean:0,facing:reduced?agent.home.facing:['+x','+y','-x','-y'][Math.floor(now/360+agent.phase)%4]};
+  return {mode,x:agent.home.x,y:agent.home.y,z:0,lean:agent.home.facing==='+x'?-.32:.32,facing:agent.home.facing};
+}
 const towards=(from,to)=>{const dx=to.x-from.x,dy=to.y-from.y;return Math.abs(dx)>=Math.abs(dy)?(dx>=0?'+x':'-x'):(dy>=0?'+y':'-y');};
 
 export const ROOM_GEOMETRY=ROOMS.map((room,i)=>{
@@ -364,11 +380,53 @@ export function createScene(canvas){
     box(x-0.18,y-0.18,x+0.18,y+0.18,10,C.pot,'#5f3a20','#4a2c18');
     const p=project(x,y,10);circle(p.x-5,p.y-6,6,C.plantDeep);circle(p.x+5,p.y-7,6.5,C.plant);circle(p.x,p.y-13,6,C.plant);circle(p.x+1,p.y-4,4.5,C.plantDeep);
   }
-  function person(a,now,world){
-    const p=project(a.pos.x,a.pos.y),seated=a.state==='seated',walking=a.state==='walking',lift=seated?4:0;
+  function moneyBag(x,y){
+    const p=project(x,y);
+    ctx.fillStyle='rgba(45,43,30,.2)';ctx.beginPath();ctx.ellipse(p.x,p.y+1,14,6,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#b49455';ctx.beginPath();ctx.ellipse(p.x,p.y-12,12,15,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#d6bc79';ctx.beginPath();ctx.ellipse(p.x-3,p.y-14,7,12,-.2,0,Math.PI*2);ctx.fill();
+    poly([{x:p.x-5,y:p.y-23},{x:p.x-7,y:p.y-31},{x:p.x+6,y:p.y-30},{x:p.x+4,y:p.y-23}],'#cfb272','#8d7240');
+    round(p.x-6,p.y-24,12,3,1,'#78613b');
+    text('$',p.x,p.y-7,'800 16px '+MONO,'#68502d','center');
+  }
+  function moneyShower(p,a,now,reduced){
+    const angle=reduced?a.phase:now/500+a.phase;
+    const hand={x:p.x+Math.cos(angle)*9,y:p.y-18+Math.sin(angle)*4};
+    circle(hand.x,hand.y,2.4,a.look.skin);
+    ctx.save();const c=Math.cos(angle),s=Math.sin(angle);
+    ctx.transform(c,s,-s,c,hand.x,hand.y);
+    // A chunky gold cash cannon, with a visible stack of banknotes on top.
+    round(-3,-4,15,7,2,'#d8b35d','#766039');rect(0,2,4,6,'#766039');
+    rect(9,-3,4,5,'#454f45');rect(-1,-7,8,3,'#b4d79e');rect(0,-6,6,.7,'#557d53');
+    ctx.restore();
+    // Fixed-count, time-derived notes cannot accumulate or survive a mode change.
+    for(let i=0;i<10;i++){
+      const age=reduced?(i+.5)/10:((now/1250+i/10+a.phase)%1),heading=angle-age*2.5;
+      const radius=14+age*40,x=p.x+Math.cos(heading)*radius,y=p.y-20+Math.sin(heading)*radius*.55+age*age*15;
+      ctx.save();const tilt=heading+Math.sin(age*9)*.5,c=Math.cos(tilt),s=Math.sin(tilt);
+      ctx.transform(c,s,-s,c,x,y);ctx.globalAlpha=1-age*.7;
+      round(-5,-2.5,10,5,1,'#b9d99a','#56764e',.7);rect(-3,-1.3,6,2.6,'#86b573');circle(0,0,1.2,'#dceac3');ctx.restore();
+    }
+  }
+  function cigar(p,headY,facing,now,phase,reduced){
+    const dir=facing==='+x'?1:-1,x=p.x+dir*5,y=headY+3;
+    round(dir>0?x:x-10,y,10,3,1,'#805238','#4e3527',.6);
+    rect(x+dir*9-(dir<0?1:0),y,2,3,'#e99d52');
+    for(let i=0;i<4;i++){
+      const age=reduced?(i+1)/5:(now/2200+i/4+phase)%1;
+      const sx=x+dir*11+Math.sin(age*7+phase)*4,sy=y-3-age*24;
+      ctx.strokeStyle='rgba(232,231,217,'+(.5*(1-age))+')';ctx.lineWidth=1.8;
+      ctx.beginPath();ctx.arc(sx,sy,2+age*3,.2,Math.PI*1.7);ctx.stroke();
+    }
+  }
+  function person(a,now,world,pose=null){
+    const p=project(pose?.x??a.pos.x,pose?.y??a.pos.y,pose?.z??0),seated=pose?pose.mode==='lounge':a.state==='seated',walking=!pose&&a.state==='walking',lift=seated?4:0;
+    const facing=pose?.facing??a.facing;
     const working=seated&&a.kind==='trader'&&world.inTrade[a.desk];
-    const bob=world.reduced?0:working?Math.sin(now/110+a.phase)*.7:walking?Math.abs(Math.sin(a.step))*1.2:0;
+    const bob=world.reduced||pose?0:working?Math.sin(now/110+a.phase)*.7:walking?Math.abs(Math.sin(a.step))*1.2:0;
     ctx.fillStyle='rgba(35,37,32,.22)';ctx.beginPath();ctx.ellipse(p.x,p.y,7,3.2,0,0,Math.PI*2);ctx.fill();
+    ctx.save();
+    if(pose?.lean){const c=Math.cos(pose.lean),s=Math.sin(pose.lean),y=p.y-7;ctx.transform(c,s,-s,c,p.x-c*p.x+s*y,y-s*p.x-c*y);}
     if(!seated){const sw=walking?Math.sin(a.step)*2.4:0;rect(p.x-4.6,p.y-9+Math.max(0,sw),3.6,9-Math.max(0,sw),'#3b4142');rect(p.x+1,p.y-9+Math.max(0,-sw),3.6,9-Math.max(0,-sw),'#3b4142');}
     const bodyY=p.y+lift-20-bob,headY=p.y+lift-26-bob;
     round(p.x-6.5,bodyY,13,12,4,a.look.shirt);
@@ -376,17 +434,25 @@ export function createScene(canvas){
     poly([{x:p.x-3,y:bodyY},{x:p.x,y:bodyY+4},{x:p.x+3,y:bodyY}], '#eee8da');
     if(a.look.style===1){rect(p.x-.4,bodyY+4,.8,7,'rgba(35,43,39,.4)');rect(p.x+3,bodyY+5,2,3,'#dedacb');}
     if(a.look.tie)rect(p.x-1,bodyY+1,2,7,a.look.tie);
-    if(seated){const dir=a.facing==='+x'||a.facing==='-y'?1:-1;rect(p.x+dir*2,bodyY+7,4,2.4,a.look.skin);}
+    if(seated){const dir=facing==='+x'||facing==='-y'?1:-1;rect(p.x+dir*2,bodyY+7,4,2.4,a.look.skin);}
+    if(pose?.mode==='lounge'){
+      // Elbow behind the head, feet stretched out: clearly off duty.
+      round(p.x-9,bodyY-5,3,12,1.5,a.look.shirt);rect(p.x-8,bodyY-6,6,2.5,a.look.skin);
+      const dir=facing==='+x'?1:-1;round(p.x+(dir>0?0:-12),bodyY+10,12,4,2,'#3b4142');
+    }
     circle(p.x,headY,6,a.look.skin);
     ctx.fillStyle=a.look.hair;ctx.beginPath();ctx.arc(p.x,headY-.6,6.2,Math.PI,0);ctx.fill();
     if(a.look.style===2)round(p.x-4,headY-7,8,3,2,a.look.hair);
-    const toward=a.facing==='+x'||a.facing==='+y';
-    if(toward){const dir=a.facing==='+x'?1:-1;rect(p.x-dir*6.2-(dir<0?0:0),headY-1,1.6,4,a.look.hair);
+    const toward=facing==='+x'||facing==='+y';
+    if(toward){const dir=facing==='+x'?1:-1;rect(p.x-dir*6.2-(dir<0?0:0),headY-1,1.6,4,a.look.hair);
       circle(p.x+dir*1.6,headY+.4,.95,'#292c29');circle(p.x+dir*3.9,headY+.4,.95,'#292c29');
       if(a.look.beard){ctx.strokeStyle=a.look.hair;ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x+dir,headY+1,3.6,.15,Math.PI-.15);ctx.stroke();}
       if(a.look.glasses){ctx.strokeStyle='rgba(32,37,35,.8)';ctx.lineWidth=.8;ctx.strokeRect(p.x+dir*.4-1.2*(dir<0?1:0),headY-.9,2.4,2.4);ctx.strokeRect(p.x+dir*2.9-1.2*(dir<0?1:0),headY-.9,2.4,2.4);}
     }else rect(p.x-6.2,headY-2,12.4,3,a.look.hair);
     if(a.look.headset){ctx.strokeStyle='#394440';ctx.lineWidth=1.6;ctx.beginPath();ctx.arc(p.x,headY,6.7,Math.PI,0);ctx.stroke();round(p.x-7,headY-1,2.8,4,1,'#394440');}
+    if(pose?.mode==='lounge')cigar(p,headY,facing,now,a.phase,world.reduced);
+    ctx.restore();
+    if(pose?.mode==='money')moneyShower(p,a,now,world.reduced);
   }
   function plate(x,y,z,lines,border,width){
     const p=project(x,y,z),h=lines.length>1?31:17,w=width;
@@ -424,6 +490,7 @@ export function createScene(canvas){
         }
       });
       for(const s of d.seats)add(s.x+s.y+(s.facing==='+x'?-0.01:0.01),()=>chair(s.x,s.y,s.facing,s.facing==='+x'?CHAIR.pink:CHAIR.blue));
+      if(world.celebrations[d.symbol]==='lounge')for(const x of [d.x0-.4,d.x1+.4])for(const y of [d.y0+.15,d.y1-.15])add(x+y,()=>moneyBag(x,y));
     }
     add(FIKA.table.x+FIKA.table.y,()=>{
       const b=project(FIKA.table.x,FIKA.table.y),t=project(FIKA.table.x,FIKA.table.y,20);
@@ -438,7 +505,12 @@ export function createScene(canvas){
     add(FIKA.coffee.x+0.2+FIKA.coffee.y+0.2,()=>{box(FIKA.coffee.x-0.2,FIKA.coffee.y-0.2,FIKA.coffee.x+0.2,FIKA.coffee.y+0.2,30,'#58625f','#414b49','#303b39','rgba(0,0,0,.3)');const p=project(FIKA.coffee.x+0.2,FIKA.coffee.y,22);circle(p.x-3,p.y,1.6,Math.floor(now/600)%2?'#ed8575':'#d4be95');});
     add(FIKA.cooler.x+0.15+FIKA.cooler.y+0.15,()=>{box(FIKA.cooler.x-0.15,FIKA.cooler.y-0.15,FIKA.cooler.x+0.15,FIKA.cooler.y+0.15,26,'#e9f4ff','#9bd7ff','#7fc4f5','rgba(0,0,0,.25)');const p=project(FIKA.cooler.x,FIKA.cooler.y,26);circle(p.x,p.y-6,6,'rgba(150,215,255,.85)');});
     for(const p of PLANTS)add(p.x+p.y,()=>plant(p.x,p.y));
-    for(const a of agents)add(a.pos.x+a.pos.y,()=>person(a,now,world));
+    for(const a of agents){
+      const pose=celebrationPose(a,world.celebrations[a.desk],now,world.reduced);
+      const desk=pose&&DESK_GEOMETRY.find(d=>d.symbol===a.desk);
+      const depth=pose?Math.max(pose.x+pose.y,pose.mode==='money'?desk.x1+desk.y0+1.01:0):a.pos.x+a.pos.y;
+      add(depth,()=>person(a,now,world,pose));
+    }
     return list.sort((a,b)=>a.depth-b.depth);
   }
   function overlay(view,now){
@@ -461,7 +533,8 @@ export function createScene(canvas){
     resize();ctx.setTransform(dpr,0,0,dpr,0,0);
     backdrop();
     const c=camera.state();ctx.setTransform(dpr*c.zoom,0,0,dpr*c.zoom,dpr*c.x,dpr*c.y);
-    const world={inTrade:Object.fromEntries(FLOOR.desks.map(s=>[s,view.desks[s]?.status==='trade'])),reduced:view.reduced};
+    const world={inTrade:Object.fromEntries(FLOOR.desks.map(s=>[s,view.desks[s]?.status==='trade'])),reduced:view.reduced,
+      celebrations:Object.fromEntries(FLOOR.desks.map(s=>[s,deskCelebration(view.desks[s],now)]))};
     background();drawEquityScreen(view,now);drawNewsScreen(view,now);
     for(const it of items(view,agents,now,world))it.draw();
     overlay(view,now);

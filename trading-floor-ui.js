@@ -1,6 +1,6 @@
 import {FLOOR,ROOMS,newFirm,readFirm,validateFirm,firmKey,equityKey,firmPositions,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,readEquity,sampleEquity,riskRows,floorNarrative,traderNames} from './trading-floor.js';
 import {fetchActiveSnapshot,fetchActiveRisk} from './crypto-momentum-active.js';
-import {fetchMomentumQuotes,QUOTE_INTERVAL} from './crypto-momentum-live.js';
+import {fetchMomentumQuotes,QUOTE_INTERVAL,QUOTE_TTL} from './crypto-momentum-live.js';
 import {liquidationPrice} from './crypto-leverage.js';
 import {CONTRACTS} from './bybit-contracts.js';
 import {createScene,createAgents,stepAgents} from './trading-floor-scene.js';
@@ -37,6 +37,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
       <p class="floor-status" data-floor-status role="status" aria-live="polite"></p>
       <details class="floor-about"><summary>Om golvet</summary><p>Sex bord med 100 $ vardera, ett coin per bord. Varje bord kör samma timmomentum med SL och TP som AI-momentum, men med eget konto. Demo med riktiga Bybit-priser; inga order skickas.</p>
       <p>Traders sitter vid bordet under affär och rör sig fritt annars. Klicka på bord, rum och skärmar. Dra för att panorera, scrolla eller nyp för att zooma, dubbelklicka för att återställa vyn.</p>
+      <p>Vid +20 % öppet netto på affärens marginal blir det pengapistoler på bordet. Vid +50 % blir det cigarrer och pengasäckar. Firandet följer aktuell vinst och upphör när affären stängs eller färska priser saknas.</p>
       <p>Med molnlagring ligger firman i Firestore och handlas av molnfunktionen varje minut, även när sidan är stängd. Utan moln sparas den per inloggning i denna webbläsare och kräver öppen kryptosida. Ingen profil i AI-momentum klarade utvecklingskraven; det här är ett demospel med riktiga priser, inte en validerad strategi.</p></details></div>
     <div class="floor-actions"><button type="button" class="btn" data-floor-pause></button><button type="button" class="btn" data-floor-reset title="Arkivera firman och börja om med sex nya bord på 100 $">Återställ firman</button><a class="btn" href="#">← Tillbaka till signaler</a></div></div>
     <div class="floor-zoom"><button type="button" data-floor-zoom="in" aria-label="Zooma in" title="Zooma in">+</button><button type="button" data-floor-zoom="out" aria-label="Zooma ut" title="Zooma ut">−</button><button type="button" data-floor-zoom="reset" aria-label="Återställ vyn" title="Återställ vyn (dubbelklick i bilden)">⌂</button></div>
@@ -125,7 +126,8 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     }
     const stats=firmStats(firm,t),rows=riskRows(firm,live).filter(r=>r.toSl!==null).sort((a,b)=>a.toSl-b.toSl);
     sceneWorld={inTrade:Object.fromEntries(FLOOR.desks.map(s=>[s,stats.desks[s].status==='trade'])),riskDesk:rows[0]?.symbol??null,reduced:reducedMotion()};
-    return {desks:Object.fromEntries(FLOOR.desks.map(s=>[s,{status:stats.desks[s].status,pnl:live.desks[s].pnl,openNet:live.desks[s].openNet}])),
+    return {desks:Object.fromEntries(FLOOR.desks.map(s=>{const d=live.desks[s];return [s,{status:stats.desks[s].status,pnl:d.pnl,openNet:d.openNet,
+      openReturn:d.position?.budget>0&&finite(d.openNet)?d.openNet/d.position.budget:null,celebrationUntil:d.quote?d.quote.at+QUOTE_TTL:0}];})),
       total:{value:live.total,last:lastTotal?.value??null,at:live.total===null?lastTotal?.at??null:(live.at??t),waiting:live.waiting},
       start:live.start,equity,news:newsItems(),paused:firm.paused,reduced:reducedMotion()};
   }
