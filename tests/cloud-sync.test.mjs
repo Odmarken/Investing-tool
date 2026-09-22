@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mountMomentum} from '../crypto-momentum-ui.js';
 import {mountFloor} from '../trading-floor-ui.js';
 import {newActiveAccount,readActiveAccount} from '../crypto-momentum-active.js';
-import {FLOOR,readFirm,firmKey,equityKey,heldSymbols,newFirm} from '../trading-floor.js';
+import {FLOOR,readFirm,firmKey,equityKey,heldSymbols,newFirm,setFirmPaused} from '../trading-floor.js';
 import {createCamera,CANVAS} from '../trading-floor-scene.js';
 
 const TIME=Date.parse('2026-09-22T12:00:00Z');
@@ -36,6 +36,9 @@ function fakeCloud(){
       store.doc=payload.sleeves?{...prev,account:payload}:{...prev,firm:payload.firm??prev.firm,equity:payload.equity??prev.equity??[]};
       store.doc.lastRun=prev.lastRun??null;store.doc.lastError=null;emit();
     },
+    async initialize(uid,payload){if(!store.doc)await this.save(uid,payload);},
+    async togglePause(uid){await this.save(uid,{firm:setFirmPaused(store.doc.firm,!store.doc.firm.paused)});},
+    async reset(uid){await this.archive(uid,store.doc.firm,store.doc.equity);await this.save(uid,{firm:newFirm(TIME),equity:[]});},
     async archive(uid,...args){store.archives.push(args);}};
 }
 

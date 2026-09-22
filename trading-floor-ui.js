@@ -5,6 +5,7 @@ import {liquidationPrice} from './crypto-leverage.js';
 import {CONTRACTS} from './bybit-contracts.js';
 import {createScene,createAgents,stepAgents} from './trading-floor-scene.js';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const newsLink=value=>{try{const url=new URL(value);return ['https:','http:'].includes(url.protocol)?url.href:null;}catch{return null;}};
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const number=(x,d=2)=>finite(x)?x.toLocaleString('sv-SE',{minimumFractionDigits:d,maximumFractionDigits:d}):'–';
 const money=x=>finite(x)?number(x)+' $':'–';
@@ -23,7 +24,7 @@ const ROLE_TEXT={
   miguel:'Makro och nyheter. Står vid nyhetsskärmen och väger rubrikerna om världen och krypto.'
 };
 
-// cloud (optional): {available(), subscribe(uid,onState), save(uid,{firm,equity}), archive(uid,firm,equity)}.
+// cloud (optional): {available(), subscribe(uid,onState), initialize(uid,{firm,equity}), togglePause(uid), reset(uid)}.
 // With a cloud store the firm is read from it and traded by the cloud runner;
 // this page then only fetches quotes for the live figures, pauses and resets.
 export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>false,grab,getNews=()=>({items:[],bias:0}),loadWorldNews=null,cloud=null,
@@ -47,7 +48,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   let uid=null,firm=null,equity=[],live=null,error='',riskError='',busy=false,quoteBusy=false,quoteFailed=false,resetting=false;
   let lastCheck=-Infinity,lastQuote=-Infinity,generation=0,riskIndex=0,quotes={},lastTotal=null,tradeCounts={};
   let panel=null,modal=null,worldNews=[],worldAt=-Infinity,worldBusy=false,running=false,lastFrame=0,typing=null,sceneView=null,sceneWorld={inTrade:{},riskDesk:null,reduced:false};
-  let cloudUnsub=null,cloudUid=null,cloudState=null,cloudError='',migrating=false;
+  let cloudUnsub=null,cloudUid=null,cloudState=null,cloudError='',migrating=false,cloudGeneration=0,frameEpoch=0;
   const cloudOn=()=>!!cloud&&typeof cloud.available==='function'&&cloud.available();
   const exclusive=(user,callback)=>locks?.request?locks.request(firmKey(user),callback):Promise.reject(Error('Trading floor kräver en webbläsare med stöd för säkra fliklås'));
   const ensure=key=>{if(storage.getItem(key)===null)storage.setItem(key,JSON.stringify(newFirm(now())));};
@@ -55,11 +56,11 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     const want=cloudOn()?uid:null;
     if(want===cloudUid)return;
     if(cloudUnsub){cloudUnsub();cloudUnsub=null;}
-    cloudUid=want;cloudState=null;cloudError='';migrating=false;
+    cloudUid=want;cloudState=null;cloudError='';migrating=false;cloudGeneration++;generation++;
     if(!want)return;
-    const user=want;
+    const user=want,subscription=cloudGeneration;
     cloudUnsub=cloud.subscribe(user,state=>{
-      if(user!==cloudUid)return;
+      if(user!==cloudUid||subscription!==cloudGeneration)return;
       if(state?.error){cloudError='Molnet: '+state.error;render();return;}
       cloudError='';
       if(state?.missing){void migrate(user);return;}
@@ -70,17 +71,17 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   }
   // The first cloud sync uploads this browser's firm once so its history is kept.
   async function migrate(user){
-    if(migrating)return;migrating=true;
+    if(migrating)return;migrating=true;const subscription=cloudGeneration;
     try{
       let local=null,points=[];
       try{if(storage.getItem(firmKey(user))!==null)local=readFirm(storage,firmKey(user),now());points=readEquity(storage,equityKey(user));}catch(e){local=null;points=[];}
-      await cloud.save(user,{firm:local??newFirm(now()),equity:points});
-    }catch(e){cloudError='Kunde inte ladda upp firman till molnet: '+e.message;render();}
-    finally{migrating=false;}
+      await cloud.initialize(user,{firm:local??newFirm(now()),equity:points});
+    }catch(e){if(subscription===cloudGeneration){cloudError='Kunde inte ladda upp firman till molnet: '+e.message;render();}}
+    finally{if(subscription===cloudGeneration)migrating=false;}
   }
   function sync(){
     const user=getUser();
-    if(user!==uid){uid=user;firm=null;equity=[];live=null;error='';riskError='';lastCheck=-Infinity;lastQuote=-Infinity;quotes={};lastTotal=null;tradeCounts={};panel=null;modal=null;generation++;}
+    if(user!==uid){uid=user;firm=null;equity=[];live=null;error='';riskError='';lastCheck=-Infinity;lastQuote=-Infinity;quotes={};lastTotal=null;tradeCounts={};panel=null;modal=null;generation++;stopTyping();panelEl.hidden=true;modalEl.classList?.remove('show');}
     attachCloud();
     if(!uid)return uid;
     if(cloudUid){
@@ -106,7 +107,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     for(const n of all.filter(n=>n&&n.title).sort((a,b)=>(b.ts||0)-(a.ts||0))){
       const key=String(n.title).toLowerCase().replace(/[^a-z0-9åäö ]/g,'').slice(0,60);
       if(!key||seen.has(key))continue;seen.add(key);
-      out.push({ts:n.ts,title:n.title,src:n.src,link:n.link,hot:!!n.an?.hot,world:n.world});
+      out.push({ts:n.ts,title:n.title,src:n.src,link:newsLink(n.link),hot:!!n.an?.hot,world:n.world});
     }
     return out.slice(0,60);
   }
@@ -119,6 +120,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   function buildView(){
     const t=now();
     if(!firm||!live){
+      sceneWorld={inTrade:{},riskDesk:null,reduced:reducedMotion()};
       return {desks:Object.fromEntries(FLOOR.desks.map(s=>[s,{status:'paused',pnl:null,openNet:null}])),total:{value:null,last:null,at:null,waiting:[]},start:FLOOR.start*FLOOR.desks.length,equity:[],news:newsItems(),paused:true,reduced:reducedMotion()};
     }
     const stats=firmStats(firm,t),rows=riskRows(firm,live).filter(r=>r.toSl!==null).sort((a,b)=>a.toSl-b.toSl);
@@ -154,20 +156,20 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     q('[data-floor-status]').textContent=status;
     if(firm&&scene)for(const s of FLOOR.desks){const n=firm.desks[s].trades.length;if(tradeCounts[s]!==undefined&&n>tradeCounts[s])scene.burst(s,firm.desks[s].trades.at(-1).pnl>=0);tradeCounts[s]=n;}
     sceneView=buildView();
-    if(panel)renderPanel();
-    if(modal)renderModal();
+    if(panel)renderPanel();else panelEl.hidden=true;
+    if(modal)renderModal();else modalEl.classList?.remove('show');
     if(scene&&!running&&isVisible())start();
     if(isVisible())void refreshWorld();
   }
-  function frame(){
-    if(!running)return;
+  function frame(epoch){
+    if(!running||epoch!==frameEpoch)return;
     if(!isVisible()){running=false;return;}
     const t=now(),dt=lastFrame?(t-lastFrame)/1000:0;lastFrame=t;
     stepAgents(agents,sceneWorld,t,dt);
     scene.draw(sceneView??buildView(),agents,t);
-    raf(frame);
+    raf(()=>frame(epoch));
   }
-  function start(){if(running||!scene||!raf)return;running=true;lastFrame=0;raf(frame);}
+  function start(){if(running||!scene||!raf)return;running=true;lastFrame=0;const epoch=++frameEpoch;raf(()=>frame(epoch));}
   function stopTyping(){if(typing){clearInterval(typing);typing=null;}}
   function renderPanel(){
     if(!panel||!firm||!live){panelEl.hidden=true;return;}
@@ -240,12 +242,12 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     const pts=points.slice();if(total!==null)pts.push({t,v:total});
     if(pts.length<2)return '<div class="floor-empty">Kapitalkurvan ritas när minutprover finns. Första provet tas vid nästa prisuppdatering.</div>';
     const minT=pts[0].t,maxT=Math.max(minT+1,pts.at(-1).t);let lo=Math.min(start,...pts.map(p=>p.v)),hi=Math.max(start,...pts.map(p=>p.v));const pad=Math.max(.5,(hi-lo)*.12);lo-=pad;hi+=pad;
-    const x=tt=>62+(tt-minT)/(maxT-minT)*816,y=v=>180-(v-lo)/(hi-lo)*152,up=pts.at(-1).v>=start,col=up?'#3ddc84':'#ff3355';
+    const x=tt=>62+(tt-minT)/(maxT-minT)*816,y=v=>180-(v-lo)/(hi-lo)*152,up=pts.at(-1).v>=start,col=up?'#28724e':'#b1493b';
     const path=pts.map((p,i)=>(i?'L':'M')+x(p.t).toFixed(2)+' '+y(p.v).toFixed(2)).join(' ');
-    const grid=[0,.5,1].map(f=>{const v=lo+(hi-lo)*f,yy=y(v);return '<line x1="62" y1="'+yy+'" x2="878" y2="'+yy+'" stroke="#2c2160"/><text x="54" y="'+(yy+4)+'" text-anchor="end" fill="#c9b8f0" font-size="11">'+number(v,0)+'</text>';}).join('');
-    return '<svg class="floor-equity" viewBox="0 0 900 218" role="img" aria-label="Firmans kapital över tid">'+grid+'<line x1="62" y1="'+y(start)+'" x2="878" y2="'+y(start)+'" stroke="#8f7fc4" stroke-dasharray="4 4"/>'+
+    const grid=[0,.5,1].map(f=>{const v=lo+(hi-lo)*f,yy=y(v);return '<line x1="62" y1="'+yy+'" x2="878" y2="'+yy+'" stroke="#d1ccbf"/><text x="54" y="'+(yy+4)+'" text-anchor="end" fill="#65685f" font-size="11">'+number(v,0)+'</text>';}).join('');
+    return '<svg class="floor-equity" viewBox="0 0 900 218" role="img" aria-label="Firmans kapital över tid">'+grid+'<line x1="62" y1="'+y(start)+'" x2="878" y2="'+y(start)+'" stroke="#70776b" stroke-dasharray="4 4"/>'+
       '<path d="'+path+' L'+x(pts.at(-1).t).toFixed(2)+' 180 L'+x(pts[0].t).toFixed(2)+' 180 Z" fill="'+col+'" opacity=".12"/><path d="'+path+'" fill="none" stroke="'+col+'" stroke-width="2.5" vector-effect="non-scaling-stroke"/>'+
-      '<text x="62" y="208" fill="#c9b8f0" font-size="11">'+date(minT)+'</text><text x="878" y="208" text-anchor="end" fill="#c9b8f0" font-size="11">'+date(maxT)+'</text></svg>';
+      '<text x="62" y="208" fill="#65685f" font-size="11">'+date(minT)+'</text><text x="878" y="208" text-anchor="end" fill="#65685f" font-size="11">'+date(maxT)+'</text></svg>';
   }
   function renderModal(){
     if(!modal||!firm||!live){modalEl.classList?.remove('show');return;}
@@ -326,11 +328,12 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     finally{quoteBusy=false;try{sync();}catch(e){firm=null;error=e.message;}sampleNow();render();}
   }
   async function togglePause(){
+    try{sync();}catch(e){firm=null;error=e.message;render();return;}
     const user=getUser();if(!user||resetting)return;
     const token=++generation;
     if(cloudUid){
-      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.save(user,{firm:setFirmPaused(firm,!firm.paused)});error='';}
-      catch(e){error='Inställningen kunde inte sparas i molnet: '+e.message;}
+      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.togglePause(user);if(getUser()===user&&token===generation)error='';}
+      catch(e){if(getUser()===user&&token===generation)error='Inställningen kunde inte sparas i molnet: '+e.message;}
       render();return;
     }
     try{
@@ -345,11 +348,12 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     render();
   }
   async function reset(){
+    try{sync();}catch(e){firm=null;error=e.message;render();return;}
     const user=getUser();if(!user||resetting)return;
     if(!confirm('Arkivera nuvarande firma och börja om med '+FLOOR.desks.length+' × '+FLOOR.start+' $? Öppna positioner följer med i arkivet utan att stängas.'))return;
     const token=++generation;resetting=true;render();
     if(cloudUid){
-      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.archive(user,firm,equity);await cloud.save(user,{firm:newFirm(now()),equity:[]});quotes={};lastTotal=null;tradeCounts={};panel=null;error='';}
+      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.reset(user);if(getUser()===user&&token===generation){quotes={};lastTotal=null;tradeCounts={};panel=null;panelEl.hidden=true;modal=null;modalEl.classList?.remove('show');error='';}}
       catch(e){if(getUser()===user)error='Återställningen misslyckades: '+e.message;}
       finally{resetting=false;try{sync();}catch(e){firm=null;error=e.message;}render();}
       return;
@@ -360,8 +364,8 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
         const key=firmKey(user),raw=storage.getItem(key),fresh=newFirm(now());
         // Archive first. A failed archive or write leaves the saved firm intact.
         if(raw!==null){let suffix=now(),backup=key+':before-reset:'+suffix;while(storage.getItem(backup)!==null)backup=key+':before-reset:'+(++suffix);storage.setItem(backup,raw);}
-        storage.setItem(key,JSON.stringify(fresh));
         const chart=storage.getItem(equityKey(user));if(chart!==null)storage.setItem(equityKey(user)+':before-reset:'+now(),chart);
+        storage.setItem(key,JSON.stringify(fresh));
         storage.setItem(equityKey(user),'[]');
         firm=fresh;equity=[];quotes={};live=null;lastTotal=null;error='';riskError='';lastCheck=-Infinity;tradeCounts={};panel=null;
       });
@@ -369,7 +373,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     finally{resetting=false;try{sync();}catch(e){firm=null;error=e.message;}render();}
   }
   function show(){try{sync();}catch(e){firm=null;error=e.message;}render();if(scene)start();}
-  function hide(){running=false;stopTyping();panel=null;modal=null;if(panelEl)panelEl.hidden=true;modalEl.classList?.remove('show');}
+  function hide(){running=false;frameEpoch++;stopTyping();panel=null;modal=null;if(panelEl)panelEl.hidden=true;modalEl.classList?.remove('show');}
   q('[data-floor-pause]').onclick=togglePause;
   q('[data-floor-reset]').onclick=reset;
   if(canvas.addEventListener&&scene){

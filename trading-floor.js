@@ -14,8 +14,8 @@ export const ROOMS=Object.freeze([
   {id:'manuel',name:'Manuel',role:'Risk'},
   {id:'miguel',name:'Miguel',role:'Makro & nyheter'}
 ]);
-const NAMES=Object.freeze(['Lucas','Sofia','Mateo','Valentina','Diego','Camila','Nils','Elsa','Hugo','Alma','Rafael','Inés',
-  'Tomas','Julia','Andrés','Clara','Oskar','Vera','Sergio','Lina','Bruno','Marta','Felix','Nora']);
+const NAMES=Object.freeze(['Lucas','Leo','Mateo','Vincent','Diego','Carlos','Nils','Erik','Hugo','Adam','Rafael','Ivan',
+  'Tomas','Johan','Andrés','Charlie','Oskar','Viktor','Sergio','Liam','Bruno','Marco','Felix','Noah']);
 export const traderNames=symbol=>{const i=FLOOR.desks.indexOf(symbol);return i<0?[]:NAMES.slice(i*4,i*4+4);};
 export const firmKey=user=>FLOOR.storagePrefix+encodeURIComponent(user);
 export const equityKey=user=>firmKey(user)+':equity';
@@ -75,22 +75,26 @@ export const deskPosition=desk=>desk.sleeves.find(s=>s.position)?.position??null
 export const deskCash=desk=>desk.sleeves.reduce((sum,s)=>sum+s.cash,0);
 
 export function firmLive(firm,quotes,now){
-  const desks={},waiting=[];let total=0;
+  const desks={},waiting=[];let total=0,at=null;
   for(const symbol of FLOOR.desks){
     const desk=firm.desks[symbol],live=momentumLiveValue(desk,quotes,now),position=deskPosition(desk);
     desks[symbol]={balance:live.balance,openNet:live.openNet,reason:live.reason,at:live.at,position,cash:deskCash(desk),
       quote:position?live.positions[symbol]?.quote??null:null,pnl:live.balance===null?null:live.balance-FLOOR.start};
     if(live.balance===null)waiting.push(symbol);else total+=live.balance;
+    if(position&&live.at!==null)at=at===null?live.at:Math.min(at,live.at);
   }
   const start=FLOOR.start*FLOOR.desks.length;
-  return {total:waiting.length?null:total,waiting,desks,start,net:waiting.length?null:total-start};
+  return {total:waiting.length?null:total,at:waiting.length?null:at,waiting,desks,start,net:waiting.length?null:total-start};
 }
 // Midnight in Stockholm, so "today" matches the clocks on the page.
-const STOCKHOLM=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Stockholm',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+const STOCKHOLM=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Stockholm',year:'numeric',month:'2-digit',day:'2-digit'});
+let cachedDay=null,cachedStart=null;
 export function dayStart(now){
-  const parts=STOCKHOLM.formatToParts(now);
-  const get=type=>+parts.find(p=>p.type===type).value;
-  return now-((get('hour')%24)*3600+get('minute')*60+get('second'))*1000-now%1000;
+  // Find the first millisecond of this local date, including 23/25-hour days.
+  const date=STOCKHOLM.format(now);if(date===cachedDay)return cachedStart;
+  let lo=Math.floor(now)-27*3600000,hi=Math.floor(now);
+  while(lo<hi){const mid=Math.floor((lo+hi)/2);if(STOCKHOLM.format(mid)===date)hi=mid;else lo=mid+1;}
+  cachedDay=date;cachedStart=lo;return lo;
 }
 export function deskStatus(desk,now){
   if(deskPosition(desk))return 'trade';

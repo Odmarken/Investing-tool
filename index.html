@@ -1069,6 +1069,7 @@ import { CRYPTO_AI_MODEL } from './crypto-ai-model.js';
 import { mountCryptoAI } from './crypto-ai-ui.js';
 import { mountMomentum } from './crypto-momentum-ui.js';
 import { mountFloor } from './trading-floor-ui.js';
+import { createFloorCloud } from './trading-floor-cloud.js';
 import { CONTRACTS, createContractCache, maxLeverageFor, isolatedLevel } from './bybit-contracts.js';
 const bybitContracts = createContractCache((url,options) => grab(url,options));
 let krLimitsBusy = false, krLimitsAt = -Infinity;
@@ -3304,7 +3305,7 @@ async function firebaseStart(){
   const cfg = await firebaseKonfig();
   if(!cfg) return;
   try{
-    const [{ initializeApp }, { getFirestore, doc, onSnapshot, setDoc, collection, writeBatch }, authModul] = await Promise.all([
+    const [{ initializeApp }, { getFirestore, doc, onSnapshot, setDoc, collection, writeBatch, runTransaction, onSnapshotsInSync }, authModul] = await Promise.all([
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js'),
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js'),
       import('https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js')
@@ -3317,7 +3318,7 @@ async function firebaseStart(){
     AUTH.app = app;
     AUTH.modul = authModul;
     AUTH.auth = authModul.getAuth(app);
-    AUTH.db = db; AUTH.fs = { doc, onSnapshot, setDoc, collection, writeBatch };   // kryptokontot, momentumkontot och trading floor skriver härifrån
+    AUTH.db = db; AUTH.fs = { doc, onSnapshot, setDoc, collection, writeBatch, runTransaction, onSnapshotsInSync };   // kryptokontot, momentumkontot och trading floor skriver härifrån
     /* Den pågående stapeln pushas hit så fort molnet tagit emot den. */
     onSnapshot(doc(db, 'riptide', 'live'), snap => {
       const d = snap.data();
@@ -3532,40 +3533,8 @@ const MOLN_MOMENTUM = {
     await setDoc(doc(AUTH.db, 'momentum', uid, 'archive', String(t)), { account: molnRent(account), archivedAt: t });
   }
 };
-const MOLN_FLOOR = {
-  available: molnTillganglig,
-  subscribe(uid, onState){
-    const { doc, collection, onSnapshot } = AUTH.fs;
-    let meta = null, desks = null, equity = null; const sett = new Set();
-    const skicka = () => {
-      if(sett.size < 3) return;
-      if(!meta){ onState({ missing: true }); return; }
-      onState({ firm: { version: meta.version, createdAt: meta.createdAt, paused: !!meta.paused, desks }, equity, lastRun: meta.lastRun ?? null, lastError: meta.lastError ?? null });
-    };
-    const fel = e => onState({ error: e.message || String(e) });
-    const stopp = [
-      onSnapshot(doc(AUTH.db, 'floor', uid), s => { meta = s.exists() ? s.data() : null; sett.add('meta'); skicka(); }, fel),
-      onSnapshot(collection(AUTH.db, 'floor', uid, 'desks'), s => { desks = {}; s.forEach(d => { desks[d.id] = d.data().account; }); sett.add('desks'); skicka(); }, fel),
-      onSnapshot(doc(AUTH.db, 'floor', uid, 'data', 'equity'), s => { equity = s.exists() ? (s.data().points || []) : []; sett.add('equity'); skicka(); }, fel)
-    ];
-    return () => stopp.forEach(f => f());
-  },
-  async save(uid, { firm, equity }){
-    const { doc, writeBatch } = AUTH.fs, b = writeBatch(AUTH.db), t = Date.now();
-    if(firm){
-      b.set(doc(AUTH.db, 'floor', uid), { version: firm.version, createdAt: firm.createdAt, paused: firm.paused, updatedAt: t }, { mergeFields: ['version', 'createdAt', 'paused', 'updatedAt'] });
-      for(const [symbol, account] of Object.entries(firm.desks)) b.set(doc(AUTH.db, 'floor', uid, 'desks', symbol), { account: molnRent(account), updatedAt: t });
-    }
-    if(equity) b.set(doc(AUTH.db, 'floor', uid, 'data', 'equity'), { points: molnRent(equity), updatedAt: t });
-    await b.commit();
-  },
-  async archive(uid, firm, equity){
-    const { doc, writeBatch } = AUTH.fs, b = writeBatch(AUTH.db), t = Date.now();
-    b.set(doc(AUTH.db, 'floor', uid, 'archive', String(t)), { version: firm.version, createdAt: firm.createdAt, paused: firm.paused, archivedAt: t, equity: molnRent(equity || []) });
-    for(const [symbol, account] of Object.entries(firm.desks)) b.set(doc(AUTH.db, 'floor', uid, 'archive', String(t), 'desks', symbol), { account: molnRent(account) });
-    await b.commit();
-  }
-};
+const MOLN_FLOOR = createFloorCloud({available: molnTillganglig, getContext: () => ({db: AUTH.db, fs: AUTH.fs})});
+
 function floorMount(){
   if(floorView || !$('#tradingFloor')) return;
   floorView = mountFloor($('#tradingFloor'), {

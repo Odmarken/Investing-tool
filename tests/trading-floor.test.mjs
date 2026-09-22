@@ -113,6 +113,22 @@ test('firm statistics separate today from all time using Stockholm midnight',()=
   assert.match(text,/5 av 6 bord sitter i affär/);assert.match(text,/Karens efter avslut: BTC/);assert.match(text,/1 avslut sedan start: 1 vinster/);
 });
 
+test('Stockholm midnight stays correct across both daylight saving changes',()=>{
+  for(const [time,start] of [
+    ['2026-03-29T00:30:00Z','2026-03-28T23:00:00Z'],
+    ['2026-03-29T12:00:00Z','2026-03-28T23:00:00Z'],
+    ['2026-10-25T00:30:00Z','2026-10-24T22:00:00Z'],
+    ['2026-10-25T12:00:00Z','2026-10-24T22:00:00Z']
+  ])assert.equal(dayStart(Date.parse(time)),Date.parse(start),time);
+});
+
+test('firm quote timestamp is the oldest held quote, not the render time',()=>{
+  const firm=advanceFirm(newFirm(TIME),snapshot(),TIME);
+  const quotes=Object.fromEntries(FLOOR.desks.map((s,i)=>[s,{price:101,mark:101,at:TIME+i*1000}]));
+  assert.equal(firmLive(firm,quotes,TIME+10000).at,TIME);
+  delete quotes.BTC;assert.equal(firmLive(firm,quotes,TIME+10000).at,null);
+});
+
 test('old hourly decisions are trimmed so six desks stay small in storage',()=>{
   const firm=newFirm(TIME),desk=firm.desks.BTC,n=FLOOR.decisionLimit+20;
   desk.activeDecisions=Array.from({length:n},(_,i)=>({hour:TIME-(n-i)*HOUR,at:TIME-(n-i)*HOUR+1000,action:'kontanter',symbol:null,score:null}));
@@ -228,7 +244,7 @@ test('the mounted floor opens one position per desk from Bybit-shaped data, paus
   runtime.at=TIME+12000;runtime.urls.length=0;await ui.refreshLive();
   assert.notEqual(runtime.urls.find(u=>u.pathname.endsWith('/mark-price-kline')).searchParams.get('symbol'),riskCalls[0].searchParams.get('symbol'));
   ui.pick({kind:'desk',id:'BTC'});
-  assert.match(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Lucas · Sofia · Mateo · Valentina/);
+  assert.match(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Lucas · Leo · Mateo · Vincent/);
   ui.pick({kind:'room',id:'manuel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Risk/);
   ui.pick({kind:'screen',id:'equity'});assert.match(r.querySelector('[data-floor-modal-body]').innerHTML,/Kapital · live/);
   const before=s.getItem(firmKey('one'));
@@ -237,6 +253,19 @@ test('the mounted floor opens one position per desk from Bybit-shaped data, paus
   assert.equal(heldSymbols(fresh).length,0);assert.equal(fresh.paused,false);
   assert.equal(s.getItem(firmKey('one')+':before-reset:'+runtime.at),before);assert.equal(s.getItem(equityKey('one')),'[]');
   runtime.user=null;await ui.refreshLive();assert.match(r.querySelector('[data-floor-status]').textContent,/Logga in/);
+});
+
+test('changing users hides the previous desk and modal and news links reject scripts',async()=>{
+  const r=root(),s=storage(),runtime={at:TIME,user:'one',active:true},shown=new Set();
+  r.querySelector('[data-floor-modal]').classList={add:x=>shown.add(x),remove:x=>shown.delete(x)};
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>true,storage:s,locks:locks(),now:()=>runtime.at,
+    grab:fakeGrab(runtime),getNews:()=>({items:[{title:'Unsafe',ts:TIME,link:'javascript:alert(1)'},{title:'Safe',ts:TIME,link:'https://example.com/news'}]})});
+  await ui.refresh();ui.pick({kind:'desk',id:'BTC'});ui.pick({kind:'screen',id:'news'});
+  assert.equal(r.querySelector('[data-floor-panel]').hidden,false);assert.ok(shown.has('show'));
+  assert.doesNotMatch(r.querySelector('[data-floor-modal-body]').innerHTML,/javascript:/);
+  assert.match(r.querySelector('[data-floor-modal-body]').innerHTML,/https:\/\/example.com\/news/);
+  runtime.user='two';await ui.refreshLive();
+  assert.equal(r.querySelector('[data-floor-panel]').hidden,true);assert.equal(shown.has('show'),false);
 });
 
 test('a failed firm write leaves no in-memory trade and the status says why',async()=>{
@@ -248,4 +277,21 @@ test('a failed firm write leaves no in-memory trade and the status says why',asy
   ui.pick({kind:'desk',id:'SHIB'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Väntar på timsignal/);assert.doesNotMatch(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);
   runtime.active=false;s.setItem=save;runtime.at=TIME+70000;await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null,'inactive pages fetch nothing');
+});
+
+test('the office renderer runs on desktop and mobile and reopening cannot double the animation loop',()=>{
+  const r=root(),frames=[],canvas=r.querySelector('[data-floor-canvas]');let draws=0;
+  const ctx={measureText:s=>({width:String(s).length*6}),
+    createLinearGradient:()=>({addColorStop(){}}),createRadialGradient:()=>({addColorStop(){}})};
+  for(const method of ['beginPath','moveTo','lineTo','closePath','fill','stroke','fillRect','roundRect','arc','ellipse','fillText','setLineDash','save','restore','rect','clip','strokeRect','setTransform','transform']){
+    ctx[method]=(...args)=>{for(const arg of args)if(typeof arg==='number')assert.ok(Number.isFinite(arg),method+' has a finite coordinate');if(method==='setTransform')draws++;};
+  }
+  Object.assign(canvas,{clientWidth:1440,clientHeight:900,getContext:()=>ctx});
+  const ui=mountFloor(r,{getUser:()=> 'one',isActive:()=>false,isVisible:()=>true,grab:async()=>{},storage:storage(),now:()=>TIME,raf:fn=>frames.push(fn)});
+  ui.show();ui.hide();ui.show();assert.equal(frames.length,2);
+  frames.shift()();assert.equal(frames.length,1,'old callback cannot schedule a second loop');assert.equal(draws,0);
+  frames.shift()();assert.equal(frames.length,1);assert.ok(draws>0);
+  canvas.clientWidth=390;canvas.clientHeight=700;frames.shift()();assert.equal(frames.length,1);
+  assert.equal(canvas.width,390);assert.equal(canvas.height,700);
+  ui.hide();frames.shift()();assert.equal(frames.length,0);
 });

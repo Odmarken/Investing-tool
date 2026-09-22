@@ -398,18 +398,19 @@ export async function molnKor(uid, logg = () => {}){
   const momRef = db.doc('momentum/' + uid), metaRef = db.doc('floor/' + uid);
   const deskRefs = FLOOR.desks.map(s => db.doc('floor/' + uid + '/desks/' + s)), eqRef = db.doc('floor/' + uid + '/data/equity');
   const first = await db.getAll(momRef, metaRef, ...deskRefs);
-  let momentum = null, firm = null, momFel = null, floorFel = null;
-  try{ momentum = first[0].exists ? lasMomentum(first[0].data()) : null; }catch(e){ momFel = e.message; }
-  try{ firm = first[1].exists ? lasFloor(first[1].data(), first.slice(2)) : null; }catch(e){ floorFel = e.message; }
+  let momentum = null, firm = null;
+  try{ momentum = first[0].exists ? lasMomentum(first[0].data()) : null; }catch{/* Revalidated in the transaction below. */}
+  try{ firm = first[1].exists ? lasFloor(first[1].data(), first.slice(2)) : null; }catch{/* Revalidated in the transaction below. */}
   /* Hämtningen är långsam och sker före transaktionen; transaktionen läser
      om kontona så att en paus eller återställning från sidan inte skrivs över. */
   let plan;
   try{ plan = await fetchPlan(bybit, now, momentum, firm); }catch(e){ plan = { mode: 'error', error: e.message }; }
   const t = now();
-  let firmUt = null;
+  let firmUt = null, firmRevision = null;
   await db.runTransaction(async tx => {
     const snaps = await tx.getAll(momRef, metaRef, ...deskRefs);
-    let curM = null, curF = null, felM = momFel, felF = floorFel;
+    firmUt = null; firmRevision = null;
+    let curM = null, curF = null, felM = null, felF = null;
     try{ curM = snaps[0].exists ? lasMomentum(snaps[0].data()) : null; }catch(e){ felM = e.message; }
     try{ curF = snaps[1].exists ? lasFloor(snaps[1].data(), snaps.slice(2)) : null; }catch(e){ felF = e.message; }
     const ut = applyPlan(plan, curM, curF, t);
@@ -423,6 +424,7 @@ export async function molnKor(uid, logg = () => {}){
       if(andrad) for(const [i, symbol] of FLOOR.desks.entries()) if(next.desks[symbol] !== curF.desks[symbol]) tx.set(deskRefs[i], { account: rent(next.desks[symbol]), updatedAt: t });
       if(andrad || skrivLugnt(d)) tx.set(metaRef, { ...d, ...(andrad ? { updatedAt: t } : {}), lastRun: t, lastError: felF ?? ut.firm.error ?? null });
       firmUt = next;
+      firmRevision = andrad ? t : (d.updatedAt ?? null);
     }
     if(ut.momentum.error) logg('moln ' + uid + ' momentum: ' + ut.momentum.error);
     if(ut.firm.error) logg('moln ' + uid + ' floor: ' + ut.firm.error);
@@ -431,7 +433,14 @@ export async function molnKor(uid, logg = () => {}){
     try{
       const snap = await eqRef.get(), points = snap.exists ? (snap.data().points || []) : [];
       const next = await sampleFirmEquity(bybit, now, firmUt, points);
-      if(next !== points) await eqRef.set({ points: rent(next), updatedAt: now() });
+      if(next !== points) await db.runTransaction(async tx => {
+        const [meta, current] = await tx.getAll(metaRef, eqRef);
+        // Quotes were fetched outside the transaction. A reset or a newer
+        // account/curve update must never receive this old firm's sample.
+        if(!meta.exists || meta.data().createdAt !== firmUt.createdAt || (meta.data().updatedAt ?? null) !== firmRevision) return;
+        if(current.exists !== snap.exists || (current.exists && !current.updateTime.isEqual(snap.updateTime))) return;
+        tx.set(eqRef, { points: rent(next), updatedAt: now() });
+      });
     }catch(e){ logg('moln ' + uid + ' kapitalkurva: ' + e.message); }
   }
   return { mode: plan.mode, momentum: !!momentum, floor: !!firm };
