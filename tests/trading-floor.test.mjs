@@ -199,6 +199,16 @@ test('traders sit at their desk during a trade and roam the office when the desk
   stepAgents(quick,{...idle,reduced:true},TIME+2e9,0.1,rnd);assert.ok(quick.every(a=>a.state!=='walking'));
 });
 
+test('Manuel follows the news while Miguel visits the desk at risk',()=>{
+  const staff=createAgents(seeded()).filter(a=>a.room==='manuel'||a.room==='miguel');
+  stepAgents(staff,{inTrade:{BTC:true},riskDesk:'BTC',reduced:true},TIME,.1,()=>.5);
+  const manuel=staff.find(a=>a.room==='manuel'),miguel=staff.find(a=>a.room==='miguel');
+  assert.equal(ROOMS.find(r=>r.id==='manuel').role,'Makro & nyheter');
+  assert.equal(ROOMS.find(r=>r.id==='miguel').role,'Risk');
+  assert.equal(manuel.activity,'news');assert.equal(manuel.at.kind,'news');
+  assert.equal(miguel.activity,'visit');assert.equal(miguel.at.key,'visit:BTC');
+});
+
 test('clickable regions cover the desks, rooms, screens and the coffee corner',()=>{
   const regions=REGIONS();
   for(const d of DESK_GEOMETRY){const p=project(d.x0+0.75,d.y0+2,10),hit=hitAt(p.x,p.y,regions);assert.equal(hit?.kind,'desk');assert.equal(hit.id,d.symbol);}
@@ -245,7 +255,8 @@ test('the mounted floor opens one position per desk from Bybit-shaped data, paus
   assert.notEqual(runtime.urls.find(u=>u.pathname.endsWith('/mark-price-kline')).searchParams.get('symbol'),riskCalls[0].searchParams.get('symbol'));
   ui.pick({kind:'desk',id:'BTC'});
   assert.match(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Lucas · Leo · Mateo · Vincent/);
-  ui.pick({kind:'room',id:'manuel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Risk/);
+  ui.pick({kind:'room',id:'miguel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Miguel · Risk/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Närmast SL/);
+  ui.pick({kind:'room',id:'manuel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Manuel · Makro & nyheter/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Kryptobias i flödet/);
   ui.pick({kind:'screen',id:'equity'});assert.match(r.querySelector('[data-floor-modal-body]').innerHTML,/Kapital · live/);
   const before=s.getItem(firmKey('one'));
   await ui.reset();

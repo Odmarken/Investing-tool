@@ -20,8 +20,8 @@ const STATUS={trade:'I affär',waiting:'Väntar på timsignal',cooldown:'Karens'
 const ROLE_TEXT={
   elias:'Chefen. Sitter i hörnrummet med firmans siffror, går ut på golvet och tittar över axeln på borden som är i affär.',
   pablo:'Analytikern. Läser bara det kontona vet, precis som i signalkorten. Ingen prognos, ingen API.',
-  manuel:'Riskchefen. Håller koll på marginal, planerad SL-förlust och avståndet till likvidation. Går till bordet som ligger närmast sitt stopp.',
-  miguel:'Makro och nyheter. Står vid nyhetsskärmen och väger rubrikerna om världen och krypto.'
+  manuel:'Makro och nyheter. Står vid nyhetsskärmen och väger rubrikerna om världen och krypto.',
+  miguel:'Riskchefen. Håller koll på marginal, planerad SL-förlust och avståndet till likvidation. Går till bordet som ligger närmast sitt stopp.'
 };
 
 // cloud (optional): {available(), subscribe(uid,onState), initialize(uid,{firm,equity}), togglePause(uid), reset(uid)}.
@@ -209,7 +209,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
           '<p class="dim">'+(firm.paused?'Nya köp är pausade. Öppna positioner följer fortfarande SL, TP och tidsgräns.':'Firman handlar. Varje bord får högst ett köp per timme och en timmes karens efter avslut.')+(cloudUid?' Firman ligger i molnet och handlas av molnfunktionen varje minut.':' Firman sparas i denna webbläsare.')+'</p>';
       }else if(room.id==='pablo'){
         html=head(esc(room.name)+' · Analys','läser golvet')+intro+'<div class="floor-pablo" data-floor-pablo></div><p class="dim">Lokal läsning av det kontona vet. Klicka i texten för att hoppa till slutet.</p>';
-      }else if(room.id==='manuel'){
+      }else if(room.id==='miguel'){
         const rows=riskRows(firm,live),margin=rows.reduce((s,r)=>s+r.budget,0),risk=rows.reduce((s,r)=>s+r.initialRisk,0);
         html=head(esc(room.name)+' · Risk',rows.length?rows.length+' öppna positioner':'inga öppna positioner')+intro+
           '<div class="floor-panel-grid">'+row('Låst marginal',money(margin))+row('Planerad SL-förlust',money(risk),risk?'neg':'')+row('Andel av kapitalet',live.total?number(margin/live.total*100,1)+' % marginal · '+number(risk/live.total*100,1)+' % risk':'–')+row('Närmast SL',rows.filter(r=>r.toSl!==null).sort((a,b)=>a.toSl-b.toSl)[0]?.symbol??'–')+'</div>'+

@@ -11,8 +11,8 @@ export const FLOOR=Object.freeze({version:'trading-floor-v1',desks:Object.freeze
 export const ROOMS=Object.freeze([
   {id:'elias',name:'Elias',role:'VD'},
   {id:'pablo',name:'Pablo',role:'Analys'},
-  {id:'manuel',name:'Manuel',role:'Risk'},
-  {id:'miguel',name:'Miguel',role:'Makro & nyheter'}
+  {id:'manuel',name:'Manuel',role:'Makro & nyheter'},
+  {id:'miguel',name:'Miguel',role:'Risk'}
 ]);
 const NAMES=Object.freeze(['Lucas','Leo','Mateo','Vincent','Diego','Carlos','Nils','Erik','Hugo','Adam','Rafael','Ivan',
   'Tomas','Johan','Andrés','Charlie','Oskar','Viktor','Sergio','Liam','Bruno','Marco','Felix','Noah']);

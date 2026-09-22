@@ -149,7 +149,7 @@ function decide(agent,world,agents,now,rnd){
   let s=null,kind='walk';
   if(agent.room==='elias'){const v=inTrade.length?visit(inTrade[Math.floor(rnd()*inTrade.length)]):null;if(v){s=v;kind='visit';}else{s=freeSpot('screen',taken,rnd);kind='screen';}}
   else if(agent.room==='pablo'){s=freeSpot('screen',taken,rnd);kind='screen';if(!s||rnd()<.3){const v=inTrade.length?visit(inTrade[0]):null;if(v){s=v;kind='visit';}}}
-  else if(agent.room==='manuel'){const v=world.riskDesk?visit(world.riskDesk):null;if(v){s=v;kind='visit';}else{s=freeSpot('coffee',taken,rnd);kind='coffee';}}
+  else if(agent.room==='miguel'){const v=world.riskDesk?visit(world.riskDesk):null;if(v){s=v;kind='visit';}else{s=freeSpot('coffee',taken,rnd);kind='coffee';}}
   else{s=freeSpot('news',taken,rnd);kind='news';if(!s){s=freeSpot('coffee',taken,rnd);kind='coffee';}}
   if(!s){s=walkSpot(rnd);kind='walk';}
   return send(agent,s,kind,now,rnd,reduced);
