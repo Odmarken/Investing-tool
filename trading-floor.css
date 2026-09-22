@@ -4,7 +4,7 @@
 body.krypto #btnFloor{display:inline-flex}
 body.floor #btnFloor{border-color:#86704d;color:#6c583b;box-shadow:0 0 0 1px rgba(117,101,75,.2),0 0 16px rgba(82,76,64,.1)}
 body.floor{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
-body.floor>.wrap,body.floor>footer,body.floor>.banner,body.floor .tape,body.floor #btnKrypto{display:none!important}
+body.floor>.wrap,body.floor>footer,body.floor>.banner,body.floor .tape,body.floor #btnKrypto,body.floor #aktivRuta{display:none!important}
 #tradingFloor[hidden]{display:none}
 #tradingFloor{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;color:#343d3b;font-family:var(--sans,Arial,sans-serif)}
 .floor-stage{flex:1 1 auto;min-height:0;position:relative;overflow:hidden;background:#cbc7bd}

@@ -47,6 +47,19 @@ test('signed-out visitors do not run account ticks, polling or dashboard refresh
   // No account/market/DOM globals exist here: reaching any side effect would fail.
 });
 
+test('trading floor suppresses signal popups and sound without replaying them on exit',()=>{
+  const location={hash:'#floor'},seen=new Set(),state={lage:'krypto',signals:[{id:'first',inst:'BTC',status:'ACTIVE'}]};
+  let popups=0,sounds=0;
+  const ctx=context(['bevakaAktiveringar'],{location,STATE:state,AKTIVA_SEDDA:seen,aktivSeddInit:true,
+    INSTR:{BTC:{}},grupp:()=> 'crypto',visaAktivering:()=>popups++,spelaLjud:()=>sounds++});
+  ctx.bevakaAktiveringar();assert.ok(seen.has('first'));assert.equal(popups,0);assert.equal(sounds,0);
+  location.hash='';ctx.bevakaAktiveringar();assert.equal(popups,0);assert.equal(sounds,0);
+  state.signals.push({id:'second',inst:'BTC',status:'ACTIVE'});ctx.bevakaAktiveringar();
+  assert.equal(popups,1);assert.equal(sounds,1);
+  // Direct calls must also stop before creating any DOM nodes.
+  context(['visaAktivering'],{location:{hash:'#floor'}}).visaAktivering({});
+});
+
 test('authentication swaps landing/panel, resumes once, and invalidates pending work on logout',()=>{
   const nodes=new Map(),classes=new Set();let refreshes=0,routes=0,floors=0;
   const auth={anvandare:null},state={modeVersion:5,refreshPending:true};

@@ -3862,6 +3862,7 @@ function spelaLjud(){
 }
 
 function visaAktivering(s){
+  if(location.hash === '#floor') return;
   let box = $('#aktivRuta');
   if(!box){ box = document.createElement('div'); box.id = 'aktivRuta'; document.body.appendChild(box); }
   const d = INSTR[s.inst] ? INSTR[s.inst].dec : 2, st = kryptoStorlek(s);
@@ -3902,7 +3903,7 @@ function bevakaAktiveringar(){
   for(const x of aktiva){
     if(AKTIVA_SEDDA.has(x.id)) continue;
     AKTIVA_SEDDA.add(x.id);
-    if(STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // bara kryptoläget, tills vidare
+    if(location.hash === '#floor' || STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // inga signalrutor eller ljud på trading floor
     visaAktivering(x);
     if(!larmat){ spelaLjud(); larmat = true; }
   }

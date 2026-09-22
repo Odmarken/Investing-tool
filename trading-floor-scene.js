@@ -12,12 +12,20 @@ export const WALL_H=190;
 export const AISLES=Object.freeze({vertical:Object.freeze([6.5,11,15.5,20]),horizontal:Object.freeze([1.4,8,15])});
 export const project=(x,y,z=0)=>({x:ORIGIN.x+(x-y)*TILE.w/2,y:ORIGIN.y+(x+y)*TILE.h/2-z});
 const near=(a,b)=>Math.abs(a-b)<1e-6;
-// Derived from the current open trade, never from accumulated desk profits.
+// Match the open trade's net return on margin, never accumulated desk profits.
 // No stored celebration state: closing, losing the threshold or stale prices
 // removes the props on the very next frame, including any airborne banknotes.
 export function deskCelebration(desk,now){
-  if(desk?.status!=='trade'||!Number.isFinite(desk.openReturn)||!Number.isFinite(desk.celebrationUntil)||now>desk.celebrationUntil)return null;
+  if(!currentTradeReturn(desk,now))return null;
   return desk.openReturn>=.5?'lounge':desk.openReturn>=.2?'money':null;
+}
+const currentTradeReturn=(desk,now)=>desk?.status==='trade'&&Number.isFinite(desk.openReturn)&&Number.isFinite(desk.celebrationUntil)&&now<=desk.celebrationUntil;
+export function deskTradeLabel(desk,now){
+  if(desk?.status!=='trade')return desk?.status==='paused'?'pausad':desk?.status==='cooldown'?'karens':'väntar signal';
+  if(!currentTradeReturn(desk,now))return 'väntar på pris';
+  // Truncate to avoid displaying +20% while the actual return is still below it.
+  const pct=Math.trunc(desk.openReturn*10000)/100;
+  return (pct>=0?'+':'')+pct.toFixed(2).replace('.',',')+' % nu';
 }
 export function celebrationPose(agent,mode,now,reduced=false){
   if(agent.kind!=='trader'||!mode)return null;
@@ -474,8 +482,9 @@ export function createScene(canvas){
       add(r.plant.x+r.plant.y,()=>plant(r.plant.x,r.plant.y));
     }
     for(const d of DESK_GEOMETRY){
-      const v=view.desks[d.symbol],glow=v.status==='trade'?(v.pnl===null?'rgba(95,240,255,.45)':v.pnl>=0?'rgba(61,220,132,.45)':'rgba(255,51,85,.45)'):'rgba(84,114,111,.18)';
-      const screen=v.status==='trade'?(v.pnl===null?C.cyan:v.pnl>=0?C.pos:C.neg):C.screenIdle;
+      const v=view.desks[d.symbol],gain=currentTradeReturn(v,now)?v.openReturn:null;
+      const glow=v.status==='trade'?(gain===null?'rgba(95,240,255,.45)':gain>=0?'rgba(61,220,132,.45)':'rgba(255,51,85,.45)'):'rgba(84,114,111,.18)';
+      const screen=v.status==='trade'?(gain===null?C.cyan:gain>=0?C.pos:C.neg):C.screenIdle;
       // One long bench. Its depth sits between the far seats (behind it) and the near seats (in front).
       add(d.x1+d.y0+1,()=>{
         box(d.x0,d.y0,d.x1,d.y1,24,C.deskTop,C.deskLeft,C.deskRight,C.deskLine);
@@ -520,9 +529,9 @@ export function createScene(canvas){
     }
     for(const r of ROOM_GEOMETRY)plate(2.2,r.y0+2,150,[{text:(r.name+' · '+r.role).toUpperCase(),font:'800 8px '+SANS,color:C.text}],C.pink,r.role.length>8?118:96);
     for(const d of DESK_GEOMETRY){
-      const v=view.desks[d.symbol],border=v.status==='trade'?(v.pnl===null?C.cyan:v.pnl>=0?C.pos:C.neg):v.status==='paused'?C.dim:v.status==='cooldown'?C.amber:'#bcc2b2';
-      const line=v.status==='trade'?(v.pnl===null?'väntar på pris':(v.pnl>=0?'+':'')+v.pnl.toFixed(2)+' $'):v.status==='paused'?'pausad':v.status==='cooldown'?'karens':'väntar signal';
-      plate(d.x0+0.75,d.y0+2,84,[{text:d.symbol,font:'800 11px '+SANS,color:C.text},{text:line,font:'700 8px '+MONO,color:border}],border,74);
+      const v=view.desks[d.symbol],border=v.status==='trade'?(!currentTradeReturn(v,now)?C.cyan:v.openReturn>=0?C.pos:C.neg):v.status==='paused'?C.dim:v.status==='cooldown'?C.amber:'#bcc2b2';
+      const line=deskTradeLabel(v,now);
+      plate(d.x0+0.75,d.y0+2,84,[{text:d.symbol,font:'800 11px '+SANS,color:C.text},{text:line,font:'700 8px '+MONO,color:border}],border,88);
     }
     plate(FIKA.table.x,FIKA.table.y,64,[{text:'FIKA',font:'800 8px '+SANS,color:C.text}],'#b4a180',52);
     plate(FIKA.cooler.x,FIKA.cooler.y,56,[{text:'VATTEN',font:'800 7px '+SANS,color:C.text}],'#7fc4f5',52);

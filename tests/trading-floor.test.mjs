@@ -4,7 +4,7 @@ import {FLOOR,ROOMS,newFirm,validateFirm,readFirm,firmKey,equityKey,firmPosition
 import {ACTIVE} from '../crypto-momentum-active.js';
 import {LEVERAGE} from '../crypto-leverage.js';
 import {CONTRACTS} from '../bybit-contracts.js';
-import {AISLES,ROOM_GEOMETRY,DESK_GEOMETRY,FIKA,allLocations,onNetwork,routeBetween,routeTo,createAgents,stepAgents,REGIONS,hitAt,project,SCREENS,deskCelebration,celebrationPose} from '../trading-floor-scene.js';
+import {AISLES,ROOM_GEOMETRY,DESK_GEOMETRY,FIKA,allLocations,onNetwork,routeBetween,routeTo,createAgents,stepAgents,REGIONS,hitAt,project,SCREENS,deskCelebration,celebrationPose,deskTradeLabel} from '../trading-floor-scene.js';
 import {mountFloor} from '../trading-floor-ui.js';
 
 const TIME=Date.parse('2026-09-22T12:00:00Z'),HOUR=3600000,STEP=LEVERAGE.step;
@@ -296,8 +296,9 @@ test('the office renderer runs on desktop and mobile and reopening cannot double
   ui.hide();frames.shift()();assert.equal(frames.length,0);
 });
 
-test('celebrations follow open return thresholds, downgrade and stop on close or stale quotes',()=>{
+test('celebrations follow current trade return thresholds, downgrade and stop on close or stale quotes',()=>{
   const desk={status:'trade',pnl:1000,openReturn:.1999,celebrationUntil:TIME+15000};
+  assert.equal(deskCelebration({...desk,pnl:1000,openReturn:.1},TIME),null,'previous wins must not trigger a celebration at 10% on the current trade');
   for(const [value,mode] of [[.1999,null],[.2,'money'],[.4999,'money'],[.5,'lounge'],[.8,'lounge'],[.3,'money'],[.19,null],[-.2,null],[null,null],[NaN,null],[Infinity,null]]){
     assert.equal(deskCelebration({...desk,openReturn:value},TIME),mode);
   }
@@ -305,6 +306,16 @@ test('celebrations follow open return thresholds, downgrade and stop on close or
   assert.equal(deskCelebration({...desk,openReturn:1},TIME+15001),null);
   assert.equal(deskCelebration({...desk,openReturn:1},TIME+15000),'lounge');
   assert.equal(deskCelebration({...desk,openReturn:1,celebrationUntil:undefined},TIME),null);
+});
+
+test('the desk label shows current trade percent and shares freshness and thresholds with celebrations',()=>{
+  const desk={status:'trade',pnl:1000,openReturn:.1,celebrationUntil:TIME+15000};
+  assert.equal(deskTradeLabel(desk,TIME),'+10,00 % nu');assert.equal(deskCelebration(desk,TIME),null);
+  assert.equal(deskTradeLabel({...desk,openReturn:.19999},TIME),'+19,99 % nu');
+  assert.equal(deskTradeLabel({...desk,openReturn:.5},TIME),'+50,00 % nu');
+  assert.equal(deskTradeLabel({...desk,openReturn:-.1},TIME),'-10,00 % nu');
+  assert.equal(deskTradeLabel(desk,TIME+15001),'väntar på pris');
+  assert.equal(deskTradeLabel({...desk,status:'cooldown'},TIME),'karens');
 });
 
 test('all four traders jump on their own table and recline without changing simulation state',()=>{
