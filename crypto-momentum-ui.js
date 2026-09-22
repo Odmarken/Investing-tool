@@ -2,13 +2,13 @@ import { ACTIVE as MOMENTUM, readActiveAccount as readMomentum, newActiveAccount
 import {ACTIVE_PROFILES} from './crypto-momentum-active-signal.js';
 import {ACTIVE_RESEARCH} from './crypto-momentum-active-research.js';
 import {liquidationPrice} from './crypto-leverage.js';
-import {momentumLiveValue,QUOTE_INTERVAL} from './crypto-momentum-live.js';
+import {momentumLiveValue,QUOTE_INTERVAL,fetchMomentumQuotes} from './crypto-momentum-live.js';
 const money = n => !Number.isFinite(n) ? '–' : n.toFixed(2)+' $';
 const price = n => !Number.isFinite(n) ? '–' : n.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:n<.01?10:n<1?6:2})+' $';
 const date = t => t ? new Date(t).toLocaleString('sv-SE',{timeZone:'Europe/Stockholm'}) : '–';
 const signed = n => (n>=0?'+':'')+n.toFixed(2);
 const time = t => new Date(t).toLocaleTimeString('sv-SE',{timeZone:'Europe/Stockholm'});
-export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null, storage = {getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)}, locks = navigator.locks, now = () => Date.now() }) {
+export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null, storage = {getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)}, locks = navigator.locks, now = () => Date.now(), cloud = null }) {
   root.innerHTML = `<div class="ai-top"><label><input type="checkbox" data-momentum-toggle> AI-momentum · aktiv demo med SL / TP</label>
     <button type="button" class="btn" data-momentum-export>Exportera momentumkonto</button>
     <button type="button" class="btn" data-momentum-reset title="Arkivera nuvarande momentumkonto och börja om med 100 $, utan öppna positioner och med automatiken pausad">Återställ till 100 $</button></div>
@@ -38,6 +38,11 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     '<p>Ingen profil valdes efter kontrollperiodens resultat. Kortare hålltid och SL/TP bevisar inte lönsamhet. En ny meningsfull prövning är framtida demo med dessa frysta regler.</p></details>';
   const toggle = root.querySelector('[data-momentum-toggle]');
   let uid = null, account = null, snapshot = null, error = '', riskError='', busy = false, resetting = false, lastCheck = -Infinity, generation = 0;
+  // cloud (optional): {available(), subscribe(uid,onState), save(uid,account), archive(uid,account)}.
+  // With a cloud store the account is read from it and traded by the cloud runner;
+  // this page then only fetches quotes for the live figures, toggles and resets.
+  let cloudUnsub=null,cloudUid=null,cloudState=null,cloudError='',migrating=false;
+  const cloudOn=()=>!!cloud&&typeof cloud.available==='function'&&cloud.available();
   let quotes={},quoteKey='',quoteBusy=false,quoteFailed=false,lastQuoteCheck=-Infinity,historyStamp='';
   const positionKey=()=>JSON.stringify(account?.sleeves.filter(s=>s.position).map(s=>[s.symbol,s.position.at,s.position.entry,s.position.units])??[]);
   function alignQuotes(){
@@ -52,10 +57,42 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     if (!locks?.request) return Promise.reject(Error('Automatiken kräver en webbläsare med stöd för säkra fliklås'));
     return locks.request(key(user),callback);
   };
+  function attachCloud(){
+    const want=cloudOn()?uid:null;
+    if(want===cloudUid)return;
+    if(cloudUnsub){cloudUnsub();cloudUnsub=null;}
+    cloudUid=want;cloudState=null;cloudError='';migrating=false;
+    if(!want)return;
+    const user=want;
+    cloudUnsub=cloud.subscribe(user,state=>{
+      if(user!==cloudUid)return;
+      if(state?.error){cloudError='Molnet: '+state.error;render();return;}
+      cloudError='';
+      if(state?.missing){void migrate(user);return;}
+      cloudState=state;
+      try{sync();}catch(e){account=null;error=e.message;}
+      render();
+    });
+  }
+  // The first cloud sync uploads this browser's local account once, so its history is kept.
+  async function migrate(user){
+    if(migrating)return;migrating=true;
+    try{await cloud.save(user,readMomentum(storage,key(user)));}
+    catch(e){cloudError='Kunde inte ladda upp momentumkontot till molnet: '+e.message;render();}
+    finally{migrating=false;}
+  }
+  function cloudNote(){
+    if(!cloudUid)return '';
+    const run=cloudState?.lastRun;
+    if(!run)return ' Körs i molnet: väntar på första molnvarvet.';
+    const age=now()-run;
+    return ' Körs i molnet · senaste varv '+time(run)+(age>180000?' · molnet har inte kört på '+Math.round(age/60000)+' min':'')+(cloudState?.lastError?' · molnfel: '+cloudState.lastError:'')+'.';
+  }
   function sync() {
     const user = getUser();
     if (user !== uid) { uid=user; account=null; snapshot=null; error='';riskError=''; lastCheck=-Infinity; quotes={};quoteKey='';quoteFailed=false;lastQuoteCheck=-Infinity;generation++; }
-    if (uid) account = readMomentum(storage,key(uid));
+    attachCloud();
+    if (uid) account = cloudUid ? (cloudState ? readMomentum({getItem:()=>JSON.stringify(cloudState.account)},key(uid)) : null) : readMomentum(storage,key(uid));
     alignQuotes();
     return uid;
   }
@@ -69,11 +106,11 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     root.querySelector('[data-momentum-policy]').textContent='Experiment · timbeslut · 1 position · max 50 % marginal · SL + TP '+profile.rewardMultiple+'× prisavståndet · högst '+profile.maxHoldMs/MOMENTUM.hour+' h';
     const liveStatus=!hasPosition?'':live.reason||((quoteFailed?'Prisuppdateringen misslyckades · senaste pris ':'Pris uppdaterat ')+time(live.at)+' · hämtas var 5:e sekund');
     root.querySelector('[data-momentum-live-status]').textContent=liveStatus;
-    root.querySelector('[data-momentum-status]').textContent = riskError || error || account?.waitReason || (!uid ? 'Logga in för momentumdemo.' :
+    root.querySelector('[data-momentum-status]').textContent = cloudError || riskError || error || account?.waitReason || (!uid ? 'Logga in för momentumdemo.' : cloudUid && !account ? 'Hämtar momentumkontot från molnet…' :
       (account?.enabled ? 'Automatik på' : 'Nya köp pausade') + (busy ? ' · hämtar timpriser…' : '') +
       (account?.lastSignalAt ? ' · senaste timbeslut '+date(account.activeDecisions.at(-1).at)+'.' : ' · väntar på första timbeslutet.')+
       (account?.cooldownUntil>now()?' Nästa möjliga köp efter '+date(account.cooldownUntil)+'.':'')+
-      (hasPosition && value===null ? ' '+live.reason+'.' : ''));
+      (hasPosition && value===null ? ' '+live.reason+'.' : '')+cloudNote());
     if(account?.migrationPending)root.querySelector('[data-momentum-status]').textContent+=' Äldre positioner avslutas vid nästa kompletta skyddskontroll före övergång till SL/TP.';
     const tile=(label,text,cls='')=>'<div class="btstat"><i>'+label+'</i><b class="'+cls+'">'+text+'</b></div>';
     const net=value===null?null:value-MOMENTUM.start, cls=net===null?'':net>=0?'pos':'neg';
@@ -112,6 +149,7 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     if(resetting)return;
     try { sync(); } catch(e) { account=null; error=e.message; render(); return; }
     render();
+    if(cloudUid)return;
     if (!uid || !isActive() || busy || quoteBusy || !force && now()-lastCheck<60000 || !account.enabled && !account.sleeves.some(s=>s.position)) return;
     const user=uid, token=generation;
     busy=true; lastCheck=now(); render();
@@ -132,6 +170,11 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
   toggle.onchange=async()=>{
     const enabled=toggle.checked, user=getUser(); generation++;
     if(!user) return;
+    if(cloudUid){
+      try{if(!account)throw Error('kontot har inte laddats från molnet');await cloud.save(user,{...account,enabled});error='';}
+      catch(e){error='Inställningen kunde inte sparas i molnet: '+e.message;}
+      render();return;
+    }
     try {
       await exclusive(user,()=>{
         if(getUser()!==user) return;
@@ -144,6 +187,12 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
   async function reset(){
     const user=getUser();if(!user||resetting)return;
     const token=++generation;resetting=true;render();
+    if(cloudUid){
+      try{if(!account)throw Error('kontot har inte laddats från molnet');await cloud.archive(user,account);await cloud.save(user,newMomentumAccount());quotes={};error='';riskError='';}
+      catch(e){if(getUser()===user)error='Återställningen misslyckades: '+e.message;}
+      finally{resetting=false;try{sync();}catch(e){account=null;error=e.message;}render();}
+      return;
+    }
     try{
       await exclusive(user,()=>{
         if(getUser()!==user||token!==generation)return;
@@ -168,6 +217,15 @@ export function mountMomentum(root, { getUser, isActive, grab, rulesRoot = null,
     if(resetting)return;
     try{sync();}catch(e){account=null;error=e.message;render();return;}
     render();
+    if(cloudUid){
+      // Cloud mode: quotes for the live figure only; SL, TP and funding settle in the cloud.
+      if(!uid||!isActive()||quoteBusy||!account||!account.sleeves.some(s=>s.position)||now()-lastQuoteCheck<QUOTE_INTERVAL)return;
+      const user=uid,token=generation;quoteBusy=true;lastQuoteCheck=now();
+      try{const fetched=await fetchMomentumQuotes(grab,account.sleeves.filter(s=>s.position).map(s=>s.symbol),now);if(getUser()!==user||token!==generation)return;alignQuotes();acceptQuotes(fetched);quoteFailed=false;}
+      catch(e){if(getUser()===user&&token===generation)quoteFailed=true;}
+      finally{quoteBusy=false;render();}
+      return;
+    }
     if(!uid||!isActive()||busy||quoteBusy||!account.sleeves.some(s=>s.position)||now()-lastQuoteCheck<QUOTE_INTERVAL)return;
     const user=uid,token=generation,positions=quoteKey;
     quoteBusy=true;lastQuoteCheck=now();

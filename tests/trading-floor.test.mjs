@@ -217,7 +217,6 @@ test('the mounted floor opens one position per desk from Bybit-shaped data, paus
   assert.deepEqual(heldSymbols(firm),[...FLOOR.desks]);
   for(const symbol of FLOOR.desks)assert.equal(firm.desks[symbol].sleeves.find(x=>x.position).symbol,symbol);
   assert.match(r.querySelector('[data-floor-status]').textContent,/Firman handlar · 6 av 6 bord i affär/);
-  assert.match(r.querySelector('[data-floor-legend]').innerHTML,/data-floor-pick="desk:BTC"/);
   assert.equal(readEquity(s,equityKey('one')).length,1);
   await ui.togglePause();
   assert.equal(readFirm(s,firmKey('one'),TIME).paused,true);assert.match(r.querySelector('[data-floor-pause]').textContent,/Återuppta/);
@@ -246,7 +245,7 @@ test('a failed firm write leaves no in-memory trade and the status says why',asy
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at});
   await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null);assert.equal(r.querySelector('[data-floor-status]').textContent,'Handeln väntar: storage full');
-  assert.match(r.querySelector('[data-floor-legend]').innerHTML,/desk:SHIB/);assert.doesNotMatch(r.querySelector('[data-floor-legend]').innerHTML,/I affär/);
+  ui.pick({kind:'desk',id:'SHIB'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Väntar på timsignal/);assert.doesNotMatch(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);
   runtime.active=false;s.setItem=save;runtime.at=TIME+70000;await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null,'inactive pages fetch nothing');
 });

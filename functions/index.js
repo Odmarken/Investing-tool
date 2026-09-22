@@ -22,6 +22,9 @@ import {
   INSTR, buildContext, generateSignals, assignStatus, LIVE, SEDD, GRADE_RANK, FAM_HANDLAS, handlasGrad, positionsStorlek,
   computeNewsBias, biasLage
 } from './motor.js';
+import { fetchPlan, applyPlan, sampleFirmEquity } from './cloud-runner.js';
+import { readActiveAccount } from './crypto-momentum-active.js';
+import { FLOOR, validateFirm } from './trading-floor.js';
 
 initializeApp();
 const db = getFirestore();
@@ -368,6 +371,91 @@ export const kontoCron = onSchedule(
   }
 );
 
+/* ---------- momentumkontot och trading floor: molnkörning ----------
+   Dokumenten ligger per inloggning: momentum/{uid} och floor/{uid} med
+   borden under desks/ och kapitalkurvan under data/equity. Sidan lyssnar,
+   pausar och återställer; handeln sker här varje minut med samma frysta
+   regler som sidan kör lokalt utan moln. Inga order skickas till Bybit. */
+async function bybit(url, { json = false, timeout = 8000 } = {}){
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), timeout);
+  try{
+    const r = await fetch(url, { signal: ctl.signal, headers: { 'user-agent': UA, accept: 'application/json' } });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const txt = await r.text();
+    return json ? JSON.parse(txt) : txt;
+  }finally{ clearTimeout(t); }
+}
+const rent = x => JSON.parse(JSON.stringify(x));
+const lasMomentum = data => data && data.account ? readActiveAccount({ getItem: () => JSON.stringify(data.account) }, 'moln') : null;
+function lasFloor(meta, deskSnaps){
+  if(!meta) return null;
+  const desks = {};
+  for(const s of deskSnaps) if(s.exists) desks[s.id] = s.data().account;
+  return validateFirm({ version: meta.version, createdAt: meta.createdAt, paused: !!meta.paused, desks });
+}
+export async function molnKor(uid, logg = () => {}){
+  const now = () => Date.now();
+  const momRef = db.doc('momentum/' + uid), metaRef = db.doc('floor/' + uid);
+  const deskRefs = FLOOR.desks.map(s => db.doc('floor/' + uid + '/desks/' + s)), eqRef = db.doc('floor/' + uid + '/data/equity');
+  const first = await db.getAll(momRef, metaRef, ...deskRefs);
+  let momentum = null, firm = null, momFel = null, floorFel = null;
+  try{ momentum = first[0].exists ? lasMomentum(first[0].data()) : null; }catch(e){ momFel = e.message; }
+  try{ firm = first[1].exists ? lasFloor(first[1].data(), first.slice(2)) : null; }catch(e){ floorFel = e.message; }
+  /* Hämtningen är långsam och sker före transaktionen; transaktionen läser
+     om kontona så att en paus eller återställning från sidan inte skrivs över. */
+  let plan;
+  try{ plan = await fetchPlan(bybit, now, momentum, firm); }catch(e){ plan = { mode: 'error', error: e.message }; }
+  const t = now();
+  let firmUt = null;
+  await db.runTransaction(async tx => {
+    const snaps = await tx.getAll(momRef, metaRef, ...deskRefs);
+    let curM = null, curF = null, felM = momFel, felF = floorFel;
+    try{ curM = snaps[0].exists ? lasMomentum(snaps[0].data()) : null; }catch(e){ felM = e.message; }
+    try{ curF = snaps[1].exists ? lasFloor(snaps[1].data(), snaps.slice(2)) : null; }catch(e){ felF = e.message; }
+    const ut = applyPlan(plan, curM, curF, t);
+    const skrivLugnt = d => plan.mode !== 'idle' || t - (d.lastRun || 0) > 300000;
+    if(snaps[0].exists){
+      const d = snaps[0].data(), andrad = !!curM && ut.momentum.account !== curM;
+      if(andrad || skrivLugnt(d)) tx.set(momRef, { ...d, ...(andrad ? { account: rent(ut.momentum.account), updatedAt: t } : {}), lastRun: t, lastError: felM ?? ut.momentum.error ?? null });
+    }
+    if(snaps[1].exists){
+      const d = snaps[1].data(), next = ut.firm.firm, andrad = !!curF && next !== curF;
+      if(andrad) for(const [i, symbol] of FLOOR.desks.entries()) if(next.desks[symbol] !== curF.desks[symbol]) tx.set(deskRefs[i], { account: rent(next.desks[symbol]), updatedAt: t });
+      if(andrad || skrivLugnt(d)) tx.set(metaRef, { ...d, ...(andrad ? { updatedAt: t } : {}), lastRun: t, lastError: felF ?? ut.firm.error ?? null });
+      firmUt = next;
+    }
+    if(ut.momentum.error) logg('moln ' + uid + ' momentum: ' + ut.momentum.error);
+    if(ut.firm.error) logg('moln ' + uid + ' floor: ' + ut.firm.error);
+  });
+  if(firmUt){
+    try{
+      const snap = await eqRef.get(), points = snap.exists ? (snap.data().points || []) : [];
+      const next = await sampleFirmEquity(bybit, now, firmUt, points);
+      if(next !== points) await eqRef.set({ points: rent(next), updatedAt: now() });
+    }catch(e){ logg('moln ' + uid + ' kapitalkurva: ' + e.message); }
+  }
+  return { mode: plan.mode, momentum: !!momentum, floor: !!firm };
+}
+export async function molnVarv(logg = () => {}){
+  const [m, f] = await Promise.all([db.collection('momentum').get(), db.collection('floor').get()]);
+  const ids = [...new Set([...m.docs.map(d => d.id), ...f.docs.map(d => d.id)])];
+  const ut = [];
+  for(const uid of ids){
+    try{ ut.push({ uid, ...(await molnKor(uid, logg)) }); }
+    catch(e){ logg('moln ' + uid + ': ' + (e.message || e)); ut.push({ uid, error: String(e.message || e) }); }
+  }
+  return ut;
+}
+export const molnCron = onSchedule(
+  { schedule: 'every 1 minutes', region: CRON_REGION, timeZone: 'Europe/Stockholm', timeoutSeconds: 120, memory: '256MiB' },
+  async () => {
+    const rader = [];
+    const ut = await molnVarv(r => rader.push(r));
+    if(rader.length) console.log('moln: ' + rader.join(' | '));
+    else if(ut.length) console.log('moln: ' + ut.map(u => u.uid + ' ' + (u.error || u.mode)).join(' | '));
+  }
+);
+
 /* ---------- HTTP ---------- */
 const cors = res => {
   res.set('Access-Control-Allow-Origin', '*');
@@ -455,6 +543,15 @@ export const api = onRequest(
         await FEED_DOK().set({ NQ: historik, uppdaterad: FieldValue.serverTimestamp() }, { merge: true });
       }
       res.json({ ok: true, t, delar: live.delar, staplar: historik ? historik.length : null });
+      return;
+    }
+
+    /* momentumkontot och trading floor: ett molnvarv på studs */
+    if(vag === '/moln/tick'){
+      if(!nyckel || req.query.k !== nyckel){ res.status(401).json({ error: 'fel nyckel' }); return; }
+      const rader = [];
+      const ut = await molnVarv(r => rader.push(r));
+      res.json({ ok: true, handelser: rader, konton: ut });
       return;
     }
 

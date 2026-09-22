@@ -27,6 +27,17 @@ service cloud.firestore {
     match /riptide/krypto {
       allow read, write: if request.auth != null;
     }
+    // Momentumkontot och trading floor ligger per inloggning. Molnfunktionen
+    // handlar dem via admin-SDK:t; sidan läser, laddar upp sitt lokala konto
+    // första gången, pausar och återställer.
+    match /momentum/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+      match /{dok=**} { allow read, write: if request.auth != null && request.auth.uid == uid; }
+    }
+    match /floor/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+      match /{dok=**} { allow read, write: if request.auth != null && request.auth.uid == uid; }
+    }
     match /riptide/{dok} {
       allow read, write: if false;
     }

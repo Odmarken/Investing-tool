@@ -9,4 +9,8 @@ functions/node_modules/
 .staplar-cache.json
 .setups-cache.json
 functions/modell.js
+functions/cloud-runner.js
+functions/trading-floor.js
+functions/crypto-*.js
+functions/bybit-contracts.js
 .matning/

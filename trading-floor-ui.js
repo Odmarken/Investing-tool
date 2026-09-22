@@ -1,9 +1,9 @@
-import {FLOOR,ROOMS,newFirm,readFirm,firmKey,equityKey,firmPositions,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,readEquity,sampleEquity,riskRows,floorNarrative,traderNames} from './trading-floor.js';
+import {FLOOR,ROOMS,newFirm,readFirm,validateFirm,firmKey,equityKey,firmPositions,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,readEquity,sampleEquity,riskRows,floorNarrative,traderNames} from './trading-floor.js';
 import {fetchActiveSnapshot,fetchActiveRisk} from './crypto-momentum-active.js';
 import {fetchMomentumQuotes,QUOTE_INTERVAL} from './crypto-momentum-live.js';
 import {liquidationPrice} from './crypto-leverage.js';
 import {CONTRACTS} from './bybit-contracts.js';
-import {createScene,createAgents,stepAgents,CANVAS} from './trading-floor-scene.js';
+import {createScene,createAgents,stepAgents} from './trading-floor-scene.js';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const number=(x,d=2)=>finite(x)?x.toLocaleString('sv-SE',{minimumFractionDigits:d,maximumFractionDigits:d}):'–';
@@ -23,18 +23,23 @@ const ROLE_TEXT={
   miguel:'Makro och nyheter. Står vid nyhetsskärmen och väger rubrikerna om världen och krypto.'
 };
 
-export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>false,grab,getNews=()=>({items:[],bias:0}),loadWorldNews=null,
+// cloud (optional): {available(), subscribe(uid,onState), save(uid,{firm,equity}), archive(uid,firm,equity)}.
+// With a cloud store the firm is read from it and traded by the cloud runner;
+// this page then only fetches quotes for the live figures, pauses and resets.
+export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>false,grab,getNews=()=>({items:[],bias:0}),loadWorldNews=null,cloud=null,
   storage={getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)},locks=globalThis.navigator?.locks,now=()=>Date.now(),
   confirm=message=>globalThis.confirm?globalThis.confirm(message):true,raf=globalThis.requestAnimationFrame?globalThis.requestAnimationFrame.bind(globalThis):null,
   reducedMotion=()=>!!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches}){
-  root.innerHTML=`<div class="floor-heading"><div><div class="floor-eyebrow">RIPTIDE / KRYPTO / TRADING FLOOR</div><h1 id="floorTitle" tabindex="-1">Trading floor</h1>
-    <p>Sex bord med 100 $ vardera, ett coin per bord. Varje bord kör samma timmomentum med SL och TP som AI-momentum, men med eget konto. Demo med riktiga Bybit-priser; inga order skickas.</p></div>
-    <div class="floor-actions"><button type="button" class="btn" data-floor-pause></button><button type="button" class="btn" data-floor-reset title="Arkivera firman lokalt och börja om med sex nya bord på 100 $">Återställ firman</button><a class="btn" href="#">← Tillbaka till signaler</a></div></div>
-    <p class="floor-status" data-floor-status role="status" aria-live="polite"></p>
-    <div class="floor-stage"><canvas class="floor-canvas" data-floor-canvas width="${CANVAS.w}" height="${CANVAS.h}" role="img" aria-label="Isometriskt kontor: fyra rum, sex handelsbord, storskärm med firmans kapital, nyhetsskärm och fikarum. Knapparna under bilden öppnar samma detaljer."></canvas>
+  root.innerHTML=`<div class="floor-stage" data-floor-stage>
+    <canvas class="floor-canvas" data-floor-canvas tabindex="0" role="application" aria-label="Trading floor: isometriskt kontor med fyra rum, sex handelsbord, storskärm och nyhetsskärm. Dra för att panorera, scrolla eller nyp för att zooma, dubbelklicka för att återställa vyn. Klicka på bord, rum och skärmar för detaljer. Piltangenter panorerar, plus och minus zoomar, 0 återställer."></canvas>
+    <div class="floor-heading"><div class="floor-heading-text"><div class="floor-eyebrow">RIPTIDE / KRYPTO / TRADING FLOOR</div><h1 id="floorTitle" tabindex="-1">Trading floor</h1>
+      <p class="floor-status" data-floor-status role="status" aria-live="polite"></p>
+      <details class="floor-about"><summary>Om golvet</summary><p>Sex bord med 100 $ vardera, ett coin per bord. Varje bord kör samma timmomentum med SL och TP som AI-momentum, men med eget konto. Demo med riktiga Bybit-priser; inga order skickas.</p>
+      <p>Traders sitter vid bordet under affär och rör sig fritt annars. Klicka på bord, rum och skärmar. Dra för att panorera, scrolla eller nyp för att zooma, dubbelklicka för att återställa vyn.</p>
+      <p>Med molnlagring ligger firman i Firestore och handlas av molnfunktionen varje minut, även när sidan är stängd. Utan moln sparas den per inloggning i denna webbläsare och kräver öppen kryptosida. Ingen profil i AI-momentum klarade utvecklingskraven; det här är ett demospel med riktiga priser, inte en validerad strategi.</p></details></div>
+    <div class="floor-actions"><button type="button" class="btn" data-floor-pause></button><button type="button" class="btn" data-floor-reset title="Arkivera firman och börja om med sex nya bord på 100 $">Återställ firman</button><a class="btn" href="#">← Tillbaka till signaler</a></div></div>
+    <div class="floor-zoom"><button type="button" data-floor-zoom="in" aria-label="Zooma in" title="Zooma in">+</button><button type="button" data-floor-zoom="out" aria-label="Zooma ut" title="Zooma ut">−</button><button type="button" data-floor-zoom="reset" aria-label="Återställ vyn" title="Återställ vyn (dubbelklick i bilden)">⌂</button></div>
     <div class="floor-panel" data-floor-panel hidden></div></div>
-    <div class="floor-legend" data-floor-legend></div>
-    <p class="floor-footnote">Bordens konton sparas per inloggning i denna webbläsare. Timbeslut hämtas ungefär varje minut, priser var femte sekund, och skyddskontrollen (SL, TP, funding, likvidation) turas borden om att göra vid varje prisuppdatering. Kräver inloggning och öppen kryptosida. Ingen profil i AI-momentum klarade utvecklingskraven; det här är ett demospel med riktiga priser, inte en validerad strategi.</p>
     <div class="modal floor-modal" data-floor-modal><div class="box"><div class="ph"><span class="accent"></span><h2 data-floor-modal-title></h2><span class="right"><button type="button" class="btn" data-floor-modal-close>✕ Stäng</button></span></div><div class="floor-modal-body" data-floor-modal-body></div></div></div>`;
   const q=selector=>root.querySelector(selector);
   const canvas=q('[data-floor-canvas]'),panelEl=q('[data-floor-panel]'),modalEl=q('[data-floor-modal]');
@@ -42,12 +47,45 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   let uid=null,firm=null,equity=[],live=null,error='',riskError='',busy=false,quoteBusy=false,quoteFailed=false,resetting=false;
   let lastCheck=-Infinity,lastQuote=-Infinity,generation=0,riskIndex=0,quotes={},lastTotal=null,tradeCounts={};
   let panel=null,modal=null,worldNews=[],worldAt=-Infinity,worldBusy=false,running=false,lastFrame=0,typing=null,sceneView=null,sceneWorld={inTrade:{},riskDesk:null,reduced:false};
+  let cloudUnsub=null,cloudUid=null,cloudState=null,cloudError='',migrating=false;
+  const cloudOn=()=>!!cloud&&typeof cloud.available==='function'&&cloud.available();
   const exclusive=(user,callback)=>locks?.request?locks.request(firmKey(user),callback):Promise.reject(Error('Trading floor kräver en webbläsare med stöd för säkra fliklås'));
   const ensure=key=>{if(storage.getItem(key)===null)storage.setItem(key,JSON.stringify(newFirm(now())));};
+  function attachCloud(){
+    const want=cloudOn()?uid:null;
+    if(want===cloudUid)return;
+    if(cloudUnsub){cloudUnsub();cloudUnsub=null;}
+    cloudUid=want;cloudState=null;cloudError='';migrating=false;
+    if(!want)return;
+    const user=want;
+    cloudUnsub=cloud.subscribe(user,state=>{
+      if(user!==cloudUid)return;
+      if(state?.error){cloudError='Molnet: '+state.error;render();return;}
+      cloudError='';
+      if(state?.missing){void migrate(user);return;}
+      cloudState=state;
+      try{sync();}catch(e){firm=null;error=e.message;}
+      render();
+    });
+  }
+  // The first cloud sync uploads this browser's firm once so its history is kept.
+  async function migrate(user){
+    if(migrating)return;migrating=true;
+    try{
+      let local=null,points=[];
+      try{if(storage.getItem(firmKey(user))!==null)local=readFirm(storage,firmKey(user),now());points=readEquity(storage,equityKey(user));}catch(e){local=null;points=[];}
+      await cloud.save(user,{firm:local??newFirm(now()),equity:points});
+    }catch(e){cloudError='Kunde inte ladda upp firman till molnet: '+e.message;render();}
+    finally{migrating=false;}
+  }
   function sync(){
     const user=getUser();
     if(user!==uid){uid=user;firm=null;equity=[];live=null;error='';riskError='';lastCheck=-Infinity;lastQuote=-Infinity;quotes={};lastTotal=null;tradeCounts={};panel=null;modal=null;generation++;}
-    if(uid){firm=readFirm(storage,firmKey(uid),now());try{equity=readEquity(storage,equityKey(uid));}catch(e){equity=[];}}
+    attachCloud();
+    if(!uid)return uid;
+    if(cloudUid){
+      if(cloudState){firm=validateFirm(cloudState.firm);equity=Array.isArray(cloudState.equity)?cloudState.equity:[];}else firm=null;
+    }else{firm=readFirm(storage,firmKey(uid),now());try{equity=readEquity(storage,equityKey(uid));}catch(e){equity=[];}}
     return uid;
   }
   function acceptQuotes(market){
@@ -58,6 +96,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     live=firmLive(firm,quotes,now());
     if(live.total===null)return;
     lastTotal={value:live.total,at:live.at??now()};
+    if(cloudUid)return;
     const next=sampleEquity(equity,now(),live.total);
     if(next!==equity){equity=next;try{storage.setItem(equityKey(uid),JSON.stringify(equity));}catch(e){/* chart only */}}
   }
@@ -88,32 +127,36 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
       total:{value:live.total,last:lastTotal?.value??null,at:live.total===null?lastTotal?.at??null:(live.at??t),waiting:live.waiting},
       start:live.start,equity,news:newsItems(),paused:firm.paused,reduced:reducedMotion()};
   }
+  function cloudNote(t){
+    if(!cloudUid)return '';
+    const run=cloudState?.lastRun;
+    if(!run)return ' · körs i molnet: väntar på första molnvarvet';
+    const age=t-run;
+    return ' · molnet körde '+clock(run)+(age>180000?' · molnet har inte kört på '+Math.round(age/60000)+' min':'')+(cloudState?.lastError?' · molnfel: '+cloudState.lastError:'');
+  }
   function render(){
     const t=now();
     if(firm)live=firmLive(firm,quotes,t);else live=null;
     const pause=q('[data-floor-pause]');pause.textContent=firm?.paused?'▶ Återuppta nya köp':'⏸ Pausa nya köp';pause.disabled=!uid||!firm||resetting;
-    q('[data-floor-reset]').disabled=!uid||resetting;
+    q('[data-floor-reset]').disabled=!uid||!firm||resetting;
     let status;const stats=firm?firmStats(firm,t):null;
     if(!uid)status='Logga in för att öppna trading floor.';
-    else if(!firm)status=error||'Trading floor kunde inte läsas.';
+    else if(cloudError)status=cloudError;
+    else if(!firm)status=error||(cloudUid?'Hämtar firman från molnet…':'Trading floor kunde inte läsas.');
     else{
       const decisions=FLOOR.desks.map(s=>stats.desks[s].decision).filter(Boolean).sort((a,b)=>b.at-a.at);
       status=riskError||error||((firm.paused?'Nya köp pausade':'Firman handlar')+(busy?' · hämtar timpriser…':'')+' · '+stats.inTrade+' av '+FLOOR.desks.length+' bord i affär'+
         (decisions.length?' · senaste timbeslut '+date(decisions[0].at):' · väntar på första timbeslutet')+
         (live.total===null&&live.waiting.length?' · väntar på pris för '+live.waiting.join(', '):live.at?' · pris '+clock(live.at):'')+
-        (quoteFailed?' · senaste prisuppdatering misslyckades':''));
-      if(!isActive())status+=' · körs bara med kryptosidan öppen';
+        (quoteFailed?' · senaste prisuppdatering misslyckades':'')+cloudNote(t));
+      if(!isActive()&&!cloudUid)status+=' · körs bara med kryptosidan öppen';
     }
     q('[data-floor-status]').textContent=status;
     if(firm&&scene)for(const s of FLOOR.desks){const n=firm.desks[s].trades.length;if(tradeCounts[s]!==undefined&&n>tradeCounts[s])scene.burst(s,firm.desks[s].trades.at(-1).pnl>=0);tradeCounts[s]=n;}
-    const chip=(pick,label,extra='')=>'<button type="button" class="floor-chip'+(panel&&panel.kind+':'+panel.id===pick||modal&&'screen:'+modal===pick?' on':'')+'" data-floor-pick="'+pick+'">'+label+(extra?' <b>'+extra+'</b>':'')+'</button>';
-    q('[data-floor-legend]').innerHTML=(firm?FLOOR.desks.map(s=>{const d=live.desks[s];return chip('desk:'+s,s,'<span class="'+cls(d.pnl)+'">'+(d.pnl===null?STATUS[stats.desks[s].status]:signed(d.pnl))+'</span>');}).join(''):'')+
-      ROOMS.map(r=>chip('room:'+r.id,esc(r.name),esc(r.role))).join('')+chip('screen:equity','Storskärm','kapital')+chip('screen:news','Nyhetsskärm','')+chip('fika:fika','Fikarummet','');
     sceneView=buildView();
     if(panel)renderPanel();
     if(modal)renderModal();
     if(scene&&!running&&isVisible())start();
-    if(scene&&!running&&!isVisible()){/* drawn again when shown */}
     if(isVisible())void refreshWorld();
   }
   function frame(){
@@ -159,7 +202,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
           row('Realiserat i dag',signed(stats.today),cls(stats.today))+row('Bord i affär',stats.inTrade+' av '+FLOOR.desks.length)+
           row('Bästa bord',ranked.length?ranked[0][0]+' '+signed(ranked[0][1]):'–',ranked.length?cls(ranked[0][1]):'')+row('Sämsta bord',ranked.length?ranked.at(-1)[0]+' '+signed(ranked.at(-1)[1]):'–',ranked.length?cls(ranked.at(-1)[1]):'')+
           row('Avslut',stats.trades+' · '+stats.wins+' vinst · '+stats.losses+' förlust')+row('Avgifter · funding',money(stats.fees)+' · '+money(stats.funding))+'</div>'+
-          '<p class="dim">'+(firm.paused?'Nya köp är pausade. Öppna positioner följer fortfarande SL, TP och tidsgräns.':'Firman handlar. Varje bord får högst ett köp per timme och en timmes karens efter avslut.')+'</p>';
+          '<p class="dim">'+(firm.paused?'Nya köp är pausade. Öppna positioner följer fortfarande SL, TP och tidsgräns.':'Firman handlar. Varje bord får högst ett köp per timme och en timmes karens efter avslut.')+(cloudUid?' Firman ligger i molnet och handlas av molnfunktionen varje minut.':' Firman sparas i denna webbläsare.')+'</p>';
       }else if(room.id==='pablo'){
         html=head(esc(room.name)+' · Analys','läser golvet')+intro+'<div class="floor-pablo" data-floor-pablo></div><p class="dim">Lokal läsning av det kontona vet. Klicka i texten för att hoppa till slutet.</p>';
       }else if(room.id==='manuel'){
@@ -238,6 +281,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     if(resetting)return;
     try{sync();}catch(e){firm=null;error=e.message;render();return;}
     render();
+    if(cloudUid)return;
     if(!uid||!isActive()||busy||quoteBusy||!force&&now()-lastCheck<60000||firm.paused&&!heldSymbols(firm).length)return;
     const user=uid,token=generation;
     busy=true;lastCheck=now();render();
@@ -258,7 +302,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   async function refreshLive(){
     if(resetting)return;
     try{sync();}catch(e){firm=null;error=e.message;render();return;}
-    if(!uid||!isActive()||busy||quoteBusy||now()-lastQuote<QUOTE_INTERVAL){render();return;}
+    if(!uid||!isActive()||busy||quoteBusy||!firm||now()-lastQuote<QUOTE_INTERVAL){render();return;}
     const user=uid,token=generation,held=heldSymbols(firm);
     quoteBusy=true;lastQuote=now();
     try{
@@ -266,6 +310,8 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
         const results=await Promise.allSettled(held.map(symbol=>fetchMomentumQuotes(grab,[symbol],now)));
         if(getUser()!==user||token!==generation||!isActive())return;
         quoteFailed=false;for(const r of results)if(r.status==='fulfilled')acceptQuotes(r.value);else quoteFailed=true;
+        // Cloud mode: the cloud runner settles SL, TP, funding and liquidation; the page only quotes.
+        if(cloudUid)return;
         // The desks take turns settling SL, TP, funding and liquidation on mark price history.
         const symbol=held[riskIndex++%held.length],fetched=await fetchActiveRisk(grab,now,firm.desks[symbol]);
         if(getUser()!==user||token!==generation||!isActive())return;
@@ -282,6 +328,11 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   async function togglePause(){
     const user=getUser();if(!user||resetting)return;
     const token=++generation;
+    if(cloudUid){
+      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.save(user,{firm:setFirmPaused(firm,!firm.paused)});error='';}
+      catch(e){error='Inställningen kunde inte sparas i molnet: '+e.message;}
+      render();return;
+    }
     try{
       await exclusive(user,()=>{
         if(getUser()!==user||token!==generation)return;
@@ -297,6 +348,12 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     const user=getUser();if(!user||resetting)return;
     if(!confirm('Arkivera nuvarande firma och börja om med '+FLOOR.desks.length+' × '+FLOOR.start+' $? Öppna positioner följer med i arkivet utan att stängas.'))return;
     const token=++generation;resetting=true;render();
+    if(cloudUid){
+      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.archive(user,firm,equity);await cloud.save(user,{firm:newFirm(now()),equity:[]});quotes={};lastTotal=null;tradeCounts={};panel=null;error='';}
+      catch(e){if(getUser()===user)error='Återställningen misslyckades: '+e.message;}
+      finally{resetting=false;try{sync();}catch(e){firm=null;error=e.message;}render();}
+      return;
+    }
     try{
       await exclusive(user,()=>{
         if(getUser()!==user||token!==generation)return;
@@ -316,14 +373,50 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   q('[data-floor-pause]').onclick=togglePause;
   q('[data-floor-reset]').onclick=reset;
   if(canvas.addEventListener&&scene){
-    canvas.addEventListener('click',e=>{const p=scene.toLogical(e.clientX,e.clientY);pick(scene.hitTest(p.x,p.y));});
-    canvas.addEventListener('mousemove',e=>{const p=scene.toLogical(e.clientX,e.clientY),h=scene.hitTest(p.x,p.y);scene.setHover(h);canvas.style.cursor=h?'pointer':'default';});
-    canvas.addEventListener('mouseleave',()=>scene.setHover(null));
+    // Drag pans, wheel and pinch zoom around the pointer, a still click picks.
+    const pointers=new Map();let drag=null,pinch=null;
+    const pos=e=>scene.pointer(e.clientX,e.clientY);
+    canvas.addEventListener('pointerdown',e=>{
+      if(e.pointerType==='mouse'&&e.button!==0)return;
+      canvas.setPointerCapture?.(e.pointerId);const p=pos(e);pointers.set(e.pointerId,p);
+      if(pointers.size===1){drag={id:e.pointerId,start:p,last:p,moved:false};canvas.classList?.add('dragging');}
+      else if(pointers.size===2){const [a,b]=[...pointers.values()];pinch={dist:Math.hypot(a.x-b.x,a.y-b.y),mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}};drag=null;}
+    });
+    canvas.addEventListener('pointermove',e=>{
+      const p=pos(e);
+      if(pointers.has(e.pointerId))pointers.set(e.pointerId,p);
+      if(pinch&&pointers.size===2){
+        const [a,b]=[...pointers.values()],dist=Math.hypot(a.x-b.x,a.y-b.y),mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+        if(pinch.dist>0)scene.zoomAt(mid.x,mid.y,dist/pinch.dist);scene.panBy(mid.x-pinch.mid.x,mid.y-pinch.mid.y);pinch={dist,mid};return;
+      }
+      if(drag&&drag.id===e.pointerId){
+        if(!drag.moved&&Math.hypot(p.x-drag.start.x,p.y-drag.start.y)>5)drag.moved=true;
+        if(drag.moved)scene.panBy(p.x-drag.last.x,p.y-drag.last.y);drag.last=p;return;
+      }
+      const h=scene.hitTest(p.x,p.y);scene.setHover(h);canvas.style.cursor=h?'pointer':'';
+    });
+    const finish=e=>{
+      const p=pos(e);
+      if(drag&&drag.id===e.pointerId&&!drag.moved&&!pinch)pick(scene.hitTest(p.x,p.y));
+      pointers.delete(e.pointerId);
+      if(pointers.size<2&&pinch){pinch=null;const rest=[...pointers.entries()][0];if(rest)drag={id:rest[0],start:rest[1],last:rest[1],moved:true};}
+      if(drag&&drag.id===e.pointerId)drag=null;
+      if(!pointers.size)canvas.classList?.remove('dragging');
+    };
+    canvas.addEventListener('pointerup',finish);canvas.addEventListener('pointercancel',finish);
+    canvas.addEventListener('pointerleave',()=>{if(!drag)scene.setHover(null);});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();const p=pos(e),delta=e.deltaMode===1?e.deltaY*16:e.deltaY;scene.zoomAt(p.x,p.y,Math.exp(-delta*0.0015));},{passive:false});
+    canvas.addEventListener('dblclick',e=>{e.preventDefault();scene.resetView();});
+    canvas.addEventListener('keydown',e=>{
+      const step=48,vp=scene.viewport(),pan={ArrowLeft:[step,0],ArrowRight:[-step,0],ArrowUp:[0,step],ArrowDown:[0,-step]}[e.key];
+      if(pan)scene.panBy(...pan);else if(e.key==='+'||e.key==='=')scene.zoomAt(vp.width/2,vp.height/2,1.25);else if(e.key==='-')scene.zoomAt(vp.width/2,vp.height/2,.8);else if(e.key==='0')scene.resetView();else return;
+      e.preventDefault();
+    });
   }
   if(root.addEventListener){
     root.addEventListener('click',e=>{
-      const chip=e.target.closest?.('[data-floor-pick]');
-      if(chip){const [kind,id]=chip.dataset.floorPick.split(':');pick({kind,id});return;}
+      const zoom=e.target.closest?.('[data-floor-zoom]');
+      if(zoom&&scene){const vp=scene.viewport(),mode=zoom.dataset.floorZoom;if(mode==='reset')scene.resetView();else scene.zoomAt(vp.width/2,vp.height/2,mode==='in'?1.25:.8);return;}
       if(e.target.closest?.('[data-floor-panel-close]')){pick(null);return;}
       if(e.target.closest?.('[data-floor-modal-close]')||e.target===modalEl)closeModal();
     });

@@ -172,10 +172,45 @@ export const REGIONS=()=>[
 ];
 export function hitAt(x,y,regions=REGIONS()){return regions.find(r=>inside(r.poly,x,y))??null;}
 
+// The camera maps the fixed world (CANVAS) onto a viewport of any size.
+// Zooming keeps the point under the cursor still; panning keeps part of the
+// world on screen so the office can never be lost.
+export function createCamera(world=CANVAS){
+  const cam={zoom:1,x:0,y:0,width:world.w,height:world.h,fitZoom:1};
+  const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
+  function limits(){
+    const w=world.w*cam.zoom,h=world.h*cam.zoom,keepX=Math.min(w,cam.width)*.25,keepY=Math.min(h,cam.height)*.25;
+    cam.x=clamp(cam.x,keepX-w,cam.width-keepX);cam.y=clamp(cam.y,keepY-h,cam.height-keepY);
+  }
+  return {
+    fit(width=cam.width,height=cam.height,margin=24){
+      cam.width=width;cam.height=height;
+      cam.fitZoom=Math.max(.05,Math.min((width-margin*2)/world.w,(height-margin*2)/world.h));
+      cam.zoom=cam.fitZoom;cam.x=(width-world.w*cam.zoom)/2;cam.y=(height-world.h*cam.zoom)/2;
+    },
+    resize(width,height){cam.width=width;cam.height=height;limits();},
+    zoomAt(px,py,factor){
+      if(!Number.isFinite(factor)||factor<=0)return;
+      const next=clamp(cam.zoom*factor,cam.fitZoom*.5,Math.max(cam.fitZoom*6,4)),k=next/cam.zoom;
+      cam.x=px-(px-cam.x)*k;cam.y=py-(py-cam.y)*k;cam.zoom=next;limits();
+    },
+    panBy(dx,dy){cam.x+=dx;cam.y+=dy;limits();},
+    toWorld(px,py){return {x:(px-cam.x)/cam.zoom,y:(py-cam.y)/cam.zoom};},
+    toScreen(wx,wy){return {x:wx*cam.zoom+cam.x,y:wy*cam.zoom+cam.y};},
+    state(){return {...cam};}
+  };
+}
+
 export function createScene(canvas){
   const ctx=canvas.getContext?.('2d');if(!ctx)return null;
-  let dpr=0,hover=null,particles=[];const regions=REGIONS(),truncated=new Map();
-  function resize(){const next=Math.min(2,globalThis.devicePixelRatio||1);if(next===dpr)return;dpr=next;canvas.width=Math.round(CANVAS.w*dpr);canvas.height=Math.round(CANVAS.h*dpr);}
+  let dpr=0,width=0,height=0,fitted=false,interacted=false,hover=null,particles=[];const regions=REGIONS(),truncated=new Map(),camera=createCamera(CANVAS);
+  function resize(){
+    const cw=canvas.clientWidth||0,ch=canvas.clientHeight||0,w=cw||CANVAS.w,h=ch||CANVAS.h,next=Math.min(2,globalThis.devicePixelRatio||1);
+    if(w===width&&h===height&&next===dpr)return;
+    width=w;height=h;dpr=next;canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);
+    // Fit once the canvas has a real size; keep the user's own view afterwards.
+    if(!fitted||!interacted){camera.fit(w,h);fitted=cw>0;}else camera.resize(w,h);
+  }
   const poly=(pts,fill,stroke,lw=1)=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.stroke();}};
   // An iso block between two heights: the two visible faces, then the top.
   const zbox=(x0,y0,x1,y1,z0,z1,top,left,right,stroke)=>{
@@ -201,11 +236,15 @@ export function createScene(canvas){
     if(x+0.5>=FIKA.x0&&y+0.5>=FIKA.y0)return 'fika';
     return 'floor';
   };
+  function backdrop(){
+    // Screen space: fills the whole viewport whatever the camera does.
+    const g=ctx.createLinearGradient(0,0,0,height);g.addColorStop(0,C.bgTop);g.addColorStop(1,C.bgBottom);
+    rect(0,0,width,height,g);
+    const c=camera.toScreen(660,420),r=760*camera.state().zoom;
+    const glow=ctx.createRadialGradient(c.x,c.y,r*.05,c.x,c.y,r);glow.addColorStop(0,'rgba(140,90,255,.22)');glow.addColorStop(1,'rgba(140,90,255,0)');
+    rect(0,0,width,height,glow);
+  }
   function background(){
-    const g=ctx.createLinearGradient(0,0,0,CANVAS.h);g.addColorStop(0,C.bgTop);g.addColorStop(1,C.bgBottom);
-    rect(0,0,CANVAS.w,CANVAS.h,g);
-    const glow=ctx.createRadialGradient(660,420,40,660,420,760);glow.addColorStop(0,'rgba(140,90,255,.22)');glow.addColorStop(1,'rgba(140,90,255,0)');
-    rect(0,0,CANVAS.w,CANVAS.h,glow);
     for(let y=0;y<GRID.h;y++)for(let x=0;x<GRID.w;x++){
       const z=zone(x,y),odd=(x+y)%2,fill=z==='room'?(odd?C.roomA:C.roomB):z==='fika'?(odd?C.fikaA:C.fikaB):(odd?C.floorA:C.floorB);
       poly([project(x,y),project(x+1,y),project(x+1,y+1),project(x,y+1)],fill,C.tileLine,.6);
@@ -390,16 +429,24 @@ export function createScene(canvas){
   }
   function draw(view,agents,now){
     resize();ctx.setTransform(dpr,0,0,dpr,0,0);
+    backdrop();
+    const c=camera.state();ctx.setTransform(dpr*c.zoom,0,0,dpr*c.zoom,dpr*c.x,dpr*c.y);
     const world={inTrade:Object.fromEntries(FLOOR.desks.map(s=>[s,view.desks[s]?.status==='trade'])),reduced:view.reduced};
     background();drawEquityScreen(view,now);drawNewsScreen(view,now);
     for(const it of items(view,agents,now,world))it.draw();
     overlay(view,now);
   }
-  function toLogical(clientX,clientY){const r=canvas.getBoundingClientRect();return {x:(clientX-r.left)/r.width*CANVAS.w,y:(clientY-r.top)/r.height*CANVAS.h};}
+  // Pointer positions are CSS pixels inside the canvas; hits are tested in world space.
+  function pointer(clientX,clientY){const r=canvas.getBoundingClientRect();return {x:clientX-r.left,y:clientY-r.top};}
+  function hitTest(px,py){const w=camera.toWorld(px,py);return hitAt(w.x,w.y,regions);}
+  function zoomAt(px,py,factor){resize();interacted=true;camera.zoomAt(px,py,factor);}
+  function panBy(dx,dy){resize();interacted=true;camera.panBy(dx,dy);}
+  function resetView(){resize();interacted=false;camera.fit(width,height);}
+  const viewport=()=>({width,height,zoom:camera.state().zoom});
   function burst(symbol,positive){
     const d=DESK_GEOMETRY.find(d=>d.symbol===symbol);if(!d)return;
     const p=project(d.x0+0.75,d.y0+2,40);
     for(let i=0;i<10;i++)particles.push({x:p.x+(Math.random()-.5)*40,y:p.y-Math.random()*10,vx:(Math.random()-.5)*.6,vy:-(.6+Math.random()*.9),life:1+Math.random()*.4,text:positive?'$':'·',color:positive?'rgba(61,220,132,1)':'rgba(255,51,85,1)'});
   }
-  return {resize,draw,toLogical,burst,hitTest:(x,y)=>hitAt(x,y,regions),setHover:h=>{hover=h;},getHover:()=>hover};
+  return {resize,draw,pointer,hitTest,zoomAt,panBy,resetView,viewport,burst,setHover:h=>{hover=h;},getHover:()=>hover};
 }

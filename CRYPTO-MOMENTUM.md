@@ -51,7 +51,11 @@ Lagringsnyckeln är fortsatt `riptide.momentum.20x.v1:<kodad Firebase uid>`. Ver
 
 **Återställ till 100 $** arkiverar först det tidigare kontot under `riptide.momentum.20x.v1:<uid>:before-reset:<tid>`, och skapar sedan ett nytt pausat konto utan positioner eller aktiv historik. Misslyckad arkivering eller skrivning lämnar det sparade aktiva kontot kvar. Exportknappen sparar regler, positioner och hela historiken som JSON.
 
-Web Locks serialiserar läsning och skrivning mellan flikar på samma origin. Timvisa beslut och funding får inte dubbleras. Sena hämtningar efter reset, kontobyte eller utloggning får inte återinföra gamla positioner. Kontot är lokalt per inloggning och webbläsare; det synkas inte mellan enheter. Rensad webbläsardata kan radera det. Det vanliga kryptokontot påverkas inte.
+Web Locks serialiserar läsning och skrivning mellan flikar på samma origin. Timvisa beslut och funding får inte dubbleras. Sena hämtningar efter reset, kontobyte eller utloggning får inte återinföra gamla positioner. Utan moln är kontot lokalt per inloggning och webbläsare. Det vanliga kryptokontot påverkas inte.
+
+## Moln
+
+När sidan har Firestore (Firebase Hosting eller lokalt med `apiBas`) ligger kontot i dokumentet `momentum/<uid>` och delas mellan enheter. Första gången laddas webbläsarens lokala konto upp med hela historiken. Molnfunktionen `molnCron` kör därefter samma frysta regler varje minut, även när sidan är stängd: timbeslut när kontot är ledigt och timmen är ny, annars bara skyddskontrollen på markprishistorik och funding. Sidan hämtar bara femsekunderspriser för livesaldot, växlar kryssrutan och återställer (arkiv under `momentum/<uid>/archive/<tid>`). Statusraden visar senaste molnvarv och eventuellt molnfel; har molnet inte kört på tre minuter sägs det. Molnfunktionen läser om kontot i en transaktion innan den skriver, så en paus eller återställning från sidan skrivs inte över.
 
 ## Testresultat
 
