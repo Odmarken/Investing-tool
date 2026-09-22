@@ -691,6 +691,7 @@ footer b{color:var(--muted)}
 
 </style>
 <link rel="stylesheet" href="./account-summary.css">
+<link rel="stylesheet" href="./trading-floor.css">
 <link rel="stylesheet" href="./landing.css">
 </head>
 <body class="landing">
@@ -739,6 +740,7 @@ footer b{color:var(--muted)}
     </div>
     <button class="btn primary" id="btnRefresh">↻ Uppdatera</button>
     <a class="btn" id="btnSummary" href="#summary" aria-label="Öppna kryptokontots summary">◉ Summary</a>
+    <a class="btn" id="btnFloor" href="#floor" aria-label="Öppna trading floor">▦ Trading floor</a>
     <button class="btn krypto" id="btnKrypto" title="Växla till krypto: samma motor och samma familjer för BTC, ETH, SOL, XRP, DOGE, SHIB och PEPE — dygnet runt, utan konto. Klicka igen för Nasdaq.">◈ Crypto</button>
     <button class="btn" id="btnAuth" title="Logga in för att se demokontot">Logga in</button>
     <button class="btn" id="btnSettings">⚙ Inställningar</button>
@@ -746,6 +748,7 @@ footer b{color:var(--muted)}
   <div class="tape" id="tape"></div>
 </header>
 <main id="accountSummary" hidden aria-labelledby="summaryTitle"></main>
+<main id="tradingFloor" hidden aria-labelledby="floorTitle"></main>
 
 <div class="banner warn" id="bnDemo">
   <span>⚠</span>
@@ -1065,11 +1068,13 @@ import { mountSummary } from './account-summary.js';
 import { CRYPTO_AI_MODEL } from './crypto-ai-model.js';
 import { mountCryptoAI } from './crypto-ai-ui.js';
 import { mountMomentum } from './crypto-momentum-ui.js';
+import { mountFloor } from './trading-floor-ui.js';
 import { CONTRACTS, createContractCache, maxLeverageFor, isolatedLevel } from './bybit-contracts.js';
 const bybitContracts = createContractCache((url,options) => grab(url,options));
 let krLimitsBusy = false, krLimitsAt = -Infinity;
 let cryptoAI;
 let momentumDemo;
+let floorView = null;
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
@@ -2345,6 +2350,8 @@ function renderSignals(){
       grab: (url,options) => grab(url,options), rulesRoot:$('#momentumRules')
     });
     void momentumDemo.refresh();
+    floorMount();
+    void floorView.refresh();
     cryptoAI.update({userId:AUTH.anvandare.uid, signals:STATE.signals, contexts:STATE.ctx, now:reviewTime, snapshots});
   }
   if(crypto){
@@ -3273,6 +3280,7 @@ function authRitaOm(){
   $('#landingPage').hidden = inne;
   if(inne) $('#authModal').classList.remove('show');
   summaryRoute();
+  floorRoute();
   const knapp = $('#btnAuth');
   if(knapp){
     knapp.textContent = inne ? (AUTH.anvandare.email || 'Inloggad') : 'Logga in';
@@ -3496,6 +3504,34 @@ function summaryRoute(){
     }));
     renderSummary(); $('#summaryTitle').focus();
   }
+}
+/* Trading floor: sex momentumbord under #floor, samma helsidesväg som summaryn.
+   Borden handlar så länge kryptosidan är öppen; kontoret ritas bara när fliken
+   är framme. AI-momentum rörs inte: borden har egna konton med samma regler. */
+function floorMount(){
+  if(floorView || !$('#tradingFloor')) return;
+  floorView = mountFloor($('#tradingFloor'), {
+    getUser: () => AUTH.anvandare?.uid || null, getEmail: () => AUTH.anvandare?.email || '',
+    isActive: () => STATE.lage === 'krypto' && !!AUTH.anvandare,
+    isVisible: () => location.hash === '#floor' && !!AUTH.anvandare,
+    grab: (url,options) => grab(url,options),
+    getNews: () => ({ items: STATE.lage === 'krypto' ? STATE.news : [], bias: STATE.newsBias.kr || 0 }),
+    loadWorldNews: async () => {
+      const items = rensaNyheter(await fetchFeeds(CFG.feeds));
+      items.forEach(it => { it.an = analyseHeadline(it.title, it.desc); });
+      return items;
+    }
+  });
+}
+function floorRoute(){
+  const open = location.hash === '#floor' && !!AUTH.anvandare;
+  document.body.classList.toggle('floor', open);
+  $('#tradingFloor').hidden = !open;
+  if(open){
+    if(STATE.lage !== 'krypto') tillLage('krypto');
+    floorMount();
+    floorView.show(); $('#floorTitle').focus();
+  }else floorView?.hide();
 }
 
 function krLadda(){
@@ -4652,6 +4688,8 @@ function tick(){
   if(++kalTick % 30 === 0) renderKalender();          // nedräkningen uppdateras varje halvminut
   if(kalTick % 30 === 0 && momentumDemo) void momentumDemo.refresh();
   if(kalTick % 5 === 0 && momentumDemo) void momentumDemo.refreshLive();
+  if(kalTick % 30 === 15 && floorView) void floorView.refresh();   // borden, förskjutna så anropen inte klumpar ihop sig
+  if(kalTick % 5 === 2 && floorView) void floorView.refreshLive();
   $('#clkSe').textContent = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   $('#clkNy').textContent = timeIn('America/New_York',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const s = sessionState();
@@ -4669,6 +4707,7 @@ function wire(){
     $('#landingMotion').textContent = paused ? 'Resume motion' : 'Pause motion';
   };
   window.addEventListener('hashchange', summaryRoute);
+  window.addEventListener('hashchange', floorRoute);
   $('#cryptoSelective').onchange = e => {
     CFG.cryptoSelective = e.target.value === 'selective';
     saveCfg(); renderSignals(); renderKrypto();
@@ -4809,6 +4848,7 @@ loadCfg();
 useLocalProxy();
 wire();
 summaryRoute();
+floorRoute();
 liveLadda();
 demoLadda();
 renderDemo();

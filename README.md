@@ -18,6 +18,7 @@ för Yahoos fördröjda data.
 | Fil | Vad den gör |
 |---|---|
 | `index.html` | Dashboarden — grafer, kort, nyheter, demokonto |
+| `trading-floor.js`, `trading-floor-scene.js`, `trading-floor-ui.js` | Trading floor: sex momentumbord i ett isometriskt kontor, beskrivet i [TRADING-FLOOR.md](TRADING-FLOOR.md) |
 | `motor.js` | Signalmotorn: indikatorer, de fyra familjerna, ICT, gradering. Delas av sidan och workern |
 | `konto.js` | Demokontot i Cloudflare-workern — öppnar, stänger och sparar i KV |
 | `functions/index.js` | Samma sak på Firebase: cron var 5:e minut, proxy, ingest och Firestore |

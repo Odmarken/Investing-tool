@@ -48,17 +48,17 @@ test('signed-out visitors do not run account ticks, polling or dashboard refresh
 });
 
 test('authentication swaps landing/panel, resumes once, and invalidates pending work on logout',()=>{
-  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0;
+  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0,floors=0;
   const auth={anvandare:null},state={modeVersion:5,refreshPending:true};
   const ctx=context(['authRitaOm'],{
     AUTH:auth,STATE:state,document:{body:{classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key)}}},
     $:key=>{if(!nodes.has(key))nodes.set(key,{...element(),style:{}});return nodes.get(key);},
-    summaryRoute:()=>routes++,renderDemo:noop,refresh:()=>refreshes++
+    summaryRoute:()=>routes++,floorRoute:()=>floors++,renderDemo:noop,refresh:()=>refreshes++
   });
   ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,false);assert.equal(refreshes,0);
   auth.anvandare={email:'member@example.com'};ctx.authRitaOm();assert.ok(!classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,true);assert.equal(refreshes,1);
   ctx.authRitaOm();assert.equal(refreshes,1);
-  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);
+  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);assert.equal(floors,4);
 });
 
 test('login always signs into an existing account even if a legacy signup mode is supplied',async()=>{
