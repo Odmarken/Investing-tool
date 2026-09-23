@@ -18,12 +18,23 @@
  *    FUNCTIONS_DISCOVERY_TIMEOUT, och den kan inte skrivas som ett prefix i
  *    package.json: npm run kör via cmd.exe på Windows, och cmd förstår inte
  *    POSIX-syntaxen VAR=värde kommando. Därför den här filen.
+ *
+ * Sidan ligger också på GitHub Pages, som bara uppdateras vid push. En sida
+ * från Pages som är äldre än molnfunktionen kan inte läsa det molnet skriver,
+ * så efter en lyckad utrullning påminner skriptet om kod som inte är pushad.
  */
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execSync } from 'node:child_process';
 
 const r = spawnSync('npx', ['--yes', 'firebase-tools', 'deploy', ...process.argv.slice(2)], {
   stdio: 'inherit',
   shell: true,
   env: { ...process.env, FUNCTIONS_DISCOVERY_TIMEOUT: process.env.FUNCTIONS_DISCOVERY_TIMEOUT || '120' }
 });
+if(r.status === 0){
+  try{
+    const git = cmd => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if(git('git status --porcelain') || git('git rev-list --count @{u}..HEAD') !== '0')
+      console.log('\nObs: GitHub Pages visar fortfarande den förra sidan. Committa och pusha (git push), annars kan sidan där inte läsa det molnet skriver.');
+  }catch{ /* Ingen git eller ingen uppströmsgren: inget att påminna om. */ }
+}
 process.exit(r.status === null ? 1 : r.status);
