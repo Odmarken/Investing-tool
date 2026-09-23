@@ -1,91 +1,106 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {FLOOR,ROOMS,newFirm,validateFirm,readFirm,firmKey,equityKey,firmPositions,deskSnapshot,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,sampleEquity,readEquity,riskRows,floorNarrative,traderNames,dayStart} from '../trading-floor.js';
-import {ACTIVE} from '../crypto-momentum-active.js';
-import {LEVERAGE} from '../crypto-leverage.js';
-import {CONTRACTS} from '../bybit-contracts.js';
+import {FLOOR,ROOMS,newFirm,validateFirm,readFirm,upgradeStoredFirm,isLegacyFirm,firmKey,equityKey,needsHourly,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,sampleEquity,readEquity,riskRows,floorNarrative,traderNames,dayStart} from '../trading-floor.js';
+import {TREND,trendCount} from '../floor-trend.js';
+import {clearTrendCache} from '../floor-trend-market.js';
 import {AISLES,ROOM_GEOMETRY,DESK_GEOMETRY,FIKA,allLocations,onNetwork,routeBetween,routeTo,createAgents,stepAgents,REGIONS,hitAt,project,SCREENS,deskCelebration,celebrationPose,deskTradeLabel} from '../trading-floor-scene.js';
 import {mountFloor} from '../trading-floor-ui.js';
+import {TIME,HOUR,unitBars,trendSnapshot,withRisk,riskSnapshot,fakeBybit,coinBars} from './floor-fixtures.mjs';
 
-const TIME=Date.parse('2026-09-22T12:00:00Z'),HOUR=3600000,STEP=LEVERAGE.step;
-const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-7,`${a} != ${b}`);
-const cash=desk=>desk.sleeves.reduce((sum,s)=>sum+s.cash,0);
-const held=desk=>desk.sleeves.find(s=>s.position)?.position??null;
-const contract=(symbol,at)=>({symbol,contract:CONTRACTS[symbol],at,min:1,max:150,step:.01,tiers:[{id:1,cap:1e7,max:150,maintenance:.005,deduction:0}]});
-function snapshot(time=TIME,scores={}){
-  const hour=Math.floor(time/HOUR)*HOUR;
-  return {hour,market:Object.fromEntries(ACTIVE.symbols.map(symbol=>[symbol,{at:time,price:100,mark:100,contract:contract(symbol,time),
-    signal:{symbol,at:hour,score:scores[symbol]??.1,reference:100,slDistance:2,rewardMultiple:2,maxHoldMs:12*HOUR},
-    historyFrom:TIME-STEP,fundingThrough:time,funding:[],
-    markBars:Array.from({length:Math.floor((time-TIME)/STEP)+2},(_,i)=>({t:TIME-STEP+i*STEP,o:100,h:100,l:100,c:100}))}]))};
-}
+const near=(a,b,eps=1e-7)=>assert.ok(Math.abs(a-b)<eps,`${a} != ${b}`);
 const seeded=()=>{let seed=7;return ()=>{seed=(seed*1103515245+12345)%2147483648;return seed/2147483648;};};
+const UNIT=unitBars(TIME),SLIDE=unitBars(TIME,{rally:false});
+const holding=()=>advanceFirm(newFirm(TIME),trendSnapshot(TIME,UNIT),TIME);
+// A close at 72 % of the last one is below every horizon's stop (76 % and up) but above liquidation (62 %).
+const CRASH=.72;
+// Next hour's snapshot with the latest close moved by `factor` for every coin.
+function nextHour(firm,factor,time=TIME+HOUR){
+  const unit=[...UNIT,{...UNIT.at(-1),t:UNIT.at(-1).t+HOUR,o:UNIT.at(-1).c,c:UNIT.at(-1).c*factor,h:Math.max(UNIT.at(-1).c,UNIT.at(-1).c*factor),l:Math.min(UNIT.at(-1).c,UNIT.at(-1).c*factor)}];
+  return withRisk(firm,trendSnapshot(time,unit),time);
+}
 
-test('a new firm has six desks in universe order with 100 dollars each and trading enabled',()=>{
+test('a new firm has six trend desks with 100 dollars each and trading enabled',()=>{
   const firm=newFirm(TIME);
-  assert.deepEqual([...FLOOR.desks],ACTIVE.symbols.slice(0,6));assert.deepEqual(Object.keys(firm.desks),[...FLOOR.desks]);
-  for(const s of FLOOR.desks){assert.equal(firm.desks[s].enabled,true);near(cash(firm.desks[s]),100);assert.equal(held(firm.desks[s]),null);}
+  assert.deepEqual([...FLOOR.desks],['BTC','ETH','SOL','XRP','DOGE','SHIB']);assert.deepEqual(Object.keys(firm.desks),[...FLOOR.desks]);
+  for(const s of FLOOR.desks){const d=firm.desks[s];assert.equal(d.enabled,true);assert.equal(d.cash,100);assert.equal(d.position,null);assert.equal(d.version,TREND.version);assert.equal(d.signal.through,null);}
   assert.equal(firm.paused,false);assert.equal(validateFirm(firm),firm);
   assert.deepEqual(readFirm({getItem:()=>null},'k',TIME),firm);
   assert.throws(()=>validateFirm({...firm,version:'x'}),/Ogiltig/);
+  assert.throws(()=>validateFirm({...firm,version:'trading-floor-v3'}),/Golvet har uppdaterats \(trading-floor-v3\)\. Ladda om sidan/);
   assert.throws(()=>validateFirm({...firm,desks:{...firm.desks,BTC:{...firm.desks.BTC,enabled:false}}}),/handelsläge/);
   assert.throws(()=>newFirm(0));
   assert.equal(firmKey('a b'),'riptide.floor.v1:a%20b');assert.equal(equityKey('a'),'riptide.floor.v1:a:equity');
 });
 
-test('each desk buys only its own coin even when another coin has the stronger signal',()=>{
-  const firm=newFirm(TIME),copy=structuredClone(firm),next=advanceFirm(firm,snapshot(TIME,{PEPE:.9,ETH:.5}),TIME);
-  assert.deepEqual(firm,copy);assert.deepEqual(heldSymbols(next),[...FLOOR.desks]);
+test('an old SL/TP firm is archived with its curve and replaced by trend desks',()=>{
+  const m=new Map(),s={getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v)},legacy=JSON.stringify({version:FLOOR.legacy,createdAt:TIME-1e6,paused:false,desks:{}});
+  m.set('k',legacy);m.set('k:equity','[{"t":1,"v":600}]');
+  assert.equal(isLegacyFirm(JSON.parse(legacy)),true);
+  assert.equal(readFirm(s,'k',TIME).version,FLOOR.version,'a legacy firm reads as a fresh trend firm');
+  assert.equal(upgradeStoredFirm(s,'k','k:equity',TIME),true);
+  assert.equal(m.get('k:before-trend:'+TIME),legacy);assert.equal(m.get('k:equity:before-trend:'+TIME),'[{"t":1,"v":600}]');
+  assert.equal(m.get('k:equity'),'[]');assert.deepEqual(readFirm(s,'k',TIME),newFirm(TIME));
+  assert.equal(upgradeStoredFirm(s,'k','k:equity',TIME+1),false,'only once');
+  assert.equal(upgradeStoredFirm({getItem:()=>null},'k','k:equity',TIME),false);
+});
+
+test('every desk trades only its own coin, once per hour, and a falling coin stays flat',()=>{
+  const firm=newFirm(TIME),copy=structuredClone(firm);
+  assert.equal(needsHourly(firm,TIME),true);
+  const next=holding();
+  assert.deepEqual(firm,copy,'advancing never mutates the input');
+  assert.deepEqual(heldSymbols(next),[...FLOOR.desks]);assert.equal(needsHourly(next,TIME+1000),false);
   for(const s of FLOOR.desks){
-    const sleeve=next.desks[s].sleeves.find(x=>x.position);
-    assert.equal(sleeve.symbol,s);assert.ok(sleeve.position.budget<=50+1e-7);near(cash(next.desks[s])+sleeve.position.budget,100);
-    assert.equal(next.desks[s].activeDecisions.length,1);assert.equal(next.desks[s].activeDecisions[0].symbol,s);
+    const d=next.desks[s];
+    assert.equal(trendCount(d.signal),TREND.lookbacks.length,s+' sees every horizon break out');
+    assert.equal(d.decisions.length,1);assert.equal(d.decisions[0].action,'köp');
+    assert.ok(d.position.units>0&&d.position.peakExposure<=TREND.maxLeverage+1e-9);
+    near(d.position.equityAtOpen,100);
   }
   assert.equal(validateFirm(next),next);
-  const again=advanceFirm(next,snapshot(TIME+1000,{PEPE:.9}),TIME+1000);
-  assert.deepEqual(heldSymbols(again),[...FLOOR.desks]);for(const s of FLOOR.desks)assert.equal(again.desks[s].activeDecisions.length,1);
-  const cashOnly=advanceFirm(newFirm(TIME),snapshot(TIME,{BTC:-.2}),TIME);
-  assert.equal(heldSymbols(cashOnly).includes('BTC'),false);assert.equal(cashOnly.desks.BTC.activeDecisions[0].action,'kontanter');assert.equal(heldSymbols(cashOnly).length,5);
-  assert.throws(()=>validateFirm({...next,desks:{...next.desks,BTC:next.desks.ETH}}),/fel coin/);
-  assert.equal(advanceFirm(newFirm(TIME),{hour:snapshot().hour,market:Object.fromEntries(Object.entries(snapshot().market).map(([s,m])=>[s,{...m,signal:null}]))},TIME).desks.BTC.activeDecisions.length,1);
+  const again=advanceFirm(next,withRisk(next,trendSnapshot(TIME+1000,UNIT),TIME+1000),TIME+1000);
+  for(const s of FLOOR.desks){assert.equal(again.desks[s].decisions.length,1,'no second decision in the same hour');assert.equal(again.desks[s].position.units,next.desks[s].position.units);assert.equal(again.desks[s].position.fundingThrough,TIME+1000);}
+  const flat=advanceFirm(newFirm(TIME),trendSnapshot(TIME,SLIDE),TIME);
+  assert.equal(heldSymbols(flat).length,0);assert.ok(FLOOR.desks.every(s=>flat.desks[s].decisions[0].action==='avvakta'));
+  assert.throws(()=>advanceFirm(newFirm(TIME),{hour:TIME,market:{BTC:trendSnapshot().market.BTC}},TIME),/Timpriser saknas för ETH/);
+  const swapped={...next,desks:{...next.desks,BTC:next.desks.ETH}};
+  assert.throws(()=>validateFirm(swapped),/Bord BTC håller fel coin/);
 });
 
-test('the shared market fetch carries every desk position and each desk sees only its own signal',()=>{
-  const firm=advanceFirm(newFirm(TIME),snapshot(),TIME),merged=firmPositions(firm);
-  assert.equal(merged.profile,'pulse12');assert.equal(merged.sleeves.length,ACTIVE.symbols.length);
-  for(const s of FLOOR.desks)assert.deepEqual(merged.sleeves.find(x=>x.symbol===s).position,held(firm.desks[s]));
-  assert.equal(merged.sleeves.find(x=>x.symbol==='PEPE').position,null);
-  const q=deskSnapshot(snapshot(),'ETH');
-  assert.equal(q.hour,snapshot().hour);assert.ok(q.market.ETH.signal);
-  for(const s of ACTIVE.symbols)if(s!=='ETH')assert.equal(q.market[s].signal,null);
-});
-
-test('pausing stops new entries while SL and TP still close open positions',()=>{
+test('pausing blocks new buys while trend exits and liquidation still close positions',()=>{
   const paused=setFirmPaused(newFirm(TIME),true);
   assert.ok(FLOOR.desks.every(s=>paused.desks[s].enabled===false));
-  assert.equal(heldSymbols(advanceFirm(paused,snapshot(),TIME)).length,0);
-  const open=advanceFirm(newFirm(TIME),snapshot(),TIME),stopped=setFirmPaused(open,true),time=TIME+2*STEP,p=held(stopped.desks.SOL),q=snapshot(time);
-  q.market.SOL.markBars=q.market.SOL.markBars.map(b=>b.t===TIME+STEP?{...b,l:p.sl-.01,c:p.sl}:b);
-  const one=advanceFirmRisk(stopped,'SOL',{market:{SOL:q.market.SOL}},time);
-  assert.equal(one.desks.SOL.trades.length,1);assert.equal(one.desks.SOL.trades[0].reason,'SL');assert.equal(one.desks.SOL.trades[0].symbol,'SOL');
+  const idle=advanceFirm(paused,trendSnapshot(TIME,UNIT),TIME);
+  assert.equal(heldSymbols(idle).length,0);assert.ok(FLOOR.desks.every(s=>idle.desks[s].decisions[0].action==='pausad'));
+  assert.ok(FLOOR.desks.every(s=>trendCount(idle.desks[s].signal)===TREND.lookbacks.length),'trend states keep updating while paused');
+  // Held and paused: a crash below every trend stop still sells.
+  const stopped=setFirmPaused(holding(),true),crash=nextHour(stopped,CRASH),btc=stopped.desks.BTC,last=crash.market.BTC.bars.at(-2).c;
+  assert.ok(Math.min(...btc.signal.stops)>last*CRASH&&-btc.cash/(btc.position.units*(1-TREND.maintenance))<last*CRASH);
+  const out=advanceFirm(stopped,crash,TIME+HOUR);
+  for(const s of FLOOR.desks){const d=out.desks[s];assert.equal(d.position,null);assert.equal(d.trades.length,1);assert.equal(d.decisions.at(-1).action,'sälj');}
+  assert.equal(out.paused,true);
+  // A mark wick through one desk's liquidation price closes only that desk.
+  const risk=riskSnapshot(stopped,TIME+10*60000),sol=stopped.desks.SOL,liq=-sol.cash/(sol.position.units*(1-TREND.maintenance));
+  risk.market.SOL.markBars=risk.market.SOL.markBars.map((b,i)=>i===1?{...b,l:liq*.95}:b);
+  const one=advanceFirmRisk(stopped,'SOL',risk,TIME+10*60000);
+  assert.equal(one.desks.SOL.trades[0].reason,'likvidation');assert.equal(one.desks.SOL.cash,0);
   for(const s of FLOOR.desks)if(s!=='SOL')assert.deepEqual(one.desks[s],stopped.desks[s]);
-  assert.equal(one.paused,true);assert.equal(advanceFirmRisk(one,'SOL',{market:{}},time+1000),one);
-  const all=advanceFirm(stopped,q,time);
-  assert.equal(all.desks.SOL.trades.length,1);assert.equal(heldSymbols(all).length,5);
-  const resumed=setFirmPaused(all,false);assert.ok(FLOOR.desks.every(s=>resumed.desks[s].enabled));
-  assert.throws(()=>advanceFirmRisk(one,'PEPE',{market:{}},time),/Okänt bord/);
+  assert.equal(advanceFirmRisk(one,'SOL',{market:{}},TIME+11*60000),one,'a flat desk needs no risk data');
+  assert.throws(()=>advanceFirmRisk(one,'PEPE',{market:{}},TIME),/Okänt bord/);
+  const resumed=setFirmPaused(out,false);assert.ok(FLOOR.desks.every(s=>resumed.desks[s].enabled));
 });
 
 test('the big screen total sums six live desk balances and waits when a held desk lacks a fresh price',()=>{
   const fresh=firmLive(newFirm(TIME),{},TIME);
   near(fresh.total,600);near(fresh.net,0);assert.deepEqual(fresh.waiting,[]);assert.equal(fresh.start,600);
-  const firm=advanceFirm(newFirm(TIME),snapshot(),TIME),quotes=Object.fromEntries(FLOOR.desks.map(s=>[s,{price:101,mark:100.99,at:TIME+5000}]));
-  const all=firmLive(firm,quotes,TIME+5000);
+  const firm=holding(),at=TIME+5000,quotes=Object.fromEntries(FLOOR.desks.map(s=>{const p=firm.desks[s].position.entry*1.05;return [s,{price:p,mark:p,at}];}));
+  const all=firmLive(firm,quotes,at);
   assert.deepEqual(all.waiting,[]);near(all.total,FLOOR.desks.reduce((sum,s)=>sum+all.desks[s].balance,0));assert.ok(all.total>600);
-  assert.ok(all.desks.BTC.openNet>0);assert.equal(all.desks.BTC.quote.mark,100.99);
-  delete quotes.XRP;const partial=firmLive(firm,quotes,TIME+5000);
+  assert.ok(all.desks.BTC.openNet>0);near(all.desks.BTC.openReturn,all.desks.BTC.openNet/100);assert.ok(all.desks.BTC.exposure>0);
+  delete quotes.XRP;const partial=firmLive(firm,quotes,at);
   assert.equal(partial.total,null);assert.equal(partial.net,null);assert.deepEqual(partial.waiting,['XRP']);assert.ok(partial.desks.BTC.balance>0);assert.equal(partial.desks.XRP.balance,null);
-  const rows=riskRows(firm,all);assert.equal(rows.length,6);assert.ok(rows.every(r=>r.toSl>0&&r.toTp>0&&r.toLiq>r.toSl));
+  const rows=riskRows(firm,all);assert.equal(rows.length,6);
+  assert.ok(rows.every(r=>r.count===TREND.lookbacks.length&&r.toFirst>0&&r.toLast>=r.toFirst&&(r.toLiq===null||r.toLiq>r.toLast)),'stops sit above liquidation');
 });
 
 test('equity samples are at most one per minute, capped and validated on read',()=>{
@@ -100,17 +115,18 @@ test('equity samples are at most one per minute, capped and validated on read',(
 });
 
 test('firm statistics separate today from all time using Stockholm midnight',()=>{
-  const firm=advanceFirm(newFirm(TIME),snapshot(),TIME),time=TIME+2*STEP,p=held(firm.desks.BTC),q=snapshot(time);
-  q.market.BTC.markBars=q.market.BTC.markBars.map(b=>b.t===TIME+STEP?{...b,h:p.tp+.01,c:p.tp}:b);
-  const done=advanceFirmRisk(firm,'BTC',{market:{BTC:q.market.BTC}},time),stats=firmStats(done,time);
-  assert.equal(stats.trades,1);assert.equal(stats.wins,1);assert.ok(stats.realized>0);near(stats.today,stats.realized);
-  assert.equal(stats.desks.BTC.status,'cooldown');assert.equal(stats.desks.ETH.status,'trade');assert.equal(stats.inTrade,5);
-  assert.equal(firmStats(setFirmPaused(done,true),time+2*HOUR).desks.BTC.status,'paused');assert.equal(firmStats(done,time+2*HOUR).desks.BTC.status,'waiting');
+  const firm=holding(),time=TIME+HOUR,done=advanceFirm(firm,nextHour(firm,CRASH,time),time),stats=firmStats(done,time);
+  assert.equal(stats.trades,6);assert.equal(stats.losses,6);assert.ok(stats.realized<0);near(stats.today,stats.realized);
+  assert.equal(stats.desks.BTC.status,'waiting');assert.equal(stats.inTrade,0);assert.equal(stats.desks.BTC.count,0);
+  assert.equal(firmStats(setFirmPaused(done,true),time).desks.BTC.status,'paused');
+  assert.equal(firmStats(firm,TIME).desks.ETH.status,'trade');assert.ok(firmStats(firm,TIME).desks.ETH.stops.first>0);
   const tomorrow=dayStart(time)+86400000+3600000;
   assert.equal(firmStats(done,tomorrow).today,0);assert.equal(dayStart(tomorrow)%1000,0);
   assert.ok(time-dayStart(time)<86400000&&time-dayStart(time)>=0);
-  const text=floorNarrative(done,firmLive(done,Object.fromEntries(FLOOR.desks.map(s=>[s,{price:100,mark:100,at:time}])),time),stats,time);
-  assert.match(text,/5 av 6 bord sitter i affär/);assert.match(text,/Karens efter avslut: BTC/);assert.match(text,/1 avslut sedan start: 1 vinster/);
+  const text=floorNarrative(done,firmLive(done,{},time),stats,time);
+  assert.match(text,/Inga bord är i affär just nu/);assert.match(text,/6 avslutade affärer sedan start: 0 vinster, 6 förluster/);assert.match(text,/nio trender/);
+  const quotes=Object.fromEntries(FLOOR.desks.map(s=>{const p=firm.desks[s].position.entry;return [s,{price:p,mark:p,at:TIME}];}));
+  assert.match(floorNarrative(firm,firmLive(firm,quotes,TIME),firmStats(firm,TIME),TIME),/6 av 6 bord sitter i affär: BTC .*9 av 9 trender/);
 });
 
 test('Stockholm midnight stays correct across both daylight saving changes',()=>{
@@ -123,19 +139,18 @@ test('Stockholm midnight stays correct across both daylight saving changes',()=>
 });
 
 test('firm quote timestamp is the oldest held quote, not the render time',()=>{
-  const firm=advanceFirm(newFirm(TIME),snapshot(),TIME);
-  const quotes=Object.fromEntries(FLOOR.desks.map((s,i)=>[s,{price:101,mark:101,at:TIME+i*1000}]));
+  const firm=holding();
+  const quotes=Object.fromEntries(FLOOR.desks.map((s,i)=>{const p=firm.desks[s].position.entry;return [s,{price:p,mark:p,at:TIME+i*1000}];}));
   assert.equal(firmLive(firm,quotes,TIME+10000).at,TIME);
   delete quotes.BTC;assert.equal(firmLive(firm,quotes,TIME+10000).at,null);
 });
 
 test('old hourly decisions are trimmed so six desks stay small in storage',()=>{
-  const firm=newFirm(TIME),desk=firm.desks.BTC,n=FLOOR.decisionLimit+20;
-  desk.activeDecisions=Array.from({length:n},(_,i)=>({hour:TIME-(n-i)*HOUR,at:TIME-(n-i)*HOUR+1000,action:'kontanter',symbol:null,score:null}));
-  desk.lastSignalAt=desk.activeDecisions.at(-1).hour;
+  let firm=holding();const desk=firm.desks.BTC,n=FLOOR.decisionLimit+20;
+  desk.decisions=[...Array.from({length:n-1},(_,i)=>({...desk.decisions[0],hour:TIME-(n-1-i)*HOUR,at:TIME-(n-1-i)*HOUR+1000})),desk.decisions[0]];
   validateFirm(firm);
-  const next=advanceFirm(firm,snapshot(),TIME);
-  assert.equal(next.desks.BTC.activeDecisions.length,FLOOR.decisionLimit);assert.equal(next.desks.BTC.activeDecisions.at(-1).hour,snapshot().hour);
+  const next=advanceFirm(firm,nextHour(firm,1.001),TIME+HOUR);
+  assert.equal(next.desks.BTC.decisions.length,FLOOR.decisionLimit);assert.equal(next.desks.BTC.decisions.at(-1).hour,TIME+HOUR);
   assert.equal(validateFirm(next),next);
 });
 
@@ -218,45 +233,38 @@ test('clickable regions cover the desks, rooms, screens and the coffee corner',(
   assert.equal(hitAt(5,5,regions),null);
 });
 
-const dailyBars=(time,step)=>Array.from({length:100},(_,i)=>{const t=Math.floor(time/step)*step-(99-i)*step,c=100+i;return {t,o:c,h:c+1,l:c-1,c,v:1};});
-const reply=(symbol,at,last=199)=>({retCode:0,time:at,result:{category:'linear',list:[{symbol,lastPrice:String(last),markPrice:String(last),nextFundingTime:String((Math.floor(at/28800000)+1)*28800000)}]}});
-const fakeGrab=runtime=>async url=>{
-  const u=new URL(url),symbol=u.searchParams.get('symbol'),time=runtime.at;runtime.urls?.push(u);
-  if(runtime.fail)throw Error('offline');
-  if(u.pathname.endsWith('/tickers'))return reply(symbol,time);
-  if(u.pathname.endsWith('/instruments-info'))return {retCode:0,time,result:{category:'linear',list:[{symbol,fundingInterval:'480',status:'Trading',contractType:'LinearPerpetual',quoteCoin:'USDT',settleCoin:'USDT',leverageFilter:{minLeverage:'1',maxLeverage:'150',leverageStep:'.01'}}]}};
-  if(u.pathname.endsWith('/risk-limit'))return {retCode:0,time,result:{category:'linear',list:[{id:1,symbol,riskLimitValue:'10000000',maxLeverage:'150',maintenanceMargin:'.005',mmDeduction:''}]}};
-  if(u.pathname.endsWith('/funding/history'))return {retCode:0,time,result:{category:'linear',list:Array.from({length:10},(_,i)=>({symbol,fundingRate:'0',fundingRateTimestamp:String(Math.floor(time/28800000)*28800000-i*28800000)}))}};
-  if(u.pathname.endsWith('/mark-price-kline'))return {retCode:0,time,result:{category:'linear',symbol,list:Array.from({length:1000},(_,i)=>[Math.floor(time/300000)*300000-i*300000,199,199,199,199].map(String))}};
-  if(u.searchParams.get('interval')==='60')return {retCode:0,time,result:{category:'linear',symbol,list:dailyBars(time,3600000).reverse().map(b=>[b.t,b.o,b.h,b.l,b.c,b.v].map(String))}};
-  throw Error('Unexpected request '+url);
-};
 const storage=()=>{const m=new Map();return {getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),map:m};};
 const locks=()=>{let chain=Promise.resolve();return {request:(key,fn)=>{const p=chain.then(fn);chain=p.catch(()=>{});return p;}};};
 const root=()=>{const nodes=new Map();return {innerHTML:'',querySelector:k=>{if(!nodes.has(k))nodes.set(k,{classList:{add(){},remove(){}},style:{}});return nodes.get(k);}};};
+const bybit=runtime=>{const grab=fakeBybit(runtime);return async(url,o)=>{if(runtime.fail)throw Error('offline');return grab(url,o);};};
 
-test('the mounted floor opens one position per desk from Bybit-shaped data, pauses, settles risk in turns and resets with an archive',async()=>{
-  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[]};
-  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at,confirm:()=>true});
+test('the mounted floor buys on every desk from Bybit-shaped data, pauses, settles risk in turns and resets with an archive',async()=>{
+  clearTrendCache();
+  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT};
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at,confirm:()=>true});
   await ui.refresh();
   const firm=readFirm(s,firmKey('one'),TIME);
   assert.deepEqual(heldSymbols(firm),[...FLOOR.desks]);
-  for(const symbol of FLOOR.desks)assert.equal(firm.desks[symbol].sleeves.find(x=>x.position).symbol,symbol);
   assert.match(r.querySelector('[data-floor-status]').textContent,/Firman handlar · 6 av 6 bord i affär/);
   assert.equal(readEquity(s,equityKey('one')).length,1);
+  // Decided for this hour: another refresh a minute later fetches no candles.
+  runtime.urls.length=0;runtime.at=TIME+61000;await ui.refresh();
+  assert.equal(runtime.urls.filter(u=>u.pathname.endsWith('/kline')).length,0);
   await ui.togglePause();
   assert.equal(readFirm(s,firmKey('one'),TIME).paused,true);assert.match(r.querySelector('[data-floor-pause]').textContent,/Återuppta/);
   assert.match(r.querySelector('[data-floor-status]').textContent,/Nya köp pausade/);
-  runtime.at=TIME+6000;runtime.urls.length=0;await ui.refreshLive();
+  runtime.at=TIME+66000;runtime.urls.length=0;await ui.refreshLive();
   const riskCalls=runtime.urls.filter(u=>u.pathname.endsWith('/mark-price-kline'));
   assert.equal(riskCalls.length,1,'one desk is settled per live cycle');
   assert.equal(runtime.urls.filter(u=>u.pathname.endsWith('/tickers')).length,7);
-  runtime.at=TIME+12000;runtime.urls.length=0;await ui.refreshLive();
+  runtime.at=TIME+72000;runtime.urls.length=0;await ui.refreshLive();
   assert.notEqual(runtime.urls.find(u=>u.pathname.endsWith('/mark-price-kline')).searchParams.get('symbol'),riskCalls[0].searchParams.get('symbol'));
   ui.pick({kind:'desk',id:'BTC'});
-  assert.match(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Lucas · Leo · Mateo · Vincent/);
-  ui.pick({kind:'room',id:'miguel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Miguel · Risk/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Närmast SL/);
+  const desk=r.querySelector('[data-floor-panel]').innerHTML;
+  assert.match(desk,/LONG/);assert.match(desk,/Lucas · Leo · Mateo · Vincent/);assert.match(desk,/Trender · 9 av 9 uppåt/);assert.match(desk,/class="on"[^>]*>360d/);assert.match(desk,/Första trendstopp/);
+  ui.pick({kind:'room',id:'miguel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Miguel · Risk/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Närmast första stopp/);
   ui.pick({kind:'room',id:'manuel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Manuel · Makro & nyheter/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Kryptobias i flödet/);
+  ui.pick({kind:'room',id:'pablo'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Pablo · Analys/);
   ui.pick({kind:'screen',id:'equity'});assert.match(r.querySelector('[data-floor-modal-body]').innerHTML,/Kapital · live/);
   const before=s.getItem(firmKey('one'));
   await ui.reset();
@@ -266,11 +274,22 @@ test('the mounted floor opens one position per desk from Bybit-shaped data, paus
   runtime.user=null;await ui.refreshLive();assert.match(r.querySelector('[data-floor-status]').textContent,/Logga in/);
 });
 
+test('an old SL/TP firm in this browser is archived and replaced before the first trend decision',async()=>{
+  clearTrendCache();
+  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT},legacy=JSON.stringify({version:FLOOR.legacy,createdAt:TIME-1e6,paused:false,desks:{}});
+  s.setItem(firmKey('one'),legacy);s.setItem(equityKey('one'),'[{"t":1,"v":590}]');
+  const ui=mountFloor(r,{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
+  await ui.refresh();
+  assert.equal(s.getItem(firmKey('one')+':before-trend:'+TIME),legacy);assert.equal(s.getItem(equityKey('one')+':before-trend:'+TIME),'[{"t":1,"v":590}]');
+  assert.deepEqual(heldSymbols(readFirm(s,firmKey('one'),TIME)),[...FLOOR.desks]);
+});
+
 test('changing users hides the previous desk and modal and news links reject scripts',async()=>{
-  const r=root(),s=storage(),runtime={at:TIME,user:'one',active:true},shown=new Set();
+  clearTrendCache();
+  const r=root(),s=storage(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT},shown=new Set();
   r.querySelector('[data-floor-modal]').classList={add:x=>shown.add(x),remove:x=>shown.delete(x)};
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>true,storage:s,locks:locks(),now:()=>runtime.at,
-    grab:fakeGrab(runtime),getNews:()=>({items:[{title:'Unsafe',ts:TIME,link:'javascript:alert(1)'},{title:'Safe',ts:TIME,link:'https://example.com/news'}]})});
+    grab:bybit(runtime),getNews:()=>({items:[{title:'Unsafe',ts:TIME,link:'javascript:alert(1)'},{title:'Safe',ts:TIME,link:'https://example.com/news'}]})});
   await ui.refresh();ui.pick({kind:'desk',id:'BTC'});ui.pick({kind:'screen',id:'news'});
   assert.equal(r.querySelector('[data-floor-panel]').hidden,false);assert.ok(shown.has('show'));
   assert.doesNotMatch(r.querySelector('[data-floor-modal-body]').innerHTML,/javascript:/);
@@ -280,12 +299,13 @@ test('changing users hides the previous desk and modal and news links reject scr
 });
 
 test('a failed firm write leaves no in-memory trade and the status says why',async()=>{
-  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true};
+  clearTrendCache();
+  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT};
   const save=s.setItem;s.setItem=(k,v)=>{if(k===firmKey('one'))throw Error('storage full');save(k,v);};
-  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at});
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
   await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null);assert.equal(r.querySelector('[data-floor-status]').textContent,'Handeln väntar: storage full');
-  ui.pick({kind:'desk',id:'SHIB'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Väntar på timsignal/);assert.doesNotMatch(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);
+  ui.pick({kind:'desk',id:'SHIB'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Väntar på att en trend ska bryta uppåt/);assert.doesNotMatch(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);
   runtime.active=false;s.setItem=save;runtime.at=TIME+70000;await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null,'inactive pages fetch nothing');
 });
@@ -326,7 +346,7 @@ test('the desk label shows current trade percent and shares freshness and thresh
   assert.equal(deskTradeLabel({...desk,openReturn:.5},TIME),'+50,00 % nu');
   assert.equal(deskTradeLabel({...desk,openReturn:-.1},TIME),'-10,00 % nu');
   assert.equal(deskTradeLabel(desk,TIME+15001),'väntar på pris');
-  assert.equal(deskTradeLabel({...desk,status:'cooldown'},TIME),'karens');
+  assert.equal(deskTradeLabel({...desk,status:'waiting'},TIME),'väntar trend');assert.equal(deskTradeLabel({...desk,status:'loading'},TIME),'laddar…');assert.equal(deskTradeLabel({...desk,status:'paused'},TIME),'pausad');
 });
 
 test('all four traders jump on their own table and recline without changing simulation state',()=>{
@@ -345,24 +365,33 @@ test('all four traders jump on their own table and recline without changing simu
 });
 
 test('live quotes drive cash guns and bags, then remove them on falling profit, stale prices and trade close',async()=>{
-  const s=storage(),runtime={at:TIME,user:'one',active:true};
-  const local=mountFloor(root(),{getUser:()=>runtime.user,isActive:()=>true,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at});
+  clearTrendCache();
+  const s=storage(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT};
+  const local=mountFloor(root(),{getUser:()=>runtime.user,isActive:()=>true,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
   await local.refresh();let firm=readFirm(s,firmKey('one'),TIME),emit;
+  assert.deepEqual(heldSymbols(firm),[...FLOOR.desks]);
   const r=root(),frames=[],paint=[];
   const ctx={measureText:s=>({width:String(s).length*6}),createLinearGradient:()=>({addColorStop(){}}),createRadialGradient:()=>({addColorStop(){}})};
   for(const method of ['beginPath','moveTo','lineTo','closePath','fill','stroke','fillRect','roundRect','arc','ellipse','fillText','setLineDash','save','restore','rect','clip','strokeRect','setTransform','transform']){
     ctx[method]=(...args)=>{for(const arg of args)if(typeof arg==='number')assert.ok(Number.isFinite(arg),method);if(method==='fill')paint.push(ctx.fillStyle);};
   }
   Object.assign(r.querySelector('[data-floor-canvas]'),{clientWidth:1440,clientHeight:900,getContext:()=>ctx});
-  let quote=199;
+  // Price moves that give each desk's open trade roughly +0 %, +30 % and +80 % of its starting capital.
+  const exposure=firm.desks.BTC.decisions[0].exposure,move=gain=>1+gain/exposure,quote={factor:1};
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>true,isVisible:()=>true,now:()=>runtime.at,raf:fn=>frames.push(fn),storage:s,
     cloud:{available:()=>true,subscribe:(_,cb)=>{emit=()=>cb({firm,equity:[]});queueMicrotask(emit);return ()=>{};}},
-    grab:async url=>reply(new URL(url).searchParams.get('symbol'),runtime.at,quote)});
+    grab:async(url,o)=>{runtime.price=Object.fromEntries(FLOOR.desks.map(d=>[d,firm.desks[d].position?firm.desks[d].position.entry*quote.factor:1]));return fakeBybit(runtime)(url,o);}});
   ui.show();await Promise.resolve();
   const draw=()=>{paint.length=0;frames.shift()();return {guns:paint.filter(c=>c==='#d8b35d').length,bags:paint.filter(c=>c==='#b49455').length};};
-  const expect=async(price,mode)=>{quote=price;runtime.at+=6000;await ui.refreshLive();const p=draw();assert.equal(p.guns,mode==='money'?24:0);assert.equal(p.bags,mode==='lounge'?24:0);};
-  await expect(199,null);await expect(201,'money');await expect(205,'lounge');await expect(201,'money');await expect(199,null);
-  await expect(205,'lounge');runtime.at+=15001;assert.deepEqual(draw(),{guns:0,bags:0});
-  await expect(201,'money');firm=newFirm(runtime.at);emit();assert.deepEqual(draw(),{guns:0,bags:0});
+  const expect=async(factor,mode)=>{
+    quote.factor=factor;runtime.at+=6000;
+    // The cloud keeps each desk's funding check current; mirror that for the live value.
+    firm={...firm,desks:Object.fromEntries(FLOOR.desks.map(d=>[d,firm.desks[d].position?{...firm.desks[d],position:{...firm.desks[d].position,fundingThrough:runtime.at}}:firm.desks[d]]))};emit();
+    await ui.refreshLive();const p=draw();
+    assert.equal(p.guns,mode==='money'?24:0,'guns at '+factor);assert.equal(p.bags,mode==='lounge'?24:0,'bags at '+factor);
+  };
+  await expect(1,null);await expect(move(.3),'money');await expect(move(.8),'lounge');await expect(move(.3),'money');await expect(1,null);
+  await expect(move(.8),'lounge');runtime.at+=15001;assert.deepEqual(draw(),{guns:0,bags:0});
+  await expect(move(.3),'money');firm=newFirm(runtime.at);emit();assert.deepEqual(draw(),{guns:0,bags:0});
   ui.hide();
 });

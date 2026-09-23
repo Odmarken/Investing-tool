@@ -24,7 +24,7 @@ import {
 } from './motor.js';
 import { fetchPlan, applyPlan, sampleFirmEquity } from './cloud-runner.js';
 import { readActiveAccount } from './crypto-momentum-active.js';
-import { FLOOR, validateFirm } from './trading-floor.js';
+import { FLOOR, validateFirm, isLegacyFirm, newFirm, setFirmPaused } from './trading-floor.js';
 
 initializeApp();
 const db = getFirestore();
@@ -393,18 +393,44 @@ function lasFloor(meta, deskSnaps){
   for(const s of deskSnaps) if(s.exists) desks[s.id] = s.data().account;
   return validateFirm({ version: meta.version, createdAt: meta.createdAt, paused: !!meta.paused, desks });
 }
+/* Första trading floor-versionen körde timmomentum med SL och TP. En sådan
+   firma arkiveras en gång, med kurva och bord, och ersätts av nya trendbord
+   på 100 $. Pausläget följer med. Transaktionen gör inget om någon annan
+   (sidan eller ett parallellt varv) redan har uppgraderat. */
+async function uppgraderaFloor(uid){
+  const metaRef = db.doc('floor/' + uid), eqRef = db.doc('floor/' + uid + '/data/equity');
+  const deskRefs = FLOOR.desks.map(s => db.doc('floor/' + uid + '/desks/' + s));
+  await db.runTransaction(async tx => {
+    const snaps = await tx.getAll(metaRef, ...deskRefs, eqRef);
+    if(!snaps[0].exists || !isLegacyFirm(snaps[0].data())) return;
+    const meta = snaps[0].data(), t = Date.now(), arkiv = db.collection('floor/' + uid + '/archive').doc();
+    tx.set(arkiv, { version: meta.version, createdAt: meta.createdAt ?? null, paused: !!meta.paused, archivedAt: t, reason: 'strategy-change',
+      equity: rent(snaps.at(-1).exists ? (snaps.at(-1).data().points || []) : []) });
+    FLOOR.desks.forEach((s, i) => { if(snaps[1 + i].exists) tx.set(arkiv.collection('desks').doc(s), { account: rent(snaps[1 + i].data().account) }); });
+    let firm = newFirm(Math.max(t, (meta.createdAt || 0) + 1));
+    if(meta.paused) firm = setFirmPaused(firm, true);
+    tx.set(metaRef, { version: firm.version, createdAt: firm.createdAt, paused: firm.paused, updatedAt: t, lastRun: null, lastError: null });
+    FLOOR.desks.forEach((s, i) => tx.set(deskRefs[i], { account: rent(firm.desks[s]), updatedAt: t }));
+    tx.set(eqRef, { points: [], updatedAt: t });
+  });
+}
 export async function molnKor(uid, logg = () => {}){
   const now = () => Date.now();
   const momRef = db.doc('momentum/' + uid), metaRef = db.doc('floor/' + uid);
   const deskRefs = FLOOR.desks.map(s => db.doc('floor/' + uid + '/desks/' + s)), eqRef = db.doc('floor/' + uid + '/data/equity');
-  const first = await db.getAll(momRef, metaRef, ...deskRefs);
+  let first = await db.getAll(momRef, metaRef, ...deskRefs);
+  if(first[1].exists && isLegacyFirm(first[1].data())){
+    try{ await uppgraderaFloor(uid); first = await db.getAll(momRef, metaRef, ...deskRefs); }
+    catch(e){ logg('moln ' + uid + ' floor-uppgradering: ' + e.message); }
+  }
   let momentum = null, firm = null;
   try{ momentum = first[0].exists ? lasMomentum(first[0].data()) : null; }catch{/* Revalidated in the transaction below. */}
   try{ firm = first[1].exists ? lasFloor(first[1].data(), first.slice(2)) : null; }catch{/* Revalidated in the transaction below. */}
   /* Hämtningen är långsam och sker före transaktionen; transaktionen läser
      om kontona så att en paus eller återställning från sidan inte skrivs över. */
   let plan;
-  try{ plan = await fetchPlan(bybit, now, momentum, firm); }catch(e){ plan = { mode: 'error', error: e.message }; }
+  try{ plan = await fetchPlan(bybit, now, momentum, firm); }
+  catch(e){ plan = { momentum: { mode: 'error', error: e.message }, floor: { mode: 'error', error: e.message } }; }
   const t = now();
   let firmUt = null, firmRevision = null;
   await db.runTransaction(async tx => {
@@ -414,15 +440,15 @@ export async function molnKor(uid, logg = () => {}){
     try{ curM = snaps[0].exists ? lasMomentum(snaps[0].data()) : null; }catch(e){ felM = e.message; }
     try{ curF = snaps[1].exists ? lasFloor(snaps[1].data(), snaps.slice(2)) : null; }catch(e){ felF = e.message; }
     const ut = applyPlan(plan, curM, curF, t);
-    const skrivLugnt = d => plan.mode !== 'idle' || t - (d.lastRun || 0) > 300000;
+    const skrivLugnt = (mode, d) => mode !== 'idle' || t - (d.lastRun || 0) > 300000;
     if(snaps[0].exists){
       const d = snaps[0].data(), andrad = !!curM && ut.momentum.account !== curM;
-      if(andrad || skrivLugnt(d)) tx.set(momRef, { ...d, ...(andrad ? { account: rent(ut.momentum.account), updatedAt: t } : {}), lastRun: t, lastError: felM ?? ut.momentum.error ?? null });
+      if(andrad || skrivLugnt(plan.momentum.mode, d)) tx.set(momRef, { ...d, ...(andrad ? { account: rent(ut.momentum.account), updatedAt: t } : {}), lastRun: t, lastError: felM ?? ut.momentum.error ?? null });
     }
     if(snaps[1].exists){
       const d = snaps[1].data(), next = ut.firm.firm, andrad = !!curF && next !== curF;
       if(andrad) for(const [i, symbol] of FLOOR.desks.entries()) if(next.desks[symbol] !== curF.desks[symbol]) tx.set(deskRefs[i], { account: rent(next.desks[symbol]), updatedAt: t });
-      if(andrad || skrivLugnt(d)) tx.set(metaRef, { ...d, ...(andrad ? { updatedAt: t } : {}), lastRun: t, lastError: felF ?? ut.firm.error ?? null });
+      if(andrad || skrivLugnt(plan.floor.mode, d)) tx.set(metaRef, { ...d, ...(andrad ? { updatedAt: t } : {}), lastRun: t, lastError: felF ?? ut.firm.error ?? null });
       firmUt = next;
       firmRevision = andrad ? t : (d.updatedAt ?? null);
     }
@@ -443,7 +469,7 @@ export async function molnKor(uid, logg = () => {}){
       });
     }catch(e){ logg('moln ' + uid + ' kapitalkurva: ' + e.message); }
   }
-  return { mode: plan.mode, momentum: !!momentum, floor: !!firm };
+  return { mode: plan.momentum.mode + '/' + plan.floor.mode, momentum: !!momentum, floor: !!firm };
 }
 export async function molnVarv(logg = () => {}){
   const [m, f] = await Promise.all([db.collection('momentum').get(), db.collection('floor').get()]);

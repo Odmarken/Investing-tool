@@ -18,8 +18,9 @@ för Yahoos fördröjda data.
 | Fil | Vad den gör |
 |---|---|
 | `index.html` | Dashboarden — grafer, kort, nyheter, demokonto |
-| `trading-floor.js`, `trading-floor-scene.js`, `trading-floor-ui.js` | Trading floor: sex momentumbord i ett isometriskt kontor, beskrivet i [TRADING-FLOOR.md](TRADING-FLOOR.md) |
-| `cloud-runner.js` | Molnkörningen av momentumkontot och borden: en marknadshämtning per inloggning och minut, körs av `molnCron` i `functions/` |
+| `trading-floor.js`, `trading-floor-scene.js`, `trading-floor-ui.js` | Trading floor: sex trendbord i ett isometriskt kontor, beskrivet i [TRADING-FLOOR.md](TRADING-FLOOR.md) |
+| `floor-trend.js`, `floor-trend-market.js` | Bordens trendstrategi (nio Donchian-horisonter, volatilitetsstyrd storlek) och deras timstaplar från Bybit; valet finns i [research/floor-trend-results.md](research/floor-trend-results.md) |
+| `cloud-runner.js` | Molnkörningen av momentumkontot och borden: två oberoende planer per inloggning och minut, körs av `molnCron` i `functions/` |
 | `motor.js` | Signalmotorn: indikatorer, de fyra familjerna, ICT, gradering. Delas av sidan och workern |
 | `konto.js` | Demokontot i Cloudflare-workern — öppnar, stänger och sparar i KV |
 | `functions/index.js` | Samma sak på Firebase: cron var 5:e minut, proxy, ingest och Firestore |
@@ -84,7 +85,7 @@ molnet och skärmen kör exakt samma signalmotor.
 | | |
 |---|---|
 | `kontoCron` | Var femte minut: hämtar staplar, bygger setups, öppnar A- och B-affärer och stänger dem som nått stopp eller mål |
-| `molnCron` | Varje minut: AI-momentumkontot och trading floor-borden per inloggning, samma frysta regler som sidan, se [TRADING-FLOOR.md](TRADING-FLOOR.md) |
+| `molnCron` | Varje minut: AI-momentumkontot och trading floor-borden per inloggning, samma regler som sidan; uppgraderar en firma från golvets första version en gång, se [TRADING-FLOOR.md](TRADING-FLOOR.md) |
 | `GET /api/moln/tick?k=FEED_KEY` | Kör ett molnvarv för momentum och trading floor på studs |
 | `GET /api/proxy?url=…` | Marknadsdata och RSS åt sidan, med en lista över tillåtna värdar |
 | `POST /api/ingest` | TradingView-alertets webhook, samma format som workern |

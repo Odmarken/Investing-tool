@@ -1,13 +1,12 @@
-// Trading floor: six independent desk accounts. Each desk runs the frozen
-// hourly momentum rules from crypto-momentum-active.js on one Bybit perpetual.
-// The momentum modules are reused unchanged; nothing here sends orders.
-import {ACTIVE,newActiveAccount,validateActiveAccount,advanceActiveAccount,advanceActiveRisk} from './crypto-momentum-active.js';
-import {momentumLiveValue} from './crypto-momentum-live.js';
-import {liquidationPrice} from './crypto-leverage.js';
+// Trading floor: six independent trend desks, one Bybit perpetual each. Every
+// desk runs the nine-horizon trend ensemble from floor-trend.js (selected and
+// validated in research/floor-trend-results.md). Nothing here sends orders.
+import {CONTRACTS} from './bybit-contracts.js';
+import {TREND,newTrendDesk,validateTrendDesk,advanceTrendDesk,settleTrendRisk,trendLiveValue,trendLiquidation,trendCount,trendStops} from './floor-trend.js';
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const positive=x=>finite(x)&&x>0;
-export const FLOOR=Object.freeze({version:'trading-floor-v1',desks:Object.freeze(ACTIVE.symbols.slice(0,6)),start:ACTIVE.start,
-  decisionLimit:500,equityLimit:1440,equityInterval:60000,storagePrefix:'riptide.floor.v1:'});
+export const FLOOR=Object.freeze({version:'trading-floor-v2',legacy:'trading-floor-v1',desks:Object.freeze(Object.keys(CONTRACTS).slice(0,6)),start:TREND.start,
+  decisionLimit:TREND.decisionLimit,equityLimit:1440,equityInterval:60000,storagePrefix:'riptide.floor.v1:'});
 export const ROOMS=Object.freeze([
   {id:'elias',name:'Elias',role:'VD'},
   {id:'pablo',name:'Pablo',role:'Analys'},
@@ -20,66 +19,74 @@ export const traderNames=symbol=>{const i=FLOOR.desks.indexOf(symbol);return i<0
 export const firmKey=user=>FLOOR.storagePrefix+encodeURIComponent(user);
 export const equityKey=user=>firmKey(user)+':equity';
 
-export function newDesk(){return {...newActiveAccount(),enabled:true};}
 export function newFirm(now){
   if(!positive(now))throw Error('Ogiltig starttid');
-  return {version:FLOOR.version,createdAt:now,paused:false,desks:Object.fromEntries(FLOOR.desks.map(symbol=>[symbol,newDesk()]))};
+  return {version:FLOOR.version,createdAt:now,paused:false,desks:Object.fromEntries(FLOOR.desks.map(symbol=>[symbol,newTrendDesk()]))};
 }
 export function validateFirm(firm){
+  // A page loaded before a deploy meets the new format in the cloud: say so instead of failing silently.
+  if(typeof firm?.version==='string'&&firm.version.startsWith('trading-floor-')&&firm.version!==FLOOR.version&&firm.version!==FLOOR.legacy)
+    throw Error('Golvet har uppdaterats ('+firm.version+'). Ladda om sidan.');
   if(firm?.version!==FLOOR.version||!positive(firm.createdAt)||typeof firm.paused!=='boolean'||!firm.desks||typeof firm.desks!=='object')throw Error('Ogiltig trading floor');
   const keys=Object.keys(firm.desks);
   if(keys.length!==FLOOR.desks.length||FLOOR.desks.some(symbol=>!keys.includes(symbol)))throw Error('Borden stämmer inte');
   for(const symbol of FLOOR.desks){
-    const desk=validateActiveAccount(firm.desks[symbol]);
+    const desk=validateTrendDesk(firm.desks[symbol],symbol);
     if(desk.enabled!==!firm.paused)throw Error('Bordets handelsläge stämmer inte med firman');
-    if(desk.sleeves.some(s=>s.position&&s.symbol!==symbol))throw Error('Bord '+symbol+' håller fel coin');
-    if(desk.trades.some(t=>t.symbol!==symbol)||desk.activeDecisions.some(d=>d.symbol!==null&&d.symbol!==symbol))throw Error('Bord '+symbol+' har handlat fel coin');
   }
   return firm;
 }
+// The first floor ran the hourly SL/TP momentum rules. Its firm is archived
+// and replaced by fresh trend desks; positions are not carried over.
+export const isLegacyFirm=value=>value?.version===FLOOR.legacy;
 export function readFirm(storage,key,now){
-  const raw=storage.getItem(key);
-  return raw===null?newFirm(now):validateFirm(JSON.parse(raw));
+  const raw=storage.getItem(key);if(raw===null)return newFirm(now);
+  const firm=JSON.parse(raw);
+  return isLegacyFirm(firm)?newFirm(now):validateFirm(firm);
 }
-// Every desk's position keyed by symbol, so one shared market fetch includes
-// the mark-price and funding history of each held contract.
-export function firmPositions(firm){
-  return {profile:ACTIVE.profile,sleeves:ACTIVE.symbols.map(symbol=>({symbol,cash:0,position:firm.desks[symbol]?.sleeves.find(s=>s.symbol===symbol)?.position??null}))};
+// Call inside the firm's tab lock. Archives an old firm and its curve, then stores new desks.
+export function upgradeStoredFirm(storage,key,curveKey,now){
+  const raw=storage.getItem(key);if(raw===null||!isLegacyFirm(JSON.parse(raw)))return false;
+  let suffix=now,backup=key+':before-trend:'+suffix;while(storage.getItem(backup)!==null)backup=key+':before-trend:'+(++suffix);
+  storage.setItem(backup,raw);
+  const chart=storage.getItem(curveKey);if(chart!==null)storage.setItem(curveKey+':before-trend:'+suffix,chart);
+  storage.setItem(key,JSON.stringify(newFirm(now)));storage.setItem(curveKey,'[]');
+  return true;
 }
-// A desk sees fresh quotes for every coin but only its own entry signal.
-export function deskSnapshot(shared,symbol){
-  return {hour:shared.hour,market:Object.fromEntries(Object.entries(shared.market??{}).map(([s,m])=>[s,s===symbol?m:{...m,signal:null}]))};
-}
-const trim=desk=>desk.activeDecisions.length<=FLOOR.decisionLimit?desk:{...desk,activeDecisions:desk.activeDecisions.slice(-FLOOR.decisionLimit)};
-export function advanceFirm(firm,shared,now){
+// Desks whose hour has not been decided yet need fresh candles.
+export const needsHourly=(firm,now)=>FLOOR.desks.some(symbol=>{const t=firm.desks[symbol].signal.through;return t===null||t<Math.floor(now/TREND.hour)*TREND.hour;});
+export function advanceFirm(firm,snapshot,now){
   validateFirm(firm);
   const desks={};let changed=false;
   for(const symbol of FLOOR.desks){
-    const desk=firm.desks[symbol],next=trim(advanceActiveAccount(desk,deskSnapshot(shared,symbol),now));
+    const desk=firm.desks[symbol],market=snapshot?.market?.[symbol];
+    if(!market)throw Error('Timpriser saknas för '+symbol);
+    const next=advanceTrendDesk(desk,symbol,{...market,hour:snapshot.hour},now);
     desks[symbol]=next;if(next!==desk)changed=true;
   }
   return changed?validateFirm({...firm,desks}):firm;
 }
-export function advanceFirmRisk(firm,symbol,market,now){
+export function advanceFirmRisk(firm,symbol,snapshot,now){
   validateFirm(firm);
   const desk=firm.desks[symbol];if(!desk)throw Error('Okänt bord');
-  const next=advanceActiveRisk(desk,market,now);
+  if(!desk.position)return firm;
+  const next=settleTrendRisk(desk,symbol,snapshot?.market?.[symbol],now);
   return next===desk?firm:validateFirm({...firm,desks:{...firm.desks,[symbol]:next}});
 }
 export function setFirmPaused(firm,paused){
   validateFirm(firm);
   return validateFirm({...firm,paused,desks:Object.fromEntries(FLOOR.desks.map(symbol=>[symbol,{...firm.desks[symbol],enabled:!paused}]))});
 }
-export const heldSymbols=firm=>FLOOR.desks.filter(symbol=>firm.desks[symbol].sleeves.some(s=>s.position));
-export const deskPosition=desk=>desk.sleeves.find(s=>s.position)?.position??null;
-export const deskCash=desk=>desk.sleeves.reduce((sum,s)=>sum+s.cash,0);
+export const heldSymbols=firm=>FLOOR.desks.filter(symbol=>firm.desks[symbol].position);
+export const deskPosition=desk=>desk.position;
+export const deskCash=desk=>desk.cash;
 
 export function firmLive(firm,quotes,now){
   const desks={},waiting=[];let total=0,at=null;
   for(const symbol of FLOOR.desks){
-    const desk=firm.desks[symbol],live=momentumLiveValue(desk,quotes,now),position=deskPosition(desk);
-    desks[symbol]={balance:live.balance,openNet:live.openNet,reason:live.reason,at:live.at,position,cash:deskCash(desk),
-      quote:position?live.positions[symbol]?.quote??null:null,pnl:live.balance===null?null:live.balance-FLOOR.start};
+    const desk=firm.desks[symbol],live=trendLiveValue(desk,quotes?.[symbol],now),position=desk.position;
+    desks[symbol]={balance:live.balance,openNet:live.openNet,openReturn:live.openReturn,exposure:live.exposure,reason:live.reason,at:live.at,position,cash:desk.cash,
+      quote:position?live.quote:null,pnl:live.balance===null?null:live.balance-FLOOR.start};
     if(live.balance===null)waiting.push(symbol);else total+=live.balance;
     if(position&&live.at!==null)at=at===null?live.at:Math.min(at,live.at);
   }
@@ -96,10 +103,9 @@ export function dayStart(now){
   while(lo<hi){const mid=Math.floor((lo+hi)/2);if(STOCKHOLM.format(mid)===date)hi=mid;else lo=mid+1;}
   cachedDay=date;cachedStart=lo;return lo;
 }
-export function deskStatus(desk,now){
-  if(deskPosition(desk))return 'trade';
+export function deskStatus(desk){
+  if(desk.position)return 'trade';
   if(!desk.enabled)return 'paused';
-  if(desk.cooldownUntil>now)return 'cooldown';
   return 'waiting';
 }
 export function firmStats(firm,now){
@@ -108,8 +114,8 @@ export function firmStats(firm,now){
   for(const symbol of FLOOR.desks){
     const desk=firm.desks[symbol],list=desk.trades,pnl=list.reduce((sum,t)=>sum+t.pnl,0),dayPnl=list.filter(t=>t.at>=day).reduce((sum,t)=>sum+t.pnl,0);
     const w=list.filter(t=>t.pnl>0).length,l=list.filter(t=>t.pnl<0).length,liq=list.filter(t=>t.reason==='likvidation').length;
-    desks[symbol]={realized:pnl,today:dayPnl,trades:list.length,wins:w,losses:l,liquidations:liq,status:deskStatus(desk,now),
-      cash:deskCash(desk),position:deskPosition(desk),last:list.at(-1)??null,decision:desk.activeDecisions.at(-1)??null,waitReason:desk.waitReason??''};
+    desks[symbol]={realized:pnl,today:dayPnl,trades:list.length,wins:w,losses:l,liquidations:liq,status:deskStatus(desk),cash:desk.cash,position:desk.position,
+      last:list.at(-1)??null,decision:desk.decisions.at(-1)??null,count:trendCount(desk.signal),stops:trendStops(desk.signal),waitReason:desk.waitReason??''};
     realized+=pnl;today+=dayPnl;trades+=list.length;wins+=w;losses+=l;liquidations+=liq;fees+=desk.fees;funding+=desk.funding;
   }
   return {desks,realized,today,trades,wins,losses,liquidations,fees,funding,inTrade:heldSymbols(firm).length,day};
@@ -127,34 +133,38 @@ export function sampleEquity(points,t,v,rules=FLOOR){
   const next=[...points.filter(p=>p.t<t),{t,v}];
   return next.length>rules.equityLimit?next.slice(-rules.equityLimit):next;
 }
+// Distance from the mark to the first trend stop (the position shrinks), the
+// last one (the position closes) and liquidation, per held desk.
 export function riskRows(firm,live){
   return FLOOR.desks.map(symbol=>{
-    const p=deskPosition(firm.desks[symbol]);if(!p)return null;
-    const mark=live?.desks[symbol]?.quote?.mark??null,liq=liquidationPrice(p);
-    return {symbol,budget:p.budget,initialRisk:p.initialRisk,leverage:p.rules.leverage,sl:p.sl,tp:p.tp,liquidation:liq,deadline:p.deadline,mark,
-      toSl:mark===null?null:(mark-p.sl)/mark,toTp:mark===null?null:(p.tp-mark)/mark,toLiq:mark===null?null:(mark-liq)/mark};
+    const desk=firm.desks[symbol],p=desk.position;if(!p)return null;
+    const mark=live?.desks[symbol]?.quote?.mark??null,liq=trendLiquidation(desk),stops=trendStops(desk.signal),rel=x=>mark===null||!x?null:(mark-x)/mark;
+    return {symbol,count:trendCount(desk.signal),exposure:live?.desks[symbol]?.exposure??null,units:p.units,entry:p.entry,mark,liquidation:liq,
+      firstStop:stops?.first??null,lastStop:stops?.last??null,toFirst:rel(stops?.first),toLast:rel(stops?.last),toLiq:rel(liq)};
   }).filter(Boolean);
 }
 const money=n=>n.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
 const signed=n=>(n>=0?'+':'')+money(n);
+const pct=n=>(n*100).toLocaleString('sv-SE',{minimumFractionDigits:1,maximumFractionDigits:1})+' %';
 const clock=t=>new Date(t).toLocaleTimeString('sv-SE',{timeZone:'Europe/Stockholm',hour:'2-digit',minute:'2-digit'});
 // Pablo reads the floor the way he reads a setup: only what the accounts know.
 export function floorNarrative(firm,live,stats,now){
-  const rows=[];
+  const rows=[],n=TREND.lookbacks.length;
   rows.push(live.total===null?'Firman väntar på färska priser för '+live.waiting.join(', ')+', så totalen håller jag inne med.':
     'Firman står i '+money(live.total)+' av '+money(live.start)+' insatta. Det är '+signed(live.net)+' sedan start, och '+signed(stats.today)+' realiserat i dag.');
   const inTrade=FLOOR.desks.filter(s=>stats.desks[s].status==='trade');
   if(inTrade.length){
     rows.push(inTrade.length+' av '+FLOOR.desks.length+' bord sitter i affär: '+inTrade.map(s=>{
-      const d=live.desks[s],p=d.position,mark=d.quote?.mark;
-      return s+(d.openNet===null?' (väntar på pris)':' '+signed(d.openNet)+(mark?', '+((mark-p.sl)/mark*100).toFixed(1)+' % till SL och '+((p.tp-mark)/mark*100).toFixed(1)+' % till TP':''));
+      const d=live.desks[s],st=stats.desks[s],mark=d.quote?.mark;
+      return s+(d.openNet===null?' (väntar på pris)':' '+signed(d.openNet))+', '+st.count+' av '+n+' trender'+(finite(d.exposure)?', '+d.exposure.toFixed(1).replace('.',',')+'× exponering':'')+
+        (mark&&st.stops?', '+pct((mark-st.stops.first)/mark)+' till första stoppet':'');
     }).join('; ')+'.');
-  }else rows.push(firm.paused?'Inga bord är i affär och nya köp är pausade. Kontoret fikar.':'Inga bord är i affär just nu. Alla väntar på nästa timsignal med positivt momentum.');
-  const cooling=FLOOR.desks.filter(s=>stats.desks[s].status==='cooldown');
-  if(cooling.length)rows.push('Karens efter avslut: '+cooling.map(s=>s+' till '+clock(firm.desks[s].cooldownUntil)).join(', ')+'.');
+  }else rows.push(firm.paused?'Inga bord är i affär och nya köp är pausade. Kontoret fikar.':'Inga bord är i affär just nu. Alla väntar på att någon trend ska bryta uppåt.');
+  const idle=FLOOR.desks.filter(s=>stats.desks[s].status!=='trade');
+  if(inTrade.length&&idle.length)rows.push('Utan position: '+idle.join(', ')+'. De köper först när en stängning slår sitt högsta på minst fem dygn.');
   const ranked=FLOOR.desks.map(s=>[s,live.desks[s].pnl]).filter(([,v])=>v!==null).sort((a,b)=>b[1]-a[1]);
   if(ranked.length>1)rows.push('Bäst hittills är '+ranked[0][0]+' med '+signed(ranked[0][1])+'. Sämst är '+ranked.at(-1)[0]+' med '+signed(ranked.at(-1)[1])+'.');
-  rows.push(stats.trades?stats.trades+' avslut sedan start: '+stats.wins+' vinster, '+stats.losses+' förluster'+(stats.liquidations?', '+stats.liquidations+' likvidationer':'')+'. Avgifter '+money(stats.fees)+', funding '+money(stats.funding)+'.':'Inga avslut ännu. Historiken börjar när första bordet stänger sin affär.');
-  rows.push('Pablos bedömning: samma regler som AI-momentum, ett coin per bord. Ingen av profilerna klarade utvecklingskraven, så räkna det här som ett demospel med riktiga priser, inte en validerad edge. Klockan är '+clock(now)+'.');
+  rows.push(stats.trades?stats.trades+' avslutade affärer sedan start: '+stats.wins+' vinster, '+stats.losses+' förluster'+(stats.liquidations?', '+stats.liquidations+' likvidationer':'')+'. Avgifter '+money(stats.fees)+', funding '+money(stats.funding)+'.':'Inga avslutade affärer ännu. Historiken börjar när första bordet säljer hela sin position.');
+  rows.push('Pablos bedömning: varje bord följer nio trender från 5 till 360 dygn och köper mer ju fler som pekar uppåt, med storlek efter volatiliteten. De flesta affärer blir små förluster; vinsten kommer från några få långa trender. Regeln var bäst av sju i historiska tester 2021–2026, men det är ett demospel med riktiga priser, inte ett löfte. Klockan är '+clock(now)+'.');
   return rows.join('\n\n');
 }

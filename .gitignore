@@ -11,6 +11,7 @@ functions/node_modules/
 functions/modell.js
 functions/cloud-runner.js
 functions/trading-floor.js
+functions/floor-trend*.js
 functions/crypto-*.js
 functions/bybit-contracts.js
 .matning/

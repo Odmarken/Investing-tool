@@ -1,4 +1,4 @@
-import {FLOOR,newFirm,validateFirm,setFirmPaused} from './trading-floor.js';
+import {FLOOR,newFirm,validateFirm,setFirmPaused,isLegacyFirm} from './trading-floor.js';
 
 const clean=value=>JSON.parse(JSON.stringify(value));
 
@@ -27,6 +27,7 @@ export function createFloorCloud({getContext,available,now=Date.now}){
         fs.onSnapshotsInSync(db,()=>{
           if(!dirty||seen.size!==3)return;dirty=false;
           if(!meta){onState({missing:true});return;}
+          if(isLegacyFirm(meta)){onState({legacy:true});return;}
           onState({firm:{version:meta.version,createdAt:meta.createdAt,paused:meta.paused,desks},equity,
             lastRun:meta.lastRun??null,lastError:meta.lastError??null});
         })
@@ -50,6 +51,20 @@ export function createFloorCloud({getContext,available,now=Date.now}){
         const current=readFirm(snapshots[0].data(),snapshots.slice(1)),next=setFirmPaused(current,!current.paused),t=now();
         tx.update(r.meta,{paused:next.paused,updatedAt:t});
         FLOOR.desks.forEach((s,i)=>tx.update(r.desks[i],{'account.enabled':!next.paused,updatedAt:t}));
+      });
+    },
+    // The first floor ran hourly SL/TP momentum. Archive it once and start trend desks, keeping the pause.
+    async upgrade(uid){
+      const {db,fs}=getContext(),r=refs(db,fs,uid);
+      const archive=fs.doc(fs.collection(db,'floor',uid,'archive'));
+      await fs.runTransaction(db,async tx=>{
+        const snaps=await Promise.all([tx.get(r.meta),...r.desks.map(ref=>tx.get(ref)),tx.get(r.equity)]);
+        if(!snaps[0].exists()||!isLegacyFirm(snaps[0].data()))return;
+        const meta=snaps[0].data(),t=now();
+        tx.set(archive,{version:meta.version,createdAt:meta.createdAt??null,paused:!!meta.paused,archivedAt:t,reason:'strategy-change',equity:clean(snaps.at(-1).data()?.points||[])});
+        FLOOR.desks.forEach((s,i)=>{const account=snaps[1+i].data()?.account;if(account)tx.set(fs.doc(archive,'desks',s),{account:clean(account)});});
+        let firm=newFirm(Math.max(t,(meta.createdAt||0)+1));if(meta.paused)firm=setFirmPaused(firm,true);
+        writeFirm(tx,r,firm,t);tx.set(r.equity,{points:[],updatedAt:t});
       });
     },
     async reset(uid){

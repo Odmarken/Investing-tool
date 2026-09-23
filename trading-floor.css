@@ -36,7 +36,10 @@ body.floor>.wrap,body.floor>footer,body.floor>.banner,body.floor .tape,body.floo
 .floor-panel-head small{display:block;color:#65685f;font-size:10.5px}
 .floor-panel-traders{margin:0 0 6px;color:#65685f;font-size:11px}
 .floor-panel-state{margin:0 0 10px;font-weight:700;color:#326c63}
-.floor-panel-state.trade{color:#28724e}.floor-panel-state.cooldown{color:#896220}.floor-panel-state.paused{color:#70776b}
+.floor-panel-state.trade{color:#28724e}.floor-panel-state.paused{color:#70776b}
+.floor-trends{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 10px}
+.floor-trends span{font-family:var(--mono);font-size:10px;line-height:1.4;padding:2px 7px;border-radius:999px;border:1px solid rgba(82,91,79,.28);color:#70776b;background:rgba(255,255,255,.55)}
+.floor-trends span.on{background:#28724e;border-color:#28724e;color:#fff}
 .floor-panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}
 .floor-panel-grid>div{min-width:0}
 .floor-panel-grid span{display:block;font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;color:#70776b}

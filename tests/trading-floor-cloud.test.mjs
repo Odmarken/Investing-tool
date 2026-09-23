@@ -85,3 +85,21 @@ test('listeners do not expose half of a multi-document pause and stop on unsubsc
   f.emit('floor/one/desks');f.flush();assert.equal(states.length,2);validateFirm(states[1].firm);
   assert.equal(states[1].firm.paused,true);stop();assert.equal(f.listeners.size,0);
 });
+
+test('upgrade archives an old SL/TP firm once, keeps its pause and writes fresh trend desks',async()=>{
+  const f=fixture();
+  f.data.set('floor/one',{version:FLOOR.legacy,createdAt:TIME-1e6,paused:true,updatedAt:TIME-1e6,lastRun:TIME-1000,lastError:null});
+  for(const s of FLOOR.desks)f.data.set('floor/one/desks/'+s,{account:{version:'momentum-hourly-sl-tp-v4',symbol:s,cash:88}});
+  f.data.set('floor/one/data/equity',{points:[{t:TIME-1e6,v:600}]});
+  const states=[],stop=f.cloud.subscribe('one',s=>states.push(s));
+  for(const path of f.listeners.keys())f.emit(path);f.flush();
+  assert.deepEqual(states,[{legacy:true}]);
+  await f.cloud.upgrade('one');
+  const firm=f.firm();
+  assert.equal(firm.version,FLOOR.version);assert.equal(firm.paused,true);assert.ok(FLOOR.desks.every(s=>firm.desks[s].cash===100&&!firm.desks[s].enabled));
+  assert.equal(f.data.get('floor/one/archive/auto1').reason,'strategy-change');assert.equal(f.data.get('floor/one/archive/auto1').equity.length,1);
+  assert.equal(f.data.get('floor/one/archive/auto1/desks/BTC').account.cash,88);
+  assert.deepEqual(f.data.get('floor/one/data/equity').points,[]);assert.equal(f.data.get('floor/one').lastRun,null);
+  const after=structuredClone(f.data);await f.cloud.upgrade('one');assert.deepEqual(f.data,after,'a second upgrade does nothing');
+  stop();
+});

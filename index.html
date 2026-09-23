@@ -3506,9 +3506,10 @@ function summaryRoute(){
     renderSummary(); $('#summaryTitle').focus();
   }
 }
-/* Trading floor: sex momentumbord under #floor, samma helsidesväg som summaryn.
-   Borden handlar så länge kryptosidan är öppen; kontoret ritas bara när fliken
-   är framme. AI-momentum rörs inte: borden har egna konton med samma regler. */
+/* Trading floor: sex trendbord under #floor, samma helsidesväg som summaryn.
+   Utan moln handlar borden så länge kryptosidan är öppen; kontoret ritas bara
+   när fliken är framme. AI-momentum rörs inte: borden har egna konton och
+   egna regler (floor-trend.js). */
 /* Molnlagring för momentumkontot och trading floor. Dokumenten ligger per
    inloggning; molnfunktionen molnCron läser och handlar dem varje minut och
    sidan lyssnar, pausar och återställer. Utan Firestore körs kontona lokalt

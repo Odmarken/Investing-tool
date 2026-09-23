@@ -5,6 +5,8 @@ import {mountFloor} from '../trading-floor-ui.js';
 import {newActiveAccount,readActiveAccount} from '../crypto-momentum-active.js';
 import {FLOOR,readFirm,firmKey,equityKey,heldSymbols,newFirm,setFirmPaused} from '../trading-floor.js';
 import {createCamera,CANVAS} from '../trading-floor-scene.js';
+import {clearTrendCache} from '../floor-trend-market.js';
+import {fakeBybit,unitBars} from './floor-fixtures.mjs';
 
 const TIME=Date.parse('2026-09-22T12:00:00Z');
 const dailyBars=(time,step)=>Array.from({length:100},(_,i)=>{const t=Math.floor(time/step)*step-(99-i)*step,c=100+i;return {t,o:c,h:c+1,l:c-1,c,v:1};});
@@ -87,12 +89,13 @@ test('the momentum page in cloud mode only fetches tickers for a held position',
 });
 
 test('the floor uploads the local firm once, then only quotes, pauses and resets through the cloud',async()=>{
-  const s=storage(),runtime={at:TIME,user:'one',active:true,urls:[]};
-  const local=mountFloor(root(),{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at});
+  clearTrendCache();
+  const s=storage(),runtime={at:TIME,user:'one',active:true,urls:[],unit:unitBars(TIME)};
+  const local=mountFloor(root(),{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:fakeBybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
   await local.refresh();
   const firm=readFirm(s,firmKey('one'),TIME);assert.equal(heldSymbols(firm).length,6);
   const cloud=fakeCloud(),r=root();runtime.urls.length=0;
-  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeGrab(runtime),storage:s,locks:locks(),now:()=>runtime.at,cloud,confirm:()=>true});
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeBybit(runtime),storage:s,locks:locks(),now:()=>runtime.at,cloud,confirm:()=>true});
   await ui.refresh();await settle();await settle();
   assert.equal(cloud.store.saves.length,1);assert.deepEqual(cloud.store.saves[0].firm,firm);assert.equal(cloud.store.saves[0].equity.length,1);
   assert.equal(runtime.urls.length,0,'cloud mode fetches nothing on refresh');
@@ -111,6 +114,25 @@ test('the floor uploads the local firm once, then only quotes, pauses and resets
   assert.equal(heldSymbols(readFirm(s,firmKey('one'),TIME)).length,6,'the local copy is left untouched');
   cloud.store.doc.lastRun=TIME-900000;cloud.emit();await settle();assert.match(status(),/har inte kört på/);
   runtime.user=null;await ui.refreshLive();assert.match(status(),/Logga in/);
+});
+
+test('an old SL/TP firm in the cloud is upgraded once through the cloud, never traded locally',async()=>{
+  const runtime={at:TIME,user:'one',active:true,urls:[]},r=root(),calls=[];let emit;
+  const cloud={available:()=>true,subscribe:(uid,cb)=>{emit=cb;queueMicrotask(()=>cb({legacy:true}));return ()=>{};},
+    upgrade:async uid=>{calls.push(uid);},save:async()=>{},archive:async()=>{}};
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeBybit(runtime),storage:storage(),locks:locks(),now:()=>runtime.at,cloud});
+  await ui.refresh();await settle();
+  assert.deepEqual(calls,['one']);assert.equal(runtime.urls.length,0);
+  assert.match(r.querySelector('[data-floor-status]').textContent,/Hämtar firman från molnet/);
+  emit({firm:newFirm(TIME),equity:[],lastRun:null,lastError:null});await settle();
+  assert.match(r.querySelector('[data-floor-status]').textContent,/Firman handlar · 0 av 6 bord i affär/);
+  // A firm written by a newer deploy asks for a reload instead of showing an empty, paused-looking office.
+  emit({firm:{...newFirm(TIME),version:'trading-floor-v3'},equity:[],lastRun:null,lastError:null});await settle();
+  assert.match(r.querySelector('[data-floor-status]').textContent,/Golvet har uppdaterats \(trading-floor-v3\)\. Ladda om sidan\./);
+  const failing={...cloud,subscribe:(uid,cb)=>{queueMicrotask(()=>cb({legacy:true}));return ()=>{};},upgrade:async()=>{throw Error('denied');}},f=root();
+  const bad=mountFloor(f,{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:fakeBybit(runtime),storage:storage(),locks:locks(),now:()=>runtime.at,cloud:failing});
+  await bad.refresh();await settle();await settle();
+  assert.match(f.querySelector('[data-floor-status]').textContent,/Kunde inte byta firman till trendborden: denied/);
 });
 
 test('a cloud error is shown instead of silently trading locally',async()=>{
