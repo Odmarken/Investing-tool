@@ -1,4 +1,4 @@
-import {FLOOR,ROOMS,newFirm,readFirm,validateFirm,firmKey,equityKey,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,readEquity,sampleEquity,riskRows,floorNarrative,traderNames,needsHourly,upgradeStoredFirm} from './trading-floor.js';
+import {FLOOR,ROOMS,newFirm,readFirm,validateFirm,firmKey,equityKey,advanceFirm,advanceFirmRisk,closeFirmDesk,setFirmPaused,heldSymbols,firmLive,firmStats,readEquity,sampleEquity,riskRows,floorNarrative,traderNames,needsHourly,upgradeStoredFirm} from './trading-floor.js';
 import {TREND,trendLiquidation} from './floor-trend.js';
 import {fetchTrendMarket,fetchTrendRisk} from './floor-trend-market.js';
 import {fetchMomentumQuotes,QUOTE_INTERVAL,QUOTE_TTL} from './crypto-momentum-live.js';
@@ -15,19 +15,20 @@ const price=n=>finite(n)?n.toLocaleString('sv-SE',{minimumFractionDigits:2,maxim
 const date=t=>finite(t)&&t>0?new Date(t).toLocaleString('sv-SE',{timeZone:'Europe/Stockholm',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'–';
 const clock=t=>finite(t)&&t>0?new Date(t).toLocaleTimeString('sv-SE',{timeZone:'Europe/Stockholm',hour:'2-digit',minute:'2-digit'}):'–';
 const cls=x=>!finite(x)?'dim':x>=0?'pos':'neg';
-const REASON={trend:'Trenden vände',likvidation:'Likvidation'};
-const ACTION={köp:'köper',öka:'ökar',minska:'minskar',sälj:'säljer allt',behåll:'behåller',avvakta:'avvaktar',pausad:'pausad, ökar inte'};
-const STATUS={trade:'I affär',waiting:'Väntar på trend',paused:'Pausad'};
+const lev=x=>finite(x)&&x>0?number(x,Number.isInteger(x)?0:2)+'×':'–';
+const REASON={trend:'Trenden vände',likvidation:'Likvidation',manuell:'Stängd manuellt'};
+const ACTION={start:'nollställde trenderna',köp:'köper med maxhävstång',sälj:'säljer allt',behåll:'behåller',avvakta:'avvaktar',pausad:'pausad, köper inte'};
+const STATUS={trade:'I affär',waiting:'Väntar på trend',paused:'Pausad',liquidated:'Likviderad'};
 const ROLE_TEXT={
   elias:'Chefen. Sitter i hörnrummet med firmans siffror, går ut på golvet och tittar över axeln på borden som är i affär.',
   pablo:'Analytikern. Läser bara det kontona vet, precis som i signalkorten. Ingen prognos, ingen API.',
   manuel:'Makro och nyheter. Står vid nyhetsskärmen och väger rubrikerna om världen och krypto.',
-  miguel:'Riskchefen. Håller koll på exponering, avståndet till trendstoppen och till likvidation. Går till bordet vars första stopp ligger närmast.'
+  miguel:'Riskchefen. Håller koll på hävstången, avståndet till likvidation och till trendstoppen. Går till bordet som ligger närmast likvidation.'
 };
 
-// cloud (optional): {available(), subscribe(uid,onState), initialize(uid,{firm,equity}), togglePause(uid), reset(uid)}.
-// With a cloud store the firm is read from it and traded by the cloud runner;
-// this page then only fetches quotes for the live figures, pauses and resets.
+// cloud (optional): {available(), subscribe(uid,onState), initialize(uid,{firm,equity}), togglePause(uid), reset(uid),
+// closeTrade(uid,symbol,openedAt,snapshot)}. With a cloud store the firm is read from it and traded by the
+// cloud runner; this page then fetches quotes for the live figures, pauses, resets and closes a trade on request.
 export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>false,grab,getNews=()=>({items:[],bias:0}),loadWorldNews=null,cloud=null,
   storage={getItem:key=>window.localStorage.getItem(key),setItem:(key,value)=>window.localStorage.setItem(key,value)},locks=globalThis.navigator?.locks,now=()=>Date.now(),
   confirm=message=>globalThis.confirm?globalThis.confirm(message):true,raf=globalThis.requestAnimationFrame?globalThis.requestAnimationFrame.bind(globalThis):null,
@@ -36,10 +37,10 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     <canvas class="floor-canvas" data-floor-canvas tabindex="0" role="application" aria-label="Trading floor: isometriskt kontor med fyra rum, sex handelsbord, storskärm och nyhetsskärm. Dra för att panorera, scrolla eller nyp för att zooma, dubbelklicka för att återställa vyn. Klicka på bord, rum och skärmar för detaljer. Piltangenter panorerar, plus och minus zoomar, 0 återställer."></canvas>
     <div class="floor-heading"><div class="floor-heading-text"><div class="floor-eyebrow">RIPTIDE / KRYPTO / TRADING FLOOR</div><h1 id="floorTitle" tabindex="-1">Trading floor</h1>
       <p class="floor-status" data-floor-status role="status" aria-live="polite"></p>
-      <details class="floor-about"><summary>Om golvet</summary><p>Sex bord med 100 $ vardera, ett coin per bord. Varje bord följer nio trender från 5 till 360 dygn på timstängningar och håller en lång position som växer med antalet trender uppåt och krymper med coinets volatilitet. Demo med riktiga Bybit-priser; inga order skickas.</p>
+      <details class="floor-about"><summary>Om golvet</summary><p>Sex bord med 100 $ vardera, ett coin per bord. Varje bord följer nio trender från 5 till 360 dygn på timstängningar, och alla trender startar avslagna. När en ny trend slår på köper bordet en lång position för hela saldot med Bybits maxhävstång för coinet och storleken. Bordet säljer när alla nio trender slagit av, när du trycker Stäng trade i bordets panel eller vid likvidation. Demo med riktiga Bybit-priser; inga order skickas.</p>
       <p>Traders sitter vid bordet under affär och rör sig fritt annars. Klicka på bord, rum och skärmar. Dra för att panorera, scrolla eller nyp för att zooma, dubbelklicka för att återställa vyn.</p>
       <p>Bordets etikett visar den pågående affärens öppna nettovinst i procent av bordets kapital när affären öppnades, samma som ”Öppet netto” i detaljpanelen. Vid +20 % blir det pengapistoler, vid +50 % cigarrer och pengasäckar. Tidigare affärer räknas inte. Firandet upphör under gränsen, vid avslut eller när färska priser saknas.</p>
-      <p>Med molnlagring ligger firman i Firestore och handlas av molnfunktionen varje minut, även när sidan är stängd. Utan moln sparas den per inloggning i denna webbläsare och kräver öppen kryptosida. Regeln var bäst av sju i ett historiskt test 2021–2026 och klarade valideringen där, men det är ett demospel med riktiga priser, inte ett löfte om vinst.</p></details></div>
+      <p>Med molnlagring ligger firman i Firestore och handlas av molnfunktionen varje minut, även när sidan är stängd. Utan moln sparas den per inloggning i denna webbläsare och kräver öppen kryptosida. Trendregeln valdes i ett historiskt test med högst 4× hävstång. Med Bybits maxhävstång likviderades 98 % av borden inom 30 dagar i ett test på Bybits egen historik 2021–2026, 72 % redan inom första timmen efter köpet. Det är ett demospel med riktiga priser, inte ett löfte om vinst.</p></details></div>
     <div class="floor-actions"><button type="button" class="btn" data-floor-pause></button><button type="button" class="btn" data-floor-reset title="Arkivera firman och börja om med sex nya bord på 100 $">Återställ firman</button><a class="btn" href="#">← Tillbaka till signaler</a></div></div>
     <div class="floor-zoom"><button type="button" data-floor-zoom="in" aria-label="Zooma in" title="Zooma in">+</button><button type="button" data-floor-zoom="out" aria-label="Zooma ut" title="Zooma ut">−</button><button type="button" data-floor-zoom="reset" aria-label="Återställ vyn" title="Återställ vyn (dubbelklick i bilden)">⌂</button></div>
     <div class="floor-panel" data-floor-panel hidden></div></div>
@@ -47,7 +48,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   const q=selector=>root.querySelector(selector);
   const canvas=q('[data-floor-canvas]'),panelEl=q('[data-floor-panel]'),modalEl=q('[data-floor-modal]');
   const scene=createScene(canvas),agents=createAgents();
-  let uid=null,firm=null,equity=[],live=null,error='',riskError='',busy=false,quoteBusy=false,quoteFailed=false,resetting=false;
+  let uid=null,firm=null,equity=[],live=null,error='',riskError='',busy=false,quoteBusy=false,quoteFailed=false,resetting=false,closing=null,closeNote=null;
   let lastCheck=-Infinity,lastQuote=-Infinity,generation=0,riskIndex=0,quotes={},lastTotal=null,tradeCounts={};
   let panel=null,modal=null,worldNews=[],worldAt=-Infinity,worldBusy=false,running=false,lastFrame=0,typing=null,sceneView=null,sceneWorld={inTrade:{},riskDesk:null,reduced:false};
   let cloudUnsub=null,cloudUid=null,cloudState=null,cloudError='',migrating=false,cloudGeneration=0,frameEpoch=0;
@@ -86,14 +87,14 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   async function upgradeCloud(user){
     if(migrating)return;migrating=true;const subscription=cloudGeneration;
     try{await cloud.upgrade(user);}
-    catch(e){if(subscription===cloudGeneration){cloudError='Kunde inte byta firman till trendborden: '+e.message;render();}}
+    catch(e){if(subscription===cloudGeneration){cloudError='Kunde inte byta firman till de nya borden: '+e.message;render();}}
     finally{if(subscription===cloudGeneration)migrating=false;}
   }
   // Inside the tab lock: archive an old local firm, then make sure a firm exists.
   const prepare=user=>{const key=firmKey(user);upgradeStoredFirm(storage,key,equityKey(user),now());ensure(key);return key;};
   function sync(){
     const user=getUser();
-    if(user!==uid){uid=user;firm=null;equity=[];live=null;error='';riskError='';lastCheck=-Infinity;lastQuote=-Infinity;quotes={};lastTotal=null;tradeCounts={};panel=null;modal=null;generation++;stopTyping();panelEl.hidden=true;modalEl.classList?.remove('show');}
+    if(user!==uid){uid=user;firm=null;equity=[];live=null;error='';riskError='';lastCheck=-Infinity;lastQuote=-Infinity;quotes={};lastTotal=null;tradeCounts={};panel=null;modal=null;closeNote=null;generation++;stopTyping();panelEl.hidden=true;modalEl.classList?.remove('show');}
     attachCloud();
     if(!uid)return uid;
     if(cloudUid){
@@ -137,7 +138,7 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
       const problem=error||cloudError,note=!uid?'logga in':/Ladda om sidan/.test(problem)?'ladda om sidan':problem?'se statusraden':'laddar firman';
       return {desks:Object.fromEntries(FLOOR.desks.map(s=>[s,{status:'loading',pnl:null,openNet:null}])),total:{value:null,last:null,at:null,waiting:[],note},start:FLOOR.start*FLOOR.desks.length,equity:[],news:newsItems(),paused:false,loading:true,reduced:reducedMotion()};
     }
-    const stats=firmStats(firm,t),rows=riskRows(firm,live).filter(r=>r.toFirst!==null).sort((a,b)=>a.toFirst-b.toFirst);
+    const stats=firmStats(firm,t),rows=riskRows(firm,live).filter(r=>r.toLiq!==null).sort((a,b)=>a.toLiq-b.toLiq);
     sceneWorld={inTrade:Object.fromEntries(FLOOR.desks.map(s=>[s,stats.desks[s].status==='trade'])),riskDesk:rows[0]?.symbol??null,reduced:reducedMotion()};
     return {desks:Object.fromEntries(FLOOR.desks.map(s=>{const d=live.desks[s];return [s,{status:stats.desks[s].status,pnl:d.pnl,openNet:d.openNet,
       openReturn:finite(d.openReturn)?d.openReturn:null,celebrationUntil:d.quote?d.quote.at+QUOTE_TTL:0,count:stats.desks[s].count}];})),
@@ -161,8 +162,8 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     else if(cloudError)status=cloudError;
     else if(!firm)status=error||(cloudUid?'Hämtar firman från molnet…':'Trading floor kunde inte läsas.');
     else{
-      const decisions=FLOOR.desks.map(s=>stats.desks[s].decision).filter(Boolean).sort((a,b)=>b.at-a.at);
-      status=riskError||error||((firm.paused?'Nya köp pausade':'Firman handlar')+(busy?' · hämtar timpriser…':'')+' · '+stats.inTrade+' av '+FLOOR.desks.length+' bord i affär'+
+      const decisions=FLOOR.desks.map(s=>stats.desks[s].decision).filter(Boolean).sort((a,b)=>b.at-a.at),gone=FLOOR.desks.filter(s=>stats.desks[s].status==='liquidated').length;
+      status=riskError||error||((firm.paused?'Nya köp pausade':'Firman handlar')+(busy?' · hämtar timpriser…':'')+(closing?' · stänger '+closing+'…':'')+' · '+stats.inTrade+' av '+FLOOR.desks.length+' bord i affär'+(gone?' · '+gone+' likviderade':'')+
         (decisions.length?' · senaste timbeslut '+date(decisions[0].at):' · väntar på första timbeslutet')+
         (live.total===null&&live.waiting.length?' · väntar på pris för '+live.waiting.join(', '):live.at?' · pris '+clock(live.at):'')+
         (quoteFailed?' · senaste prisuppdatering misslyckades':'')+cloudNote(t));
@@ -195,23 +196,28 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
     if(panel.kind==='desk'){
       const symbol=panel.id,desk=firm.desks[symbol],d=live.desks[symbol],st=stats.desks[symbol],p=d.position,n=TREND.lookbacks.length;
       if(!desk){panelEl.hidden=true;return;}
-      const text={trade:'I affär sedan '+date(p?.openedAt),waiting:'Väntar på att en trend ska bryta uppåt',paused:'Nya köp pausade'}[st.status],liq=trendLiquidation(desk);
+      const text={trade:'I affär sedan '+date(p?.openedAt),waiting:'Väntar på att en ny trend ska slå på',paused:'Nya köp pausade',liquidated:'Likviderad · bordets kapital är slut. Återställ firman för att börja om.'}[st.status];
+      const liq=trendLiquidation(desk),mark=d.quote?.mark;
       const lamps='<div class="floor-trends" role="list" aria-label="'+st.count+' av '+n+' trender uppåt">'+TREND.lookbacks.map((days,i)=>{const on=desk.signal.sides[i]===1;
-        return '<span role="listitem" class="'+(on?'on':'')+'" title="'+days+' dygn'+(on?' · stopp '+esc(price(desk.signal.stops[i])):' · ingen position')+'">'+days+'d</span>';}).join('')+'</div>';
+        return '<span role="listitem" class="'+(on?'on':'')+'" title="'+days+' dygn'+(on?' · stopp '+esc(price(desk.signal.stops[i])):' · avslagen')+'">'+days+'d</span>';}).join('')+'</div>';
       html=head(esc(symbol),esc(CONTRACTS[symbol])+' · bord '+(FLOOR.desks.indexOf(symbol)+1)+' · 100 $ vid start')+
         '<p class="floor-panel-traders">'+traderNames(symbol).map(esc).join(' · ')+'</p>'+
         '<p class="floor-panel-state '+st.status+'">'+esc(text)+(st.waitReason?' · '+esc(st.waitReason):'')+'</p>'+
+        (closeNote?.symbol===symbol?'<p class="floor-close-note'+(closeNote.error?' neg':'')+'" role="status">'+esc(closeNote.text)+'</p>':'')+
         '<h4>Trender · '+st.count+' av '+n+' uppåt</h4>'+lamps+
         '<div class="floor-panel-grid">'+row(p?'Livesaldo · netto':'Saldo',money(d.balance),cls(d.pnl))+row('Sedan start',d.pnl===null?'–':signed(d.pnl)+' · '+signedPct(d.pnl/FLOOR.start),cls(d.pnl))+
         row('Realiserat',signed(st.realized),cls(st.realized))+row('I dag',signed(st.today),cls(st.today))+
         row('Avslut',st.trades+' · '+st.wins+' vinst · '+st.losses+' förlust'+(st.liquidations?' · '+st.liquidations+' likv.':''))+row('Avgifter · funding',money(desk.fees)+' · '+money(desk.funding))+'</div>'+
-        (p?'<h4>Öppen position · LONG · '+number(d.exposure,2)+'× exponering · '+money(p.units*(d.quote?.price??p.entry))+' värde</h4><div class="floor-panel-grid">'+
-          row('Öppet netto',d.openNet===null?'–':signed(d.openNet)+' · '+signedPct(d.openReturn)+' av kapitalet vid köp',cls(d.openNet))+row('Snittpris',price(p.entry))+row('Markpris',price(d.quote?.mark))+
-          row('Första trendstopp',price(st.stops?.first),'neg')+row('Sista trendstopp',price(st.stops?.last),'neg')+row('Likvidation',liq>0?price(liq):'ingen utan belåning','neg')+
-          row('Affärens avgifter · funding',money(p.fees)+' · '+money(p.funding))+row('Största exponering',number(p.peakExposure,2)+'×')+'</div>'+
-          '<p class="dim">'+esc(d.reason||'En timstängning under ett stopp tar bort den trenden och minskar positionen; under det sista stoppet säljs allt. Markpris utlöser likvidation.')+'</p>':'')+
-        (desk.trades.length?'<h4>Senaste avslut</h4><table class="floor-panel-table">'+desk.trades.slice(-5).reverse().map(tr=>'<tr><td>'+date(tr.at)+'</td><td>'+esc(REASON[tr.reason]??tr.reason)+'</td><td class="'+cls(tr.pnl)+'">'+signed(tr.pnl)+'</td></tr>').join('')+'</table>':'')+
-        '<p class="dim">'+(st.decision?'Senaste timbeslut '+date(st.decision.at)+': '+esc(ACTION[st.decision.action]??st.decision.action)+' · '+st.decision.count+' av '+n+' trender · mål '+number(st.decision.target,2)+'×':'Inget timbeslut ännu.')+'</p>';
+        (p?'<h4>Öppen position · LONG · '+lev(p.leverage)+' hävstång · '+money(p.units*(d.quote?.price??p.entry))+' värde</h4><div class="floor-panel-grid">'+
+          row('Öppet netto',d.openNet===null?'–':signed(d.openNet)+' · '+signedPct(d.openReturn)+' av kapitalet vid köp',cls(d.openNet))+row('Exponering nu',finite(d.exposure)?number(d.exposure,1)+'×':'–')+
+          row('Snittpris',price(p.entry))+row('Markpris',price(mark))+
+          row('Likvidation',liq>0?price(liq):'–','neg')+row('Till likvidation',finite(mark)&&liq>0?number((mark-liq)/mark*100,2)+' %':'–','neg')+
+          row('Första trendstopp',price(st.stops?.first))+row('Sista trendstopp',price(st.stops?.last))+
+          row('Underhåll · risknivå',number(p.maintenance*100,2)+' % · '+p.riskId)+row('Affärens avgifter · funding',money(p.fees)+' · '+money(p.funding))+'</div>'+
+          '<div class="floor-panel-actions"><button type="button" class="btn floor-close" data-floor-close="'+esc(symbol)+'" data-floor-opened="'+p.openedAt+'"'+(closing?' disabled':'')+'>'+(closing===symbol?'Stänger…':'Stäng trade')+'</button></div>'+
+          '<p class="dim">'+esc(d.reason||'Stäng trade säljer hela positionen till marknadspris direkt. Annars säljer bordet när alla nio trender slagit av. Likvidation kontrolleras på markpris och tar hela bordets kapital.')+'</p>':'')+
+        (desk.trades.length?'<h4>Senaste avslut</h4><table class="floor-panel-table">'+desk.trades.slice(-5).reverse().map(tr=>'<tr><td>'+date(tr.at)+'</td><td>'+esc(REASON[tr.reason]??tr.reason)+'</td><td>'+lev(tr.leverage)+'</td><td class="'+cls(tr.pnl)+'">'+signed(tr.pnl)+'</td></tr>').join('')+'</table>':'')+
+        '<p class="dim">'+(st.decision?'Senaste timbeslut '+date(st.decision.at)+': '+esc(ACTION[st.decision.action]??st.decision.action)+' · '+st.decision.count+' av '+n+' trender'+(st.decision.leverage?' · '+lev(st.decision.leverage)+' hävstång':''):'Inget timbeslut ännu.')+'</p>';
     }else if(panel.kind==='room'){
       const room=ROOMS.find(r=>r.id===panel.id);if(!room){panelEl.hidden=true;return;}
       const intro='<p class="dim">'+esc(ROLE_TEXT[room.id])+'</p>';
@@ -222,16 +228,16 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
           row('Realiserat i dag',signed(stats.today),cls(stats.today))+row('Bord i affär',stats.inTrade+' av '+FLOOR.desks.length)+
           row('Bästa bord',ranked.length?ranked[0][0]+' '+signed(ranked[0][1]):'–',ranked.length?cls(ranked[0][1]):'')+row('Sämsta bord',ranked.length?ranked.at(-1)[0]+' '+signed(ranked.at(-1)[1]):'–',ranked.length?cls(ranked.at(-1)[1]):'')+
           row('Avslut',stats.trades+' · '+stats.wins+' vinst · '+stats.losses+' förlust')+row('Avgifter · funding',money(stats.fees)+' · '+money(stats.funding))+'</div>'+
-          '<p class="dim">'+(firm.paused?'Nya köp är pausade. Borden kan bara minska eller sälja när trender vänder.':'Firman handlar. Varje bord fattar ett beslut per timme och köper mer ju fler av de nio trenderna som pekar uppåt.')+(cloudUid?' Firman ligger i molnet och handlas av molnfunktionen, även när sidan är stängd.':' Firman sparas i denna webbläsare.')+'</p>';
+          '<p class="dim">'+(firm.paused?'Nya köp är pausade. Borden säljer fortfarande när alla trender slagit av, och du kan stänga en trade i bordets panel.':'Firman handlar. Varje bord fattar ett beslut per timme och köper för hela saldot med Bybits maxhävstång när en ny trend slår på.')+(cloudUid?' Firman ligger i molnet och handlas av molnfunktionen, även när sidan är stängd.':' Firman sparas i denna webbläsare.')+'</p>';
       }else if(room.id==='pablo'){
         html=head(esc(room.name)+' · Analys','läser golvet')+intro+'<div class="floor-pablo" data-floor-pablo></div><p class="dim">Lokal läsning av det kontona vet. Klicka i texten för att hoppa till slutet.</p>';
       }else if(room.id==='miguel'){
         const rows=riskRows(firm,live),value=rows.reduce((sum,r)=>sum+(r.mark??r.entry)*r.units,0),n=TREND.lookbacks.length,pc=(x,d)=>x===null?'–':number(x*100,d)+' %';
         html=head(esc(room.name)+' · Risk',rows.length?rows.length+' öppna positioner':'inga öppna positioner')+intro+
           '<div class="floor-panel-grid">'+row('Positionernas värde',money(value))+row('Mot firmans kapital',live.total?number(value/live.total,2)+'×':'–')+
-          row('Närmast första stopp',rows.filter(r=>r.toFirst!==null).sort((a,b)=>a.toFirst-b.toFirst)[0]?.symbol??'–')+row('Likvidationer',String(stats.liquidations),stats.liquidations?'neg':'')+'</div>'+
-          (rows.length?'<table class="floor-panel-table"><tr><th>Bord</th><th>Trend</th><th>Exp.</th><th title="Avstånd till första trendstoppet">Första</th><th title="Avstånd till sista trendstoppet">Sista</th><th title="Avstånd till likvidation">Likv.</th></tr>'+rows.map(r=>'<tr><td><b>'+r.symbol+'</b></td><td>'+r.count+'/'+n+'</td><td>'+number(r.exposure,1)+'×</td><td class="neg">'+pc(r.toFirst,1)+'</td><td class="neg">'+pc(r.toLast,1)+'</td><td>'+pc(r.toLiq,0)+'</td></tr>').join('')+'</table><p class="dim">Avstånd från markpriset till stoppen och till likvidation.</p>':'')+
-          '<p class="dim">Regler per bord: positionen är andelen trender uppåt × 100 % årsvolatilitet delat med coinets volatilitet, högst 4× bordets kapital. Hela bordets kapital är marginal. Stoppen gäller timstängningar, så en snabb rörelse inom timmen kan gå förbi dem; likvidation kontrolleras på markpris.</p>';
+          row('Närmast likvidation',rows.filter(r=>r.toLiq!==null).sort((a,b)=>a.toLiq-b.toLiq)[0]?.symbol??'–')+row('Likvidationer',String(stats.liquidations),stats.liquidations?'neg':'')+'</div>'+
+          (rows.length?'<table class="floor-panel-table"><tr><th>Bord</th><th>Trend</th><th>Hävst.</th><th>Exp.</th><th title="Avstånd till likvidation">Likv.</th><th title="Avstånd till sista trendstoppet, där bordet säljer">Sista</th></tr>'+rows.map(r=>'<tr><td><b>'+r.symbol+'</b></td><td>'+r.count+'/'+n+'</td><td>'+lev(r.leverage)+'</td><td>'+number(r.exposure,1)+'×</td><td class="neg">'+pc(r.toLiq,2)+'</td><td>'+pc(r.toLast,1)+'</td></tr>').join('')+'</table><p class="dim">Avstånd från markpriset till likvidation och till sista trendstoppet, där bordet säljer.</p>':'')+
+          '<p class="dim">Regler per bord: varje köp använder hela bordets saldo som marginal med Bybits maxhävstång för coinet och positionens storlek. Hävstång, underhållsmarginal och risknivå låses vid köpet. Likvidation kontrolleras på markpris och tar hela bordets kapital. Stoppen gäller timstängningar, så en rörelse inom timmen når likvidationen långt före stoppen.</p>';
       }else{
         const news=newsItems(),bias=getNews()?.bias??0,hot=news.filter(n=>n.hot).slice(0,4),latest=news.filter(n=>!hot.includes(n)).slice(0,4);
         html=head(esc(room.name)+' · Makro & nyheter',news.length+' rubriker på skärmen')+intro+
@@ -370,10 +376,10 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
   async function reset(){
     try{sync();}catch(e){firm=null;error=e.message;render();return;}
     const user=getUser();if(!user||resetting)return;
-    if(!confirm('Arkivera nuvarande firma och börja om med '+FLOOR.desks.length+' × '+FLOOR.start+' $? Öppna positioner följer med i arkivet utan att stängas.'))return;
+    if(!confirm('Arkivera nuvarande firma och börja om med '+FLOOR.desks.length+' × '+FLOOR.start+' $ och avslagna trender? Öppna positioner följer med i arkivet utan att stängas.'))return;
     const token=++generation;resetting=true;render();
     if(cloudUid){
-      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.reset(user);if(getUser()===user&&token===generation){quotes={};lastTotal=null;tradeCounts={};panel=null;panelEl.hidden=true;modal=null;modalEl.classList?.remove('show');error='';}}
+      try{if(!firm)throw Error('firman har inte laddats från molnet');await cloud.reset(user);if(getUser()===user&&token===generation){quotes={};lastTotal=null;tradeCounts={};panel=null;closeNote=null;panelEl.hidden=true;modal=null;modalEl.classList?.remove('show');error='';}}
       catch(e){if(getUser()===user)error='Återställningen misslyckades: '+e.message;}
       finally{resetting=false;try{sync();}catch(e){firm=null;error=e.message;}render();}
       return;
@@ -387,10 +393,47 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
         const chart=storage.getItem(equityKey(user));if(chart!==null)storage.setItem(equityKey(user)+':before-reset:'+now(),chart);
         storage.setItem(key,JSON.stringify(fresh));
         storage.setItem(equityKey(user),'[]');
-        firm=fresh;equity=[];quotes={};live=null;lastTotal=null;error='';riskError='';lastCheck=-Infinity;tradeCounts={};panel=null;
+        firm=fresh;equity=[];quotes={};live=null;lastTotal=null;error='';riskError='';lastCheck=-Infinity;tradeCounts={};panel=null;closeNote=null;
       });
     }catch(e){if(getUser()===user)error='Återställningen misslyckades: '+e.message;}
     finally{resetting=false;try{sync();}catch(e){firm=null;error=e.message;}render();}
+  }
+  // Stäng trade: the page settles the desk's risk on fresh mark history and sells at the
+  // current price, in the cloud through a transaction, locally inside the tab lock.
+  async function closeTrade(symbol,openedAt){
+    try{sync();}catch(e){firm=null;error=e.message;render();return;}
+    const user=getUser();if(!user||!firm||resetting||closing)return;
+    if(firm.desks[symbol]?.position?.openedAt!==openedAt)return;
+    if(!confirm('Stäng '+symbol+'-traden till marknadspris nu? Hela positionen säljs.'))return;
+    const token=generation;closing=symbol;closeNote=null;render();
+    try{
+      for(let attempt=0;;attempt++){
+        const desk=firm?.desks[symbol];
+        if(desk?.position?.openedAt!==openedAt){closeNote={symbol,error:false,text:symbol+'-traden var redan stängd.'};return;}
+        const fetched=await fetchTrendRisk(grab,now,{[symbol]:desk});
+        if(getUser()!==user||token!==generation)return;
+        let next=null;
+        try{
+          if(cloudUid)next=await cloud.closeTrade(user,symbol,openedAt,fetched);
+          else await exclusive(user,()=>{
+            if(getUser()!==user||token!==generation)return;
+            const key=prepare(user),current=readFirm(storage,key,now());
+            next=closeFirmDesk(current,symbol,fetched,now(),openedAt);
+            storage.setItem(key,JSON.stringify(next));firm=next;
+          });
+        }catch(e){
+          // The cloud or another tab may settle the desk between this fetch and the write: fetch again.
+          if(attempt<2&&/historik saknas/.test(e.message))continue;
+          throw e;
+        }
+        if(getUser()!==user||token!==generation)return;
+        acceptQuotes(fetched.market);
+        const last=next?.desks[symbol].trades.at(-1);
+        if(last?.opened===openedAt)closeNote={symbol,error:last.reason==='likvidation'||last.pnl<0,text:last.reason==='likvidation'?symbol+' likviderades innan stängningen hann gå igenom.':symbol+' stängd '+clock(last.at)+' till '+price(last.exit)+' · '+signed(last.pnl)};
+        return;
+      }
+    }catch(e){if(getUser()===user&&token===generation)closeNote={symbol,error:true,text:'Kunde inte stänga '+symbol+': '+e.message};}
+    finally{closing=null;try{sync();}catch(e){firm=null;error=e.message;}sampleNow();render();}
   }
   function show(){try{sync();}catch(e){firm=null;error=e.message;}render();if(scene)start();}
   function hide(){running=false;frameEpoch++;stopTyping();panel=null;modal=null;if(panelEl)panelEl.hidden=true;modalEl.classList?.remove('show');}
@@ -442,9 +485,11 @@ export function mountFloor(root,{getUser,getEmail=()=>'',isActive,isVisible=()=>
       const zoom=e.target.closest?.('[data-floor-zoom]');
       if(zoom&&scene){const vp=scene.viewport(),mode=zoom.dataset.floorZoom;if(mode==='reset')scene.resetView();else scene.zoomAt(vp.width/2,vp.height/2,mode==='in'?1.25:.8);return;}
       if(e.target.closest?.('[data-floor-panel-close]')){pick(null);return;}
+      const close=e.target.closest?.('[data-floor-close]');
+      if(close){void closeTrade(close.dataset.floorClose,Number(close.dataset.floorOpened));return;}
       if(e.target.closest?.('[data-floor-modal-close]')||e.target===modalEl)closeModal();
     });
     root.addEventListener('keydown',e=>{if(e.key==='Escape'){if(modal)closeModal();else if(panel)pick(null);}});
   }
-  return {refresh,refreshLive,reset,togglePause,pick,show,hide};
+  return {refresh,refreshLive,reset,togglePause,closeTrade,pick,show,hide};
 }

@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import {hourOf,needsDecision,momentumActive,fetchPlan,applyPlan,sampleFirmEquity} from '../cloud-runner.js';
 import {ACTIVE,newActiveAccount,advanceActiveAccount} from '../crypto-momentum-active.js';
 import {FLOOR,newFirm,advanceFirm,heldSymbols,setFirmPaused,needsHourly} from '../trading-floor.js';
+import {trendLiquidation} from '../floor-trend.js';
 import {clearTrendCache} from '../floor-trend-market.js';
 import {LEVERAGE} from '../crypto-leverage.js';
 import {CONTRACTS} from '../bybit-contracts.js';
-import {TIME,HOUR,trendSnapshot,withRisk,riskSnapshot,fakeBybit,unitBars} from './floor-fixtures.mjs';
+import {TIME,HOUR,trendSnapshot,withRisk,riskSnapshot,fakeBybit,unitBars,extendUnit} from './floor-fixtures.mjs';
 
 const STEP=LEVERAGE.step;
 const contract=(symbol,at)=>({symbol,contract:CONTRACTS[symbol],at,min:1,max:150,step:.01,tiers:[{id:1,cap:1e7,max:150,maintenance:.005,deduction:0}]});
@@ -20,7 +21,9 @@ function snapshot(time=TIME,scores={}){
 }
 const enabled=()=>({...newActiveAccount(),enabled:true});
 const path=u=>u.pathname.replace('/v5/market/','')+(u.searchParams.get('interval')==='60'?':hourly':'');
-const holding=()=>advanceFirm(newFirm(TIME),trendSnapshot(),TIME);
+// A reset firm switches every trend off at TIME; the rally's next new high buys all six desks.
+const UNIT=unitBars(TIME),UP=extendUnit(UNIT,1.001),BUY=TIME+HOUR;
+const holding=()=>advanceFirm(advanceFirm(newFirm(TIME),trendSnapshot(TIME,UNIT),TIME),trendSnapshot(BUY,UP),BUY);
 
 test('the momentum account needs hourly candles only when it is free, enabled, undecided this hour and past its cooldown',()=>{
   const a=enabled();
@@ -38,7 +41,7 @@ test('the floor decides every hour for all six desks, paused or not, and only th
   const firm=newFirm(TIME);
   assert.equal(needsHourly(firm,TIME),true);assert.equal(needsHourly(setFirmPaused(firm,true),TIME),true);
   const decided=holding();
-  assert.equal(needsHourly(decided,TIME+1000),false);assert.equal(needsHourly(decided,TIME+HOUR),true);
+  assert.equal(needsHourly(decided,BUY+1000),false);assert.equal(needsHourly(decided,BUY+HOUR),true);
 });
 
 test('planning pages hourly candles for a decision, mark history only for held desks, and runs idle accounts every minute',async()=>{
@@ -54,25 +57,34 @@ test('planning pages hourly candles for a decision, mark history only for held d
   const paged=hourly.filter(u=>u.searchParams.has('start')).map(u=>u.searchParams.get('symbol'));
   assert.deepEqual([...new Set(paged)].sort(),FLOOR.desks.map(s=>CONTRACTS[s]).sort());
   for(const s of FLOOR.desks)assert.equal(decide.floor.snapshot.market[s].bars.at(-1).t,hourOf(TIME)-HOUR);
+  // Flat desks get Bybit's limits so a breakout can buy at the maximum.
+  assert.ok(FLOOR.desks.every(s=>decide.floor.snapshot.market[s].contract?.max===150));
   const applied=applyPlan(decide,enabled(),newFirm(TIME),TIME);
   assert.equal(applied.momentum.error,null);assert.equal(applied.firm.error,null);
   assert.equal(applied.momentum.account.sleeves.filter(s=>s.position).length,1);
-  assert.deepEqual(heldSymbols(applied.firm.firm),[...FLOOR.desks]);
+  assert.equal(heldSymbols(applied.firm.firm).length,0,'a reset firm starts with every trend off');
+  // Next hour the rally makes a new high and every desk buys.
+  runtime.urls.length=0;runtime.at=BUY;runtime.unit=UP;
+  const buy=await fetchPlan(fakeBybit(runtime),()=>runtime.at,null,applied.firm.firm);
+  assert.equal(buy.floor.mode,'decide');
+  const bought=applyPlan(buy,null,applied.firm.firm,runtime.at);
+  assert.equal(bought.firm.error,null);assert.deepEqual(heldSymbols(bought.firm.firm),[...FLOOR.desks]);
+  assert.ok(FLOOR.desks.every(s=>bought.firm.firm.desks[s].position.leverage===150));
   // Within the hour: no candles, mark history for each held desk.
-  runtime.urls.length=0;runtime.at=TIME+60000;
-  const risk=await fetchPlan(fakeBybit(runtime),()=>runtime.at,applied.momentum.account,applied.firm.firm);
+  runtime.urls.length=0;runtime.at=BUY+60000;
+  const risk=await fetchPlan(fakeBybit(runtime),()=>runtime.at,applied.momentum.account,bought.firm.firm);
   assert.equal(risk.floor.mode,'risk');assert.equal(risk.momentum.mode,'risk');
   assert.equal(runtime.urls.filter(u=>path(u)==='kline:hourly').length,0,'no hourly candles within the hour');
   const marked=runtime.urls.filter(u=>path(u)==='mark-price-kline').map(u=>u.searchParams.get('symbol'));
   assert.ok(FLOOR.desks.every(s=>marked.includes(CONTRACTS[s])));
-  const settled=applyPlan(risk,applied.momentum.account,applied.firm.firm,runtime.at);
+  const settled=applyPlan(risk,applied.momentum.account,bought.firm.firm,runtime.at);
   assert.equal(settled.momentum.error,null);assert.equal(settled.firm.error,null);
   assert.ok(FLOOR.desks.every(s=>settled.firm.firm.desks[s].position.fundingThrough===runtime.at));
   // A flat, decided firm still gets a (no-op) run each minute so the page sees the cloud alive.
-  const flat=advanceFirm(newFirm(TIME),trendSnapshot(TIME,unitBars(TIME,{rally:false})),TIME);
-  assert.equal(heldSymbols(flat).length,0);runtime.urls.length=0;
+  const flat=advanceFirm(newFirm(BUY),trendSnapshot(BUY,extendUnit(unitBars(TIME,{rally:false}),.999)),BUY);
+  assert.equal(heldSymbols(flat).length,0);assert.equal(needsHourly(flat,runtime.at),false);runtime.urls.length=0;
   const quiet=await fetchPlan(fakeBybit(runtime),()=>runtime.at,null,flat);
-  assert.deepEqual(quiet.floor,{mode:'risk',risk:{market:{}}});assert.equal(runtime.urls.length,0);
+  assert.equal(quiet.floor.mode,'risk');assert.deepEqual(quiet.floor.risk,{market:{}});assert.equal(runtime.urls.length,0);
   assert.equal(applyPlan(quiet,null,flat,runtime.at).firm.firm,flat);
 });
 
@@ -89,11 +101,11 @@ test('a failing plan or a broken account is reported per account without touchin
 });
 
 test('risk mode settles funding and liquidation, and the equity curve samples the firm from fresh tickers',async()=>{
-  const firm=holding(),time=TIME+10*60000;
+  const firm=holding(),time=BUY+10*60000;
   const out=applyPlan({floor:{mode:'risk',risk:riskSnapshot(firm,time)}},null,firm,time);
   assert.equal(out.firm.error,null);assert.equal(heldSymbols(out.firm.firm).length,6);
   // A mark crash through SOL's liquidation price closes only that desk.
-  const risk=riskSnapshot(firm,time),sol=firm.desks.SOL,liq=-sol.cash/(sol.position.units*.99);
+  const risk=riskSnapshot(firm,time),liq=trendLiquidation(firm.desks.SOL);
   risk.market.SOL.markBars=risk.market.SOL.markBars.map((b,i)=>i===1?{...b,l:liq*.9}:b);
   const crash=applyPlan({floor:{mode:'risk',risk}},null,firm,time);
   assert.equal(crash.firm.error,null);assert.equal(crash.firm.firm.desks.SOL.trades.at(-1).reason,'likvidation');assert.equal(heldSymbols(crash.firm.firm).length,5);
@@ -105,6 +117,6 @@ test('risk mode settles funding and liquidation, and the equity curve samples th
   const idle=await sampleFirmEquity(async()=>{throw Error('no quotes needed');},()=>time,newFirm(TIME),[]);
   assert.equal(idle.length,1);assert.equal(idle[0].v,600);
   // The next hour's decision reuses the snapshot shape with risk history for held desks.
-  const next=advanceFirm(out.firm.firm,withRisk(out.firm.firm,trendSnapshot(TIME+HOUR),TIME+HOUR),TIME+HOUR);
-  assert.ok(FLOOR.desks.every(s=>next.desks[s].decisions.length===2));
+  const next=advanceFirm(out.firm.firm,withRisk(out.firm.firm,trendSnapshot(BUY+HOUR,extendUnit(UP,1.001)),BUY+HOUR),BUY+HOUR);
+  assert.ok(FLOOR.desks.every(s=>next.desks[s].decisions.length===3&&next.desks[s].decisions[2].action==='behåll'));
 });

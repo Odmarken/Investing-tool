@@ -1,14 +1,17 @@
 // Trend desks for the trading floor: the nine-horizon Donchian ensemble on
-// hourly closes with volatility-targeted size that research/floor-trend-*
-// selected and validated. One linear perpetual ledger per desk; the desk's
-// whole balance backs its position. Demo only: nothing here sends orders.
+// hourly closes from research/floor-trend-*, traded at Bybit's maximum
+// leverage. A buy uses the whole desk balance as margin with the highest
+// leverage Bybit's public limits allow for the coin and the position size;
+// leverage, maintenance margin and risk tier are locked for the trade. One
+// linear perpetual ledger per desk. Demo only: nothing here sends orders.
 import {QUOTE_TTL} from './crypto-momentum-live.js';
-const HOUR=3600000,DAY=24*HOUR;
-export const TREND=Object.freeze({version:'floor-trend-v1',start:100,hour:HOUR,step:300000,
-  lookbacks:Object.freeze([5,10,20,30,60,90,150,250,360]),volTarget:1,maxLeverage:4,volDays:90,minVolDays:30,band:.25,
-  fee:.00055,slip:.0005,maintenance:.01,initHours:2*365*24,decisionLimit:500});
+import {maxLeverageFor} from './bybit-contracts.js';
+const HOUR=3600000;
+export const TREND=Object.freeze({version:'floor-trend-v2',start:100,hour:HOUR,step:300000,
+  lookbacks:Object.freeze([5,10,20,30,60,90,150,250,360]),fee:.00055,slip:.0005,decisionLimit:500});
 // Hourly closes spanned by the longest channel.
 export const WINDOW=TREND.lookbacks.at(-1)*24;
+const REASONS=Object.freeze(['trend','likvidation','manuell']);
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const positive=x=>finite(x)&&x>0;
 const fresh=(q,now)=>q&&positive(q.price)&&positive(q.mark)&&finite(q.at)&&q.at<=now+5000&&now-q.at<=QUOTE_TTL;
@@ -43,8 +46,8 @@ function checkBars(bars){
  * Process every completed hourly close after signal.through up to `upto` (the
  * current hour boundary). Per horizon n: a close above the previous n days of
  * closes goes long with its stop at the midpoint of the n days ending now; the
- * stop only rises, and a close below it goes flat. A new signal starts flat at
- * the first full window of the supplied history, like the research replay.
+ * stop only rises, and a close below it goes flat. A signal without `through`
+ * replays the supplied history from its first full window, like the research.
  */
 export function advanceTrendSignal(signal,bars,upto){
   validateTrendSignal(signal);checkBars(bars);
@@ -68,22 +71,15 @@ export function advanceTrendSignal(signal,bars,upto){
   return next;
 }
 export const trendCount=signal=>signal.sides.reduce((sum,side)=>sum+side,0);
-// Annualised volatility of the latest 90 daily log returns (UTC closes) at or before `upto`.
-export function trendVol(bars,upto){
-  checkBars(bars);
-  const closes=[];
-  for(let i=bars.length-1;i>=0&&closes.length<TREND.volDays+1;i--){const t=bars[i].t+HOUR;if(t<=upto&&t%DAY===0)closes.unshift(bars[i].c);}
-  if(closes.length<TREND.minVolDays+1)return NaN;
-  const n=closes.length-1;let s=0,s2=0;
-  for(let i=1;i<closes.length;i++){const r=Math.log(closes[i]/closes[i-1]);s+=r;s2+=r*r;}
-  const mean=s/n;return Math.sqrt(Math.max(0,(s2-n*mean*mean)/(n-1))*365);
-}
-// Target position value as a multiple of the desk balance.
-export const trendTarget=(count,vol)=>positive(vol)?count/TREND.lookbacks.length*Math.min(TREND.maxLeverage,TREND.volTarget/vol):0;
-// Every active horizon's stop: the highest shrinks the position first, the lowest ends it.
+// Every active horizon's stop: the highest is the next to switch off, the lowest ends the trade.
 export function trendStops(signal){
   const stops=signal.stops.filter(positive);
   return stops.length?{first:Math.max(...stops),last:Math.min(...stops)}:null;
+}
+// Bybit's maximum for this balance, coin and size: the whole balance is margin, opening fee included.
+export function trendEntryPlan(contract,equity,price,mark,now){
+  const fill=price*(1+TREND.slip),plan=maxLeverageFor(contract,equity,{fee:TREND.fee,price:fill,mark},now);
+  return {leverage:plan.leverage,maintenance:plan.maintenance,deduction:plan.deduction,riskId:plan.riskId,fill,units:equity/(fill*(1/plan.leverage+TREND.fee))};
 }
 
 export function newTrendDesk(){
@@ -92,43 +88,40 @@ export function newTrendDesk(){
 export function validateTrendDesk(d,symbol){
   if(d?.version!==TREND.version||typeof d.enabled!=='boolean'||!finite(d.cash)||!Array.isArray(d.decisions)||!Array.isArray(d.trades)||
     !finite(d.fees)||d.fees<0||!finite(d.funding)||!Number.isInteger(d.lastCount)||d.lastCount<0||d.lastCount>TREND.lookbacks.length||
-    !(d.startedAt===null||positive(d.startedAt)))throw Error('Ogiltigt trendbord');
+    !(d.startedAt===null||positive(d.startedAt))||d.waitReason!==undefined&&typeof d.waitReason!=='string')throw Error('Ogiltigt trendbord');
   validateTrendSignal(d.signal);
   const p=d.position;
-  if(p!==null&&(![p.units,p.entry,p.openedAt,p.equityAtOpen,p.nextBar,p.fundingThrough].every(positive)||!finite(p.fees)||p.fees<0||!finite(p.funding)||
-    !positive(p.peakExposure)||p.nextBar%TREND.step))throw Error('Ogiltig trendposition');
+  if(p!==null&&(![p.units,p.entry,p.openedAt,p.equityAtOpen,p.nextBar,p.fundingThrough,p.peakExposure,p.leverage,p.maintenance,p.riskId].every(positive)||
+    !finite(p.fees)||p.fees<0||!finite(p.funding)||p.maintenance>=1||!finite(p.deduction)||p.deduction<0||p.nextBar%TREND.step))throw Error('Ogiltig trendposition');
   if(p!==null&&p.symbol!==symbol)throw Error('Bord '+symbol+' håller fel coin');
   if(p===null&&d.cash<0)throw Error('Negativ kassa utan position');
   if(d.decisions.some((x,i)=>!x||!positive(x.hour)||x.hour%HOUR||!positive(x.at)||x.at<x.hour||!Number.isInteger(x.count)||i&&x.hour<=d.decisions[i-1].hour)||
     (d.decisions.at(-1)?.hour??null)!==(d.signal.through===null?null:d.signal.through))throw Error('Ogiltiga timbeslut');
-  if(d.trades.some(t=>t?.symbol!==symbol||!positive(t.opened)||!positive(t.at)||t.at<t.opened||!finite(t.pnl)||!['trend','likvidation'].includes(t.reason)))throw Error('Bord '+symbol+' har ogiltiga avslut');
+  if(d.trades.some(t=>t?.symbol!==symbol||!positive(t.opened)||!positive(t.at)||t.at<t.opened||!finite(t.pnl)||!REASONS.includes(t.reason)||!positive(t.leverage)))throw Error('Bord '+symbol+' har ogiltiga avslut');
   return d;
 }
 export const trendEquity=(desk,price)=>desk.cash+(desk.position?.units??0)*price;
-// Cross margin on the desk balance: liquidation when equity falls to the maintenance margin.
-export const trendLiquidation=desk=>{const p=desk.position;return p&&desk.cash<0?-desk.cash/(p.units*(1-TREND.maintenance)):0;};
+// Bybit's isolated level on the whole desk balance: equity after the closing fee
+// falls to the maintenance margin locked at the buy.
+export const trendLiquidation=desk=>{const p=desk.position;return p&&desk.cash<0?Math.max(0,(-desk.cash-p.deduction)/(p.units*(1-p.maintenance-TREND.fee))):0;};
 
 function close(desk,symbol,exit,at,reason,pnl){
   const p=desk.position;
-  desk.trades.push({symbol,opened:p.openedAt,at,entry:p.entry,exit,pnl,fees:p.fees,funding:p.funding,reason,peakExposure:p.peakExposure});
+  desk.trades.push({symbol,opened:p.openedAt,at,entry:p.entry,exit,pnl,fees:p.fees,funding:p.funding,reason,leverage:p.leverage,peakExposure:p.peakExposure});
   desk.position=null;
 }
-// Fill from the current size to `units` at price with slippage and fee. Returns the decision action.
-function tradeTo(desk,symbol,units,price,now){
-  const p=desk.position,held=p?.units??0,du=units-held;
-  if(!du||units>0&&Math.abs(du)*price<.01)return held?'behåll':'avvakta';
-  const fill=price*(1+Math.sign(du)*TREND.slip),fee=Math.abs(du)*fill*TREND.fee,before=trendEquity(desk,price);
-  desk.cash-=du*fill+fee;desk.fees+=fee;
-  if(!p){
-    desk.position={symbol,units,entry:fill,openedAt:now,equityAtOpen:before,fees:fee,funding:0,
-      nextBar:(Math.floor(now/TREND.step)+1)*TREND.step,fundingThrough:now,peakExposure:units*price/(desk.cash+units*price)};
-    return 'köp';
-  }
-  p.fees+=fee;
-  if(units<=0){close(desk,symbol,fill,now,'trend',desk.cash-p.equityAtOpen);return 'sälj';}
-  if(du>0)p.entry=(held*p.entry+du*fill)/units;
-  p.units=units;p.peakExposure=Math.max(p.peakExposure,units*price/trendEquity(desk,price));
-  return du>0?'öka':'minska';
+function open(desk,symbol,plan,price,now){
+  const equity=desk.cash,{fill,units}=plan,fee=units*fill*TREND.fee;
+  desk.cash-=units*fill+fee;desk.fees+=fee;
+  desk.position={symbol,units,entry:fill,openedAt:now,equityAtOpen:equity,fees:fee,funding:0,
+    nextBar:(Math.floor(now/TREND.step)+1)*TREND.step,fundingThrough:now,peakExposure:units*price/(desk.cash+units*price),
+    leverage:plan.leverage,maintenance:plan.maintenance,deduction:plan.deduction,riskId:plan.riskId};
+}
+function sell(desk,symbol,price,now,reason){
+  const p=desk.position,fill=price*(1-TREND.slip),fee=p.units*fill*TREND.fee;
+  // A desk never owes more than its balance, as in a liquidation.
+  desk.cash=Math.max(0,desk.cash+p.units*fill-fee);desk.fees+=fee;p.fees+=fee;
+  close(desk,symbol,fill,now,reason,desk.cash-p.equityAtOpen);
 }
 function quote(m,now){
   if(!m||![m.price,m.mark].every(positive)||!finite(m.at)||m.at>now+5000||now-m.at>120000)throw Error('Färska perpetualpriser saknas');
@@ -148,7 +141,7 @@ export function settleTrendRisk(desk,symbol,market,now){
   const charge=until=>{while(fi<outstanding.length&&outstanding[fi].t<=until){
     const f=outstanding[fi++],b=bars.find(b=>b.t===f.t);if(!b)throw Error('Fundingmarkpris saknas');
     const cost=p.units*b.o*f.rate;next.cash-=cost;next.funding+=cost;p.funding+=cost;}};
-  // Liquidation takes the whole desk balance, as in the research simulation.
+  // The whole desk balance is the margin, so a liquidation takes all of it.
   const liquidate=(price,at)=>{next.cash=0;close(next,symbol,price,at,'likvidation',-p.equityAtOpen);return validateTrendDesk(next,symbol);};
   for(const b of required){
     charge(b.t);
@@ -163,32 +156,55 @@ export function settleTrendRisk(desk,symbol,market,now){
 }
 /**
  * One decision per UTC hour. market: {hour, bars (completed hourly candles),
- * price, mark, at, and mark-price/funding history when a position is held}.
- * Risk settles first. Trades happen when the number of active horizons changes
- * or volatility moves the target by more than a quarter; a paused desk only reduces.
+ * price, mark, at, contract (Bybit's limits, needed to buy) and mark-price and
+ * funding history when a position is held}. Risk settles first. A new desk's
+ * first decision switches every horizon off at that hour, so it starts from
+ * zero. A flat desk buys at Bybit's maximum when a horizon switches on; a held
+ * desk sells when all nine are off. A paused desk does not buy.
  */
 export function advanceTrendDesk(desk,symbol,market,now){
-  let next=settleTrendRisk(desk,symbol,market,now);
+  const settled=settleTrendRisk(desk,symbol,market,now);
   const hour=Math.floor(now/HOUR)*HOUR;
   if(market?.hour!==hour)throw Error('Timpriserna tillhör fel timme');
-  if(next.signal.through!==null&&next.signal.through>=hour)return next;
+  if(settled.signal.through!==null&&settled.signal.through>=hour)return settled;
   quote(market,now);
-  if(next===desk)next=structuredClone(desk);
-  next.signal=advanceTrendSignal(next.signal,market.bars,hour);
-  const count=trendCount(next.signal),vol=trendVol(market.bars,hour),price=market.price;
-  const units=next.position?.units??0,equity=trendEquity(next,price),alive=equity>0;
-  const target=alive?trendTarget(count,vol):0,current=alive?units*price/equity:0;
-  const changed=count!==next.lastCount,drift=Math.abs(target-current)>TREND.band*Math.max(Math.abs(target),Math.abs(current));
-  let action=units?'behåll':'avvakta';
-  if(alive&&(changed||target!==current&&drift||target===0&&units!==0)){
-    if(!next.enabled&&target>current)action='pausad';
-    else{action=tradeTo(next,symbol,target*equity/price,price,now);next.lastCount=count;}
+  const next=settled===desk?structuredClone(desk):settled,price=market.price;
+  let action;
+  if(next.signal.through===null){
+    next.signal={through:hour,sides:TREND.lookbacks.map(()=>0),stops:TREND.lookbacks.map(()=>null)};
+    next.lastCount=0;action='start';
+  }else{
+    next.signal=advanceTrendSignal(next.signal,market.bars,hour);
+    const count=trendCount(next.signal);
+    if(next.position){
+      if(count===0){sell(next,symbol,price,now,'trend');action='sälj';}else action='behåll';
+      next.lastCount=count;
+    }else if(next.cash>0&&count>next.lastCount){
+      if(!next.enabled)action='pausad';
+      else{
+        let plan;
+        // Without Bybit's limits the desk leaves this hour undecided, so the next run retries the buy.
+        try{plan=trendEntryPlan(market.contract,next.cash,price,market.mark,now);}
+        catch(e){const reason='Köpet väntar: '+e.message;return settled.waitReason===reason?settled:validateTrendDesk({...settled,waitReason:reason},symbol);}
+        open(next,symbol,plan,price,now);action='köp';next.lastCount=count;
+      }
+    }else{action='avvakta';next.lastCount=count;}
   }
-  const after=trendEquity(next,price);
+  delete next.waitReason;
+  const after=trendEquity(next,price),p=next.position;
   next.startedAt??=now;
-  next.decisions.push({hour,at:now,count,target,vol:finite(vol)?vol:null,exposure:after>0&&next.position?next.position.units*price/after:0,action,price});
+  next.decisions.push({hour,at:now,count:trendCount(next.signal),leverage:p?p.leverage:0,exposure:p&&after>0?p.units*price/after:0,action,price});
   if(next.decisions.length>TREND.decisionLimit)next.decisions=next.decisions.slice(-TREND.decisionLimit);
   return validateTrendDesk(next,symbol);
+}
+// The trader's own close: risk settles first, then the whole position sells at
+// the quote. The desk buys again only when a horizon switches on after this.
+export function closeTrendDesk(desk,symbol,market,now,openedAt){
+  const settled=settleTrendRisk(desk,symbol,market,now);
+  if(settled.position?.openedAt!==openedAt)return settled;
+  quote(market,now);
+  sell(settled,symbol,market.price,now,'manuell');settled.lastCount=trendCount(settled.signal);
+  return validateTrendDesk(settled,symbol);
 }
 // Live balance net of estimated closing costs; waits for a fresh quote and a recent risk check.
 export function trendLiveValue(desk,q,now){

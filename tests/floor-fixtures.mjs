@@ -21,12 +21,19 @@ export function unitBars(end=TIME,{rally=true,days=DAYS}={}){
   return out;
 }
 export const coinBars=(symbol,bars)=>bars.map(b=>({t:b.t,o:b.o*SCALE[symbol],h:b.h*SCALE[symbol],l:b.l*SCALE[symbol],c:b.c*SCALE[symbol]}));
+// The unit candles plus the next hour, closing at `factor` times the last close.
+export function extendUnit(unit,factor){
+  const last=unit.at(-1),c=last.c*factor;
+  return [...unit,{t:last.t+HOUR,o:last.c,h:Math.max(last.c,c),l:Math.min(last.c,c),c}];
+}
+// Bybit's limits as parseContract returns them, matching fakeBybit: 150× and 0.5 % maintenance.
+export const limitsFor=(symbol,at)=>({symbol,contract:CONTRACTS[symbol],at,min:1,max:150,step:.01,tiers:[{id:1,cap:1e7,max:150,maintenance:.005,deduction:0}]});
 // What fetchTrendMarket returns, for every desk, from unit candles.
 export function trendSnapshot(time=TIME,unit=unitBars(time)){
   const hour=Math.floor(time/HOUR)*HOUR;
   return {hour,market:Object.fromEntries(FLOOR.desks.map(symbol=>{
     const bars=coinBars(symbol,unit.filter(b=>b.t<hour)),price=bars.at(-1).c;
-    return [symbol,{bars,price,mark:price,at:time}];
+    return [symbol,{bars,price,mark:price,at:time,contract:limitsFor(symbol,time)}];
   }))};
 }
 // Flat mark-price history since the desk's last check, as fetchDerivatives returns it.

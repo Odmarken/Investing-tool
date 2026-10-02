@@ -1,23 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {FLOOR,ROOMS,newFirm,validateFirm,readFirm,upgradeStoredFirm,isLegacyFirm,firmKey,equityKey,needsHourly,advanceFirm,advanceFirmRisk,setFirmPaused,heldSymbols,firmLive,firmStats,sampleEquity,readEquity,riskRows,floorNarrative,traderNames,dayStart} from '../trading-floor.js';
-import {TREND,trendCount} from '../floor-trend.js';
+import {FLOOR,ROOMS,newFirm,validateFirm,readFirm,upgradeStoredFirm,isLegacyFirm,firmKey,equityKey,needsHourly,advanceFirm,advanceFirmRisk,closeFirmDesk,setFirmPaused,heldSymbols,firmLive,firmStats,sampleEquity,readEquity,riskRows,floorNarrative,traderNames,dayStart} from '../trading-floor.js';
+import {TREND,trendCount,trendLiquidation} from '../floor-trend.js';
 import {clearTrendCache} from '../floor-trend-market.js';
 import {AISLES,ROOM_GEOMETRY,DESK_GEOMETRY,FIKA,allLocations,onNetwork,routeBetween,routeTo,createAgents,stepAgents,REGIONS,hitAt,project,SCREENS,deskCelebration,celebrationPose,deskTradeLabel} from '../trading-floor-scene.js';
 import {mountFloor} from '../trading-floor-ui.js';
-import {TIME,HOUR,unitBars,trendSnapshot,withRisk,riskSnapshot,fakeBybit,coinBars} from './floor-fixtures.mjs';
+import {TIME,HOUR,unitBars,extendUnit,trendSnapshot,withRisk,riskSnapshot,fakeBybit,coinBars} from './floor-fixtures.mjs';
 
 const near=(a,b,eps=1e-7)=>assert.ok(Math.abs(a-b)<eps,`${a} != ${b}`);
 const seeded=()=>{let seed=7;return ()=>{seed=(seed*1103515245+12345)%2147483648;return seed/2147483648;};};
 const UNIT=unitBars(TIME),SLIDE=unitBars(TIME,{rally:false});
-const holding=()=>advanceFirm(newFirm(TIME),trendSnapshot(TIME,UNIT),TIME);
-// A close at 72 % of the last one is below every horizon's stop (76 % and up) but above liquidation (62 %).
+// A reset firm switches every trend off at TIME; the rally's next close above every channel buys all six desks.
+const BUY=TIME+HOUR,UP=extendUnit(UNIT,1.001);
+const armed=()=>advanceFirm(newFirm(TIME),trendSnapshot(TIME,UNIT),TIME);
+const holding=()=>advanceFirm(armed(),trendSnapshot(BUY,UP),BUY);
+// A 28 % crash is far below every trend stop, so at 150× it liquidates every desk.
 const CRASH=.72;
-// Next hour's snapshot with the latest close moved by `factor` for every coin.
-function nextHour(firm,factor,time=TIME+HOUR){
-  const unit=[...UNIT,{...UNIT.at(-1),t:UNIT.at(-1).t+HOUR,o:UNIT.at(-1).c,c:UNIT.at(-1).c*factor,h:Math.max(UNIT.at(-1).c,UNIT.at(-1).c*factor),l:Math.min(UNIT.at(-1).c,UNIT.at(-1).c*factor)}];
-  return withRisk(firm,trendSnapshot(time,unit),time);
-}
+// The hour after the buy, with the latest close moved by `factor` for every coin.
+const nextHour=(firm,factor,time=BUY+HOUR)=>withRisk(firm,trendSnapshot(time,extendUnit(UP,factor)),time);
 
 test('a new firm has six trend desks with 100 dollars each and trading enabled',()=>{
   const firm=newFirm(TIME);
@@ -26,81 +26,102 @@ test('a new firm has six trend desks with 100 dollars each and trading enabled',
   assert.equal(firm.paused,false);assert.equal(validateFirm(firm),firm);
   assert.deepEqual(readFirm({getItem:()=>null},'k',TIME),firm);
   assert.throws(()=>validateFirm({...firm,version:'x'}),/Ogiltig/);
-  assert.throws(()=>validateFirm({...firm,version:'trading-floor-v3'}),/Golvet har uppdaterats \(trading-floor-v3\)\. Ladda om sidan/);
+  assert.throws(()=>validateFirm({...firm,version:'trading-floor-v4'}),/Golvet har uppdaterats \(trading-floor-v4\)\. Ladda om sidan/);
   assert.throws(()=>validateFirm({...firm,desks:{...firm.desks,BTC:{...firm.desks.BTC,enabled:false}}}),/handelsläge/);
   assert.throws(()=>newFirm(0));
   assert.equal(firmKey('a b'),'riptide.floor.v1:a%20b');assert.equal(equityKey('a'),'riptide.floor.v1:a:equity');
 });
 
-test('an old SL/TP firm is archived with its curve and replaced by trend desks',()=>{
-  const m=new Map(),s={getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v)},legacy=JSON.stringify({version:FLOOR.legacy,createdAt:TIME-1e6,paused:false,desks:{}});
-  m.set('k',legacy);m.set('k:equity','[{"t":1,"v":600}]');
-  assert.equal(isLegacyFirm(JSON.parse(legacy)),true);
-  assert.equal(readFirm(s,'k',TIME).version,FLOOR.version,'a legacy firm reads as a fresh trend firm');
-  assert.equal(upgradeStoredFirm(s,'k','k:equity',TIME),true);
-  assert.equal(m.get('k:before-trend:'+TIME),legacy);assert.equal(m.get('k:equity:before-trend:'+TIME),'[{"t":1,"v":600}]');
-  assert.equal(m.get('k:equity'),'[]');assert.deepEqual(readFirm(s,'k',TIME),newFirm(TIME));
-  assert.equal(upgradeStoredFirm(s,'k','k:equity',TIME+1),false,'only once');
+test('older firms are archived with their curve and replaced by fresh desks whose trends start off',()=>{
+  for(const [version,tag,paused] of [['trading-floor-v1','before-trend',false],['trading-floor-v2','before-max',true]]){
+    const m=new Map(),s={getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v)},legacy=JSON.stringify({version,createdAt:TIME-1e6,paused,desks:{}});
+    m.set('k',legacy);m.set('k:equity','[{"t":1,"v":600}]');
+    assert.equal(isLegacyFirm(JSON.parse(legacy)),true);
+    assert.equal(readFirm(s,'k',TIME).version,FLOOR.version,'a legacy firm reads as a fresh firm');
+    assert.equal(upgradeStoredFirm(s,'k','k:equity',TIME),true);
+    assert.equal(m.get('k:'+tag+':'+TIME),legacy);assert.equal(m.get('k:equity:'+tag+':'+TIME),'[{"t":1,"v":600}]');
+    const fresh=readFirm(s,'k',TIME);
+    assert.equal(m.get('k:equity'),'[]');assert.equal(fresh.paused,paused,'the pause carries over');
+    assert.ok(FLOOR.desks.every(x=>fresh.desks[x].cash===100&&fresh.desks[x].signal.through===null&&fresh.desks[x].position===null));
+    assert.equal(upgradeStoredFirm(s,'k','k:equity',TIME+1),false,'only once');
+  }
   assert.equal(upgradeStoredFirm({getItem:()=>null},'k','k:equity',TIME),false);
 });
 
-test('every desk trades only its own coin, once per hour, and a falling coin stays flat',()=>{
+test('a reset firm starts with every trend off, then each desk buys its own coin at Bybit\'s maximum on the next breakout',()=>{
   const firm=newFirm(TIME),copy=structuredClone(firm);
   assert.equal(needsHourly(firm,TIME),true);
-  const next=holding();
+  const start=armed();
   assert.deepEqual(firm,copy,'advancing never mutates the input');
-  assert.deepEqual(heldSymbols(next),[...FLOOR.desks]);assert.equal(needsHourly(next,TIME+1000),false);
+  assert.equal(heldSymbols(start).length,0);assert.equal(needsHourly(start,TIME+1000),false);assert.equal(needsHourly(start,BUY),true);
+  assert.ok(FLOOR.desks.every(s=>start.desks[s].decisions[0].action==='start'&&trendCount(start.desks[s].signal)===0));
+  const next=holding();
+  assert.deepEqual(heldSymbols(next),[...FLOOR.desks]);assert.equal(needsHourly(next,BUY+1000),false);
   for(const s of FLOOR.desks){
     const d=next.desks[s];
     assert.equal(trendCount(d.signal),TREND.lookbacks.length,s+' sees every horizon break out');
-    assert.equal(d.decisions.length,1);assert.equal(d.decisions[0].action,'köp');
-    assert.ok(d.position.units>0&&d.position.peakExposure<=TREND.maxLeverage+1e-9);
+    assert.equal(d.decisions.length,2);assert.equal(d.decisions[1].action,'köp');assert.equal(d.decisions[1].leverage,150);
+    assert.equal(d.position.leverage,150);assert.equal(d.position.maintenance,.005);assert.ok(d.position.peakExposure>130);
     near(d.position.equityAtOpen,100);
   }
   assert.equal(validateFirm(next),next);
-  const again=advanceFirm(next,withRisk(next,trendSnapshot(TIME+1000,UNIT),TIME+1000),TIME+1000);
-  for(const s of FLOOR.desks){assert.equal(again.desks[s].decisions.length,1,'no second decision in the same hour');assert.equal(again.desks[s].position.units,next.desks[s].position.units);assert.equal(again.desks[s].position.fundingThrough,TIME+1000);}
-  const flat=advanceFirm(newFirm(TIME),trendSnapshot(TIME,SLIDE),TIME);
-  assert.equal(heldSymbols(flat).length,0);assert.ok(FLOOR.desks.every(s=>flat.desks[s].decisions[0].action==='avvakta'));
+  const again=advanceFirm(next,withRisk(next,trendSnapshot(BUY+1000,UP),BUY+1000),BUY+1000);
+  for(const s of FLOOR.desks){assert.equal(again.desks[s].decisions.length,2,'no second decision in the same hour');assert.equal(again.desks[s].position.units,next.desks[s].position.units);assert.equal(again.desks[s].position.fundingThrough,BUY+1000);}
+  // A sliding coin makes no new high after the reset.
+  const slide=advanceFirm(newFirm(TIME),trendSnapshot(TIME,SLIDE),TIME),flat=advanceFirm(slide,trendSnapshot(BUY,extendUnit(SLIDE,.999)),BUY);
+  assert.equal(heldSymbols(flat).length,0);assert.ok(FLOOR.desks.every(s=>flat.desks[s].decisions[1].action==='avvakta'));
   assert.throws(()=>advanceFirm(newFirm(TIME),{hour:TIME,market:{BTC:trendSnapshot().market.BTC}},TIME),/Timpriser saknas för ETH/);
   const swapped={...next,desks:{...next.desks,BTC:next.desks.ETH}};
   assert.throws(()=>validateFirm(swapped),/Bord BTC håller fel coin/);
 });
 
-test('pausing blocks new buys while trend exits and liquidation still close positions',()=>{
-  const paused=setFirmPaused(newFirm(TIME),true);
+test('pausing blocks new buys while liquidation still closes positions',()=>{
+  const paused=setFirmPaused(armed(),true);
   assert.ok(FLOOR.desks.every(s=>paused.desks[s].enabled===false));
-  const idle=advanceFirm(paused,trendSnapshot(TIME,UNIT),TIME);
-  assert.equal(heldSymbols(idle).length,0);assert.ok(FLOOR.desks.every(s=>idle.desks[s].decisions[0].action==='pausad'));
+  const idle=advanceFirm(paused,trendSnapshot(BUY,UP),BUY);
+  assert.equal(heldSymbols(idle).length,0);assert.ok(FLOOR.desks.every(s=>idle.desks[s].decisions.at(-1).action==='pausad'));
   assert.ok(FLOOR.desks.every(s=>trendCount(idle.desks[s].signal)===TREND.lookbacks.length),'trend states keep updating while paused');
-  // Held and paused: a crash below every trend stop still sells.
-  const stopped=setFirmPaused(holding(),true),crash=nextHour(stopped,CRASH),btc=stopped.desks.BTC,last=crash.market.BTC.bars.at(-2).c;
-  assert.ok(Math.min(...btc.signal.stops)>last*CRASH&&-btc.cash/(btc.position.units*(1-TREND.maintenance))<last*CRASH);
-  const out=advanceFirm(stopped,crash,TIME+HOUR);
-  for(const s of FLOOR.desks){const d=out.desks[s];assert.equal(d.position,null);assert.equal(d.trades.length,1);assert.equal(d.decisions.at(-1).action,'sälj');}
+  // Held and paused: a crash closes every desk, and at 150× the liquidation comes long before the trend stops.
+  const stopped=setFirmPaused(holding(),true),out=advanceFirm(stopped,nextHour(stopped,CRASH),BUY+HOUR);
+  for(const s of FLOOR.desks){
+    const d=out.desks[s];assert.equal(d.position,null);assert.equal(d.trades.length,1);assert.equal(d.trades[0].reason,'likvidation');assert.equal(d.trades[0].leverage,150);
+    assert.equal(d.cash,0);assert.equal(d.trades[0].pnl,-100);assert.ok(trendLiquidation(stopped.desks[s])>Math.max(...stopped.desks[s].signal.stops));
+  }
   assert.equal(out.paused,true);
   // A mark wick through one desk's liquidation price closes only that desk.
-  const risk=riskSnapshot(stopped,TIME+10*60000),sol=stopped.desks.SOL,liq=-sol.cash/(sol.position.units*(1-TREND.maintenance));
-  risk.market.SOL.markBars=risk.market.SOL.markBars.map((b,i)=>i===1?{...b,l:liq*.95}:b);
-  const one=advanceFirmRisk(stopped,'SOL',risk,TIME+10*60000);
+  const risk=riskSnapshot(stopped,BUY+10*60000),liq=trendLiquidation(stopped.desks.SOL);
+  risk.market.SOL.markBars=risk.market.SOL.markBars.map((b,i)=>i===1?{...b,l:liq*.999}:b);
+  const one=advanceFirmRisk(stopped,'SOL',risk,BUY+10*60000);
   assert.equal(one.desks.SOL.trades[0].reason,'likvidation');assert.equal(one.desks.SOL.cash,0);
   for(const s of FLOOR.desks)if(s!=='SOL')assert.deepEqual(one.desks[s],stopped.desks[s]);
-  assert.equal(advanceFirmRisk(one,'SOL',{market:{}},TIME+11*60000),one,'a flat desk needs no risk data');
-  assert.throws(()=>advanceFirmRisk(one,'PEPE',{market:{}},TIME),/Okänt bord/);
+  assert.equal(advanceFirmRisk(one,'SOL',{market:{}},BUY+11*60000),one,'a flat desk needs no risk data');
+  assert.throws(()=>advanceFirmRisk(one,'PEPE',{market:{}},BUY),/Okänt bord/);
   const resumed=setFirmPaused(out,false);assert.ok(FLOOR.desks.every(s=>resumed.desks[s].enabled));
+});
+
+test('the close button sells only the clicked desk and refuses a trade that is already closed',()=>{
+  const firm=holding(),at=BUY+20*60000,p=firm.desks.ETH.position,risk=riskSnapshot(firm,at);
+  const closed=closeFirmDesk(firm,'ETH',risk,at,p.openedAt);
+  assert.equal(closed.desks.ETH.position,null);assert.equal(closed.desks.ETH.trades[0].reason,'manuell');
+  assert.deepEqual(heldSymbols(closed),FLOOR.desks.filter(s=>s!=='ETH'));
+  for(const s of FLOOR.desks)if(s!=='ETH')assert.equal(closed.desks[s],firm.desks[s]);
+  assert.throws(()=>closeFirmDesk(closed,'ETH',risk,at,p.openedAt),/redan stängd/);
+  assert.throws(()=>closeFirmDesk(firm,'ETH',risk,at,p.openedAt+1),/redan stängd/);
+  assert.throws(()=>closeFirmDesk(firm,'PEPE',risk,at,p.openedAt),/Okänt bord/);
+  assert.equal(firmStats(closed,at).desks.ETH.status,'waiting');assert.equal(firmStats(closed,at).desks.ETH.trades,1);
 });
 
 test('the big screen total sums six live desk balances and waits when a held desk lacks a fresh price',()=>{
   const fresh=firmLive(newFirm(TIME),{},TIME);
   near(fresh.total,600);near(fresh.net,0);assert.deepEqual(fresh.waiting,[]);assert.equal(fresh.start,600);
-  const firm=holding(),at=TIME+5000,quotes=Object.fromEntries(FLOOR.desks.map(s=>{const p=firm.desks[s].position.entry*1.05;return [s,{price:p,mark:p,at}];}));
+  const firm=holding(),at=BUY+5000,quotes=Object.fromEntries(FLOOR.desks.map(s=>{const p=firm.desks[s].position.entry*1.05;return [s,{price:p,mark:p,at}];}));
   const all=firmLive(firm,quotes,at);
   assert.deepEqual(all.waiting,[]);near(all.total,FLOOR.desks.reduce((sum,s)=>sum+all.desks[s].balance,0));assert.ok(all.total>600);
   assert.ok(all.desks.BTC.openNet>0);near(all.desks.BTC.openReturn,all.desks.BTC.openNet/100);assert.ok(all.desks.BTC.exposure>0);
   delete quotes.XRP;const partial=firmLive(firm,quotes,at);
   assert.equal(partial.total,null);assert.equal(partial.net,null);assert.deepEqual(partial.waiting,['XRP']);assert.ok(partial.desks.BTC.balance>0);assert.equal(partial.desks.XRP.balance,null);
   const rows=riskRows(firm,all);assert.equal(rows.length,6);
-  assert.ok(rows.every(r=>r.count===TREND.lookbacks.length&&r.toFirst>0&&r.toLast>=r.toFirst&&(r.toLiq===null||r.toLiq>r.toLast)),'stops sit above liquidation');
+  assert.ok(rows.every(r=>r.count===TREND.lookbacks.length&&r.leverage===150&&r.toLiq>0&&r.toLiq<r.toFirst&&r.toFirst<=r.toLast),'at maximum leverage liquidation sits closer than any trend stop');
 });
 
 test('equity samples are at most one per minute, capped and validated on read',()=>{
@@ -115,18 +136,20 @@ test('equity samples are at most one per minute, capped and validated on read',(
 });
 
 test('firm statistics separate today from all time using Stockholm midnight',()=>{
-  const firm=holding(),time=TIME+HOUR,done=advanceFirm(firm,nextHour(firm,CRASH,time),time),stats=firmStats(done,time);
-  assert.equal(stats.trades,6);assert.equal(stats.losses,6);assert.ok(stats.realized<0);near(stats.today,stats.realized);
-  assert.equal(stats.desks.BTC.status,'waiting');assert.equal(stats.inTrade,0);assert.equal(stats.desks.BTC.count,0);
-  assert.equal(firmStats(setFirmPaused(done,true),time).desks.BTC.status,'paused');
-  assert.equal(firmStats(firm,TIME).desks.ETH.status,'trade');assert.ok(firmStats(firm,TIME).desks.ETH.stops.first>0);
+  const firm=holding(),time=BUY+HOUR,done=advanceFirm(firm,nextHour(firm,CRASH,time),time),stats=firmStats(done,time);
+  assert.equal(stats.trades,6);assert.equal(stats.losses,6);assert.equal(stats.liquidations,6);assert.ok(stats.realized<0);near(stats.today,stats.realized);
+  assert.equal(stats.desks.BTC.status,'liquidated');assert.equal(stats.inTrade,0);assert.equal(stats.desks.BTC.count,0);
+  assert.equal(firmStats(setFirmPaused(done,true),time).desks.BTC.status,'liquidated','a liquidated desk stays liquidated when paused');
+  assert.equal(firmStats(armed(),TIME).desks.BTC.status,'waiting');assert.equal(firmStats(setFirmPaused(armed(),true),TIME).desks.BTC.status,'paused');
+  assert.equal(firmStats(firm,BUY).desks.ETH.status,'trade');assert.ok(firmStats(firm,BUY).desks.ETH.stops.first>0);
   const tomorrow=dayStart(time)+86400000+3600000;
   assert.equal(firmStats(done,tomorrow).today,0);assert.equal(dayStart(tomorrow)%1000,0);
   assert.ok(time-dayStart(time)<86400000&&time-dayStart(time)>=0);
   const text=floorNarrative(done,firmLive(done,{},time),stats,time);
-  assert.match(text,/Inga bord är i affär just nu/);assert.match(text,/6 avslutade affärer sedan start: 0 vinster, 6 förluster/);assert.match(text,/nio trender/);
-  const quotes=Object.fromEntries(FLOOR.desks.map(s=>{const p=firm.desks[s].position.entry;return [s,{price:p,mark:p,at:TIME}];}));
-  assert.match(floorNarrative(firm,firmLive(firm,quotes,TIME),firmStats(firm,TIME),TIME),/6 av 6 bord sitter i affär: BTC .*9 av 9 trender/);
+  assert.match(text,/Inga bord är i affär just nu/);assert.match(text,/6 avslutade affärer sedan start: 0 vinster, 6 förluster, 6 likvidationer/);assert.match(text,/nio trender/);
+  assert.match(text,/Likviderade: BTC, ETH, SOL, XRP, DOGE, SHIB\./);assert.match(text,/Bybits maxhävstång/);
+  const quotes=Object.fromEntries(FLOOR.desks.map(s=>{const p=firm.desks[s].position.entry;return [s,{price:p,mark:p,at:BUY}];}));
+  assert.match(floorNarrative(firm,firmLive(firm,quotes,BUY),firmStats(firm,BUY),BUY),/6 av 6 bord sitter i affär: BTC .*9 av 9 trender, 150× hävstång, 0,\d % till likvidation/);
 });
 
 test('Stockholm midnight stays correct across both daylight saving changes',()=>{
@@ -140,17 +163,17 @@ test('Stockholm midnight stays correct across both daylight saving changes',()=>
 
 test('firm quote timestamp is the oldest held quote, not the render time',()=>{
   const firm=holding();
-  const quotes=Object.fromEntries(FLOOR.desks.map((s,i)=>{const p=firm.desks[s].position.entry;return [s,{price:p,mark:p,at:TIME+i*1000}];}));
-  assert.equal(firmLive(firm,quotes,TIME+10000).at,TIME);
-  delete quotes.BTC;assert.equal(firmLive(firm,quotes,TIME+10000).at,null);
+  const quotes=Object.fromEntries(FLOOR.desks.map((s,i)=>{const p=firm.desks[s].position.entry;return [s,{price:p,mark:p,at:BUY+i*1000}];}));
+  assert.equal(firmLive(firm,quotes,BUY+10000).at,BUY);
+  delete quotes.BTC;assert.equal(firmLive(firm,quotes,BUY+10000).at,null);
 });
 
 test('old hourly decisions are trimmed so six desks stay small in storage',()=>{
-  let firm=holding();const desk=firm.desks.BTC,n=FLOOR.decisionLimit+20;
-  desk.decisions=[...Array.from({length:n-1},(_,i)=>({...desk.decisions[0],hour:TIME-(n-1-i)*HOUR,at:TIME-(n-1-i)*HOUR+1000})),desk.decisions[0]];
+  let firm=holding();const desk=firm.desks.BTC,n=FLOOR.decisionLimit+20,last=desk.decisions.at(-1);
+  desk.decisions=[...Array.from({length:n-1},(_,i)=>({...last,hour:BUY-(n-1-i)*HOUR,at:BUY-(n-1-i)*HOUR+1000})),last];
   validateFirm(firm);
-  const next=advanceFirm(firm,nextHour(firm,1.001),TIME+HOUR);
-  assert.equal(next.desks.BTC.decisions.length,FLOOR.decisionLimit);assert.equal(next.desks.BTC.decisions.at(-1).hour,TIME+HOUR);
+  const next=advanceFirm(firm,nextHour(firm,1.001),BUY+HOUR);
+  assert.equal(next.desks.BTC.decisions.length,FLOOR.decisionLimit);assert.equal(next.desks.BTC.decisions.at(-1).hour,BUY+HOUR);
   assert.equal(validateFirm(next),next);
 });
 
@@ -243,26 +266,33 @@ test('the mounted floor buys on every desk from Bybit-shaped data, pauses, settl
   const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT};
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at,confirm:()=>true});
   await ui.refresh();
-  const firm=readFirm(s,firmKey('one'),TIME);
-  assert.deepEqual(heldSymbols(firm),[...FLOOR.desks]);
+  let firm=readFirm(s,firmKey('one'),TIME);
+  assert.equal(heldSymbols(firm).length,0);assert.ok(FLOOR.desks.every(x=>firm.desks[x].decisions[0].action==='start'));
+  assert.match(r.querySelector('[data-floor-status]').textContent,/Firman handlar · 0 av 6 bord i affär/);
+  // Next hour the rally makes a new high: every desk buys with Bybit's limits from the API.
+  runtime.at=BUY;runtime.unit=UP;await ui.refresh();
+  firm=readFirm(s,firmKey('one'),BUY);
+  assert.deepEqual(heldSymbols(firm),[...FLOOR.desks]);assert.ok(FLOOR.desks.every(x=>firm.desks[x].position.leverage===150));
+  assert.ok(runtime.urls.some(u=>u.pathname.endsWith('/risk-limit')),'a flat desk loads its limits before the decision');
   assert.match(r.querySelector('[data-floor-status]').textContent,/Firman handlar · 6 av 6 bord i affär/);
-  assert.equal(readEquity(s,equityKey('one')).length,1);
+  assert.equal(readEquity(s,equityKey('one')).length,2);
   // Decided for this hour: another refresh a minute later fetches no candles.
-  runtime.urls.length=0;runtime.at=TIME+61000;await ui.refresh();
+  runtime.urls.length=0;runtime.at=BUY+61000;await ui.refresh();
   assert.equal(runtime.urls.filter(u=>u.pathname.endsWith('/kline')).length,0);
   await ui.togglePause();
-  assert.equal(readFirm(s,firmKey('one'),TIME).paused,true);assert.match(r.querySelector('[data-floor-pause]').textContent,/Återuppta/);
+  assert.equal(readFirm(s,firmKey('one'),BUY).paused,true);assert.match(r.querySelector('[data-floor-pause]').textContent,/Återuppta/);
   assert.match(r.querySelector('[data-floor-status]').textContent,/Nya köp pausade/);
-  runtime.at=TIME+66000;runtime.urls.length=0;await ui.refreshLive();
+  runtime.at=BUY+66000;runtime.urls.length=0;await ui.refreshLive();
   const riskCalls=runtime.urls.filter(u=>u.pathname.endsWith('/mark-price-kline'));
   assert.equal(riskCalls.length,1,'one desk is settled per live cycle');
   assert.equal(runtime.urls.filter(u=>u.pathname.endsWith('/tickers')).length,7);
-  runtime.at=TIME+72000;runtime.urls.length=0;await ui.refreshLive();
+  runtime.at=BUY+72000;runtime.urls.length=0;await ui.refreshLive();
   assert.notEqual(runtime.urls.find(u=>u.pathname.endsWith('/mark-price-kline')).searchParams.get('symbol'),riskCalls[0].searchParams.get('symbol'));
   ui.pick({kind:'desk',id:'BTC'});
   const desk=r.querySelector('[data-floor-panel]').innerHTML;
-  assert.match(desk,/LONG/);assert.match(desk,/Lucas · Leo · Mateo · Vincent/);assert.match(desk,/Trender · 9 av 9 uppåt/);assert.match(desk,/class="on"[^>]*>360d/);assert.match(desk,/Första trendstopp/);
-  ui.pick({kind:'room',id:'miguel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Miguel · Risk/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Närmast första stopp/);
+  assert.match(desk,/LONG · 150× hävstång/);assert.match(desk,/Lucas · Leo · Mateo · Vincent/);assert.match(desk,/Trender · 9 av 9 uppåt/);assert.match(desk,/class="on"[^>]*>360d/);
+  assert.match(desk,/Till likvidation/);assert.match(desk,/data-floor-close="BTC"/);assert.match(desk,/>Stäng trade</);
+  ui.pick({kind:'room',id:'miguel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Miguel · Risk/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Närmast likvidation/);
   ui.pick({kind:'room',id:'manuel'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Manuel · Makro & nyheter/);assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Kryptobias i flödet/);
   ui.pick({kind:'room',id:'pablo'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Pablo · Analys/);
   ui.pick({kind:'screen',id:'equity'});assert.match(r.querySelector('[data-floor-modal-body]').innerHTML,/Kapital · live/);
@@ -274,14 +304,39 @@ test('the mounted floor buys on every desk from Bybit-shaped data, pauses, settl
   runtime.user=null;await ui.refreshLive();assert.match(r.querySelector('[data-floor-status]').textContent,/Logga in/);
 });
 
-test('an old SL/TP firm in this browser is archived and replaced before the first trend decision',async()=>{
+test('Stäng trade in the desk panel sells that desk at the market price after a confirm',async()=>{
   clearTrendCache();
-  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT},legacy=JSON.stringify({version:FLOOR.legacy,createdAt:TIME-1e6,paused:false,desks:{}});
+  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT},asked=[];let answer=true;
+  const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>true,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at,confirm:m=>{asked.push(m);return answer;}});
+  await ui.refresh();runtime.at=BUY;runtime.unit=UP;await ui.refresh();
+  let firm=readFirm(s,firmKey('one'),BUY);const p=firm.desks.BTC.position;
+  ui.pick({kind:'desk',id:'BTC'});
+  assert.match(r.querySelector('[data-floor-panel]').innerHTML,new RegExp('data-floor-close="BTC" data-floor-opened="'+p.openedAt+'"'));
+  // Twenty minutes later the price is 0.2 % above the buy's quote.
+  runtime.at=BUY+20*60000;runtime.price={BTC:p.entry/(1+TREND.slip)*1.002};
+  answer=false;await ui.closeTrade('BTC',p.openedAt);
+  assert.ok(readFirm(s,firmKey('one'),runtime.at).desks.BTC.position,'a cancelled confirm keeps the trade');
+  answer=true;await ui.closeTrade('BTC',p.openedAt);
+  firm=readFirm(s,firmKey('one'),runtime.at);
+  assert.match(asked[0],/Stäng BTC-traden till marknadspris/);
+  const trade=firm.desks.BTC.trades.at(-1);
+  assert.equal(firm.desks.BTC.position,null);assert.equal(trade.reason,'manuell');near(trade.exit,runtime.price.BTC*(1-TREND.slip),1e-6);
+  assert.deepEqual(heldSymbols(firm),FLOOR.desks.filter(x=>x!=='BTC'),'only the clicked desk closes');
+  const panel=r.querySelector('[data-floor-panel]').innerHTML;
+  assert.match(panel,/BTC stängd/);assert.match(panel,/Stängd manuellt/);assert.doesNotMatch(panel,/data-floor-close/);
+  // A second click on the closed trade does nothing.
+  const before=s.getItem(firmKey('one'));await ui.closeTrade('BTC',p.openedAt);assert.equal(s.getItem(firmKey('one')),before);
+});
+
+test('an older firm in this browser is archived and replaced before the first decision',async()=>{
+  clearTrendCache();
+  const s=storage(),r=root(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT},legacy=JSON.stringify({version:'trading-floor-v2',createdAt:TIME-1e6,paused:false,desks:{}});
   s.setItem(firmKey('one'),legacy);s.setItem(equityKey('one'),'[{"t":1,"v":590}]');
   const ui=mountFloor(r,{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
   await ui.refresh();
-  assert.equal(s.getItem(firmKey('one')+':before-trend:'+TIME),legacy);assert.equal(s.getItem(equityKey('one')+':before-trend:'+TIME),'[{"t":1,"v":590}]');
-  assert.deepEqual(heldSymbols(readFirm(s,firmKey('one'),TIME)),[...FLOOR.desks]);
+  assert.equal(s.getItem(firmKey('one')+':before-max:'+TIME),legacy);assert.equal(s.getItem(equityKey('one')+':before-max:'+TIME),'[{"t":1,"v":590}]');
+  const fresh=readFirm(s,firmKey('one'),TIME);
+  assert.equal(heldSymbols(fresh).length,0);assert.ok(FLOOR.desks.every(x=>fresh.desks[x].decisions[0].action==='start'),'the new desks start with every trend off');
 });
 
 test('changing users hides the previous desk and modal and news links reject scripts',async()=>{
@@ -305,7 +360,7 @@ test('a failed firm write leaves no in-memory trade and the status says why',asy
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
   await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null);assert.equal(r.querySelector('[data-floor-status]').textContent,'Handeln väntar: storage full');
-  ui.pick({kind:'desk',id:'SHIB'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Väntar på att en trend ska bryta uppåt/);assert.doesNotMatch(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);
+  ui.pick({kind:'desk',id:'SHIB'});assert.match(r.querySelector('[data-floor-panel]').innerHTML,/Väntar på att en ny trend ska slå på/);assert.doesNotMatch(r.querySelector('[data-floor-panel]').innerHTML,/LONG/);
   runtime.active=false;s.setItem=save;runtime.at=TIME+70000;await ui.refresh();
   assert.equal(s.getItem(firmKey('one')),null,'inactive pages fetch nothing');
 });
@@ -347,6 +402,7 @@ test('the desk label shows current trade percent and shares freshness and thresh
   assert.equal(deskTradeLabel({...desk,openReturn:-.1},TIME),'-10,00 % nu');
   assert.equal(deskTradeLabel(desk,TIME+15001),'väntar på pris');
   assert.equal(deskTradeLabel({...desk,status:'waiting'},TIME),'väntar trend');assert.equal(deskTradeLabel({...desk,status:'loading'},TIME),'laddar…');assert.equal(deskTradeLabel({...desk,status:'paused'},TIME),'pausad');
+  assert.equal(deskTradeLabel({...desk,status:'liquidated'},TIME),'likviderad');
 });
 
 test('all four traders jump on their own table and recline without changing simulation state',()=>{
@@ -368,7 +424,7 @@ test('live quotes drive cash guns and bags, then remove them on falling profit, 
   clearTrendCache();
   const s=storage(),runtime={at:TIME,user:'one',active:true,urls:[],unit:UNIT};
   const local=mountFloor(root(),{getUser:()=>runtime.user,isActive:()=>true,grab:bybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
-  await local.refresh();let firm=readFirm(s,firmKey('one'),TIME),emit;
+  await local.refresh();runtime.at=BUY;runtime.unit=UP;await local.refresh();let firm=readFirm(s,firmKey('one'),BUY),emit;
   assert.deepEqual(heldSymbols(firm),[...FLOOR.desks]);
   const r=root(),frames=[],paint=[];
   const ctx={measureText:s=>({width:String(s).length*6}),createLinearGradient:()=>({addColorStop(){}}),createRadialGradient:()=>({addColorStop(){}})};
@@ -376,8 +432,10 @@ test('live quotes drive cash guns and bags, then remove them on falling profit, 
     ctx[method]=(...args)=>{for(const arg of args)if(typeof arg==='number')assert.ok(Number.isFinite(arg),method);if(method==='fill')paint.push(ctx.fillStyle);};
   }
   Object.assign(r.querySelector('[data-floor-canvas]'),{clientWidth:1440,clientHeight:900,getContext:()=>ctx});
-  // Price moves that give each desk's open trade roughly +0 %, +30 % and +80 % of its starting capital.
-  const exposure=firm.desks.BTC.decisions[0].exposure,move=gain=>1+gain/exposure,quote={factor:1};
+  // Price factors on the entry that give each desk's open trade +30 % or +80 % of its starting capital
+  // after closing costs; every desk bought the same 150× notional, so one factor fits all six.
+  const p=firm.desks.BTC.position,cash=firm.desks.BTC.cash,quote={factor:1};
+  const move=gain=>(p.equityAtOpen*(1+gain)-cash)/(p.units*p.entry*(1-TREND.slip)*(1-TREND.fee));
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>true,isVisible:()=>true,now:()=>runtime.at,raf:fn=>frames.push(fn),storage:s,
     cloud:{available:()=>true,subscribe:(_,cb)=>{emit=()=>cb({firm,equity:[]});queueMicrotask(emit);return ()=>{};}},
     grab:async(url,o)=>{runtime.price=Object.fromEntries(FLOOR.desks.map(d=>[d,firm.desks[d].position?firm.desks[d].position.entry*quote.factor:1]));return fakeBybit(runtime)(url,o);}});

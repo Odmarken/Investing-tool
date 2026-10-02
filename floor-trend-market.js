@@ -3,10 +3,10 @@
 // each hour; a cold start refills the full window from Bybit.
 import {CONTRACTS,CONTRACT_UNITS} from './bybit-contracts.js';
 import {fetchDerivatives} from './crypto-momentum-market.js';
-import {TREND,WINDOW} from './floor-trend.js';
-const HOUR=3600000,DAY=24*HOUR,PAGE=1000;
-// Enough hours for a new desk's replay plus the longest channel behind it.
-const KEEP=TREND.initHours+WINDOW+48;
+import {WINDOW} from './floor-trend.js';
+const HOUR=3600000,PAGE=1000;
+// The longest channel behind the decision hour, with room for a late run.
+const KEEP=WINDOW+48;
 const cache=new Map();
 export function clearTrendCache(){cache.clear();}
 
@@ -51,18 +51,17 @@ export async function fetchHourly(grab,symbol,from,hour,now){
   cache.set(symbol,[...known.values()].filter(b=>b.t>=keepFrom&&b.t<hour).sort((a,b)=>a.t-b.t));
   return bars;
 }
-// Hours each desk needs: a new desk replays two years; a running desk needs its
-// longest channel behind the first unprocessed hour and 90 days for volatility.
+// Hours each desk needs: the longest channel behind its first unprocessed hour.
+// A new desk starts from zero at the decision hour, so the same window loads the cache.
 export function historyStart(desk,hour){
-  const through=desk.signal.through;
-  if(through===null)return hour-TREND.initHours*HOUR;
-  return Math.min(Math.min(through,hour)-WINDOW*HOUR,hour-(TREND.volDays+2)*DAY);
+  return Math.min(desk.signal.through??hour,hour)-WINDOW*HOUR;
 }
-// desks: {symbol: desk}. Candles, quote and (for a held position) mark-price and funding history.
+// desks: {symbol: desk}. Candles, quote, Bybit's limits for a flat desk that may
+// buy, and mark-price and funding history for a held position.
 export async function fetchTrendMarket(grab,now,desks){
   const hour=Math.floor(now()/HOUR)*HOUR;
   const entries=await Promise.all(Object.entries(desks).map(async([symbol,desk])=>{
-    const [bars,market]=await Promise.all([fetchHourly(grab,symbol,historyStart(desk,hour),hour,now),fetchDerivatives(grab,symbol,desk.position,now,{limits:false})]);
+    const [bars,market]=await Promise.all([fetchHourly(grab,symbol,historyStart(desk,hour),hour,now),fetchDerivatives(grab,symbol,desk.position,now,{limits:!desk.position})]);
     return [symbol,{...market,bars}];
   }));
   if(hour!==Math.floor(now()/HOUR)*HOUR)throw Error('Ny timme: prisdata hämtas igen');

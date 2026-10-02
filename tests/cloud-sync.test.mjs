@@ -6,7 +6,7 @@ import {newActiveAccount,readActiveAccount} from '../crypto-momentum-active.js';
 import {FLOOR,readFirm,firmKey,equityKey,heldSymbols,newFirm,setFirmPaused} from '../trading-floor.js';
 import {createCamera,CANVAS} from '../trading-floor-scene.js';
 import {clearTrendCache} from '../floor-trend-market.js';
-import {fakeBybit,unitBars} from './floor-fixtures.mjs';
+import {fakeBybit,unitBars,extendUnit} from './floor-fixtures.mjs';
 
 const TIME=Date.parse('2026-09-22T12:00:00Z');
 const dailyBars=(time,step)=>Array.from({length:100},(_,i)=>{const t=Math.floor(time/step)*step-(99-i)*step,c=100+i;return {t,o:c,h:c+1,l:c-1,c,v:1};});
@@ -92,24 +92,25 @@ test('the floor uploads the local firm once, then only quotes, pauses and resets
   clearTrendCache();
   const s=storage(),runtime={at:TIME,user:'one',active:true,urls:[],unit:unitBars(TIME)};
   const local=mountFloor(root(),{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:fakeBybit(runtime),storage:s,locks:locks(),now:()=>runtime.at});
-  await local.refresh();
-  const firm=readFirm(s,firmKey('one'),TIME);assert.equal(heldSymbols(firm).length,6);
+  // The first hour switches every trend off; the rally's next new high buys all six desks.
+  await local.refresh();runtime.at=TIME+3600000;runtime.unit=extendUnit(runtime.unit,1.001);await local.refresh();
+  const firm=readFirm(s,firmKey('one'),runtime.at);assert.equal(heldSymbols(firm).length,6);
   const cloud=fakeCloud(),r=root();runtime.urls.length=0;
   const ui=mountFloor(r,{getUser:()=>runtime.user,isActive:()=>runtime.active,isVisible:()=>false,grab:fakeBybit(runtime),storage:s,locks:locks(),now:()=>runtime.at,cloud,confirm:()=>true});
   await ui.refresh();await settle();await settle();
-  assert.equal(cloud.store.saves.length,1);assert.deepEqual(cloud.store.saves[0].firm,firm);assert.equal(cloud.store.saves[0].equity.length,1);
+  assert.equal(cloud.store.saves.length,1);assert.deepEqual(cloud.store.saves[0].firm,firm);assert.equal(cloud.store.saves[0].equity.length,2);
   assert.equal(runtime.urls.length,0,'cloud mode fetches nothing on refresh');
   const status=()=>r.querySelector('[data-floor-status]').textContent;
   assert.match(status(),/Firman handlar · 6 av 6 bord i affär/);assert.match(status(),/väntar på första molnvarvet/);
-  runtime.at=TIME+6000;await ui.refreshLive();
+  runtime.at+=6000;await ui.refreshLive();
   assert.deepEqual(kinds(runtime.urls),['tickers']);assert.equal(runtime.urls.length,6);
-  assert.equal(JSON.parse(s.getItem(equityKey('one'))).length,1,'the page does not sample equity in cloud mode');
+  assert.equal(JSON.parse(s.getItem(equityKey('one'))).length,2,'the page does not sample equity in cloud mode');
   cloud.store.doc.lastRun=TIME;cloud.emit();await settle();assert.match(status(),/molnet körde/);
   await ui.togglePause();await settle();
   assert.equal(cloud.store.saves.length,2);assert.equal(cloud.store.saves[1].firm.paused,true);assert.match(status(),/Nya köp pausade/);
   assert.match(r.querySelector('[data-floor-pause]').textContent,/Återuppta/);
   await ui.reset();await settle();
-  assert.equal(cloud.store.archives.length,1);assert.equal(heldSymbols(cloud.store.archives[0][0]).length,6);assert.equal(cloud.store.archives[0][1].length,1,'the equity curve is archived too');
+  assert.equal(cloud.store.archives.length,1);assert.equal(heldSymbols(cloud.store.archives[0][0]).length,6);assert.equal(cloud.store.archives[0][1].length,2,'the equity curve is archived too');
   assert.equal(heldSymbols(cloud.store.saves[2].firm).length,0);assert.deepEqual(cloud.store.saves[2].equity,[]);
   assert.equal(heldSymbols(readFirm(s,firmKey('one'),TIME)).length,6,'the local copy is left untouched');
   cloud.store.doc.lastRun=TIME-900000;cloud.emit();await settle();assert.match(status(),/har inte kört på/);
@@ -127,12 +128,12 @@ test('an old SL/TP firm in the cloud is upgraded once through the cloud, never t
   emit({firm:newFirm(TIME),equity:[],lastRun:null,lastError:null});await settle();
   assert.match(r.querySelector('[data-floor-status]').textContent,/Firman handlar · 0 av 6 bord i affär/);
   // A firm written by a newer deploy asks for a reload instead of showing an empty, paused-looking office.
-  emit({firm:{...newFirm(TIME),version:'trading-floor-v3'},equity:[],lastRun:null,lastError:null});await settle();
-  assert.match(r.querySelector('[data-floor-status]').textContent,/Golvet har uppdaterats \(trading-floor-v3\)\. Ladda om sidan\./);
+  emit({firm:{...newFirm(TIME),version:'trading-floor-v4'},equity:[],lastRun:null,lastError:null});await settle();
+  assert.match(r.querySelector('[data-floor-status]').textContent,/Golvet har uppdaterats \(trading-floor-v4\)\. Ladda om sidan\./);
   const failing={...cloud,subscribe:(uid,cb)=>{queueMicrotask(()=>cb({legacy:true}));return ()=>{};},upgrade:async()=>{throw Error('denied');}},f=root();
   const bad=mountFloor(f,{getUser:()=>'one',isActive:()=>true,isVisible:()=>false,grab:fakeBybit(runtime),storage:storage(),locks:locks(),now:()=>runtime.at,cloud:failing});
   await bad.refresh();await settle();await settle();
-  assert.match(f.querySelector('[data-floor-status]').textContent,/Kunde inte byta firman till trendborden: denied/);
+  assert.match(f.querySelector('[data-floor-status]').textContent,/Kunde inte byta firman till de nya borden: denied/);
 });
 
 test('a cloud error is shown instead of silently trading locally',async()=>{

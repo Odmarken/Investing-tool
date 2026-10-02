@@ -47,10 +47,10 @@ for(const race of ['none','reset','newer curve','newer account'])test('cloud equ
   assert.deepEqual(values,race==='none'?[600,605]:race==='reset'?[]:race==='newer curve'?[610]:[600]);
 });
 
-test('the cloud archives an old SL/TP firm once, keeps its pause and runs fresh trend desks',async()=>{
+for(const version of FLOOR.legacy)test('the cloud archives a '+version+' firm once, keeps its pause and runs fresh desks with every trend off',async()=>{
   const start=Date.now()-86400000,{db,docs,put}=fakeDb(),plans=[];
-  put('floor/one',{version:FLOOR.legacy,createdAt:start,paused:true,updatedAt:start,lastRun:start});
-  for(const s of FLOOR.desks)put('floor/one/desks/'+s,{account:{version:'momentum-hourly-sl-tp-v4',symbol:s,cash:90}});
+  put('floor/one',{version,createdAt:start,paused:true,updatedAt:start,lastRun:start});
+  for(const s of FLOOR.desks)put('floor/one/desks/'+s,{account:{version:'older-desk',symbol:s,cash:90}});
   put('floor/one/data/equity',{points:[{t:start,v:600},{t:start+60000,v:540}],updatedAt:start});
   const ctx=context(db,{fetchPlan:async(_,now,momentum,firm)=>{plans.push(firm);return idlePlan();}});
   vm.runInContext(upgradeSource,ctx);vm.runInContext(runSource,ctx);
@@ -62,7 +62,7 @@ test('the cloud archives an old SL/TP firm once, keeps its pause and runs fresh 
   const archives=[...docs.keys()].filter(k=>/^floor\/one\/archive\/[^/]+$/.test(k));
   assert.equal(archives.length,1);
   const archived=docs.get(archives[0]).data;
-  assert.equal(archived.version,FLOOR.legacy);assert.equal(archived.reason,'strategy-change');assert.equal(archived.equity.length,2);
+  assert.equal(archived.version,version);assert.equal(archived.reason,'strategy-change');assert.equal(archived.equity.length,2);
   assert.equal(docs.get(archives[0]+'/desks/BTC').data.account.cash,90);
   assert.equal(plans[0].version,FLOOR.version,'the same run already plans with the new desks');assert.equal(result.floor,true);
   // A second run finds nothing to upgrade.

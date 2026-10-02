@@ -1,4 +1,4 @@
-import {FLOOR,newFirm,validateFirm,setFirmPaused,isLegacyFirm} from './trading-floor.js';
+import {FLOOR,newFirm,validateFirm,setFirmPaused,isLegacyFirm,closeFirmDesk} from './trading-floor.js';
 
 const clean=value=>JSON.parse(JSON.stringify(value));
 
@@ -53,7 +53,23 @@ export function createFloorCloud({getContext,available,now=Date.now}){
         FLOOR.desks.forEach((s,i)=>tx.update(r.desks[i],{'account.enabled':!next.paused,updatedAt:t}));
       });
     },
-    // The first floor ran hourly SL/TP momentum. Archive it once and start trend desks, keeping the pause.
+    // Stäng trade: the snapshot holds fresh mark history for the desk. The transaction re-reads
+    // the firm, so a desk the runner already closed or moved past that history is never overwritten.
+    async closeTrade(uid,symbol,openedAt,snapshot){
+      const {db,fs}=getContext(),r=refs(db,fs,uid),i=FLOOR.desks.indexOf(symbol);
+      if(i<0)throw Error('Okänt bord');
+      let result=null;
+      await fs.runTransaction(db,async tx=>{
+        const snapshots=await Promise.all([tx.get(r.meta),...r.desks.map(ref=>tx.get(ref))]);
+        if(!snapshots[0].exists())throw Error('Firman saknas i molnet');
+        const current=readFirm(snapshots[0].data(),snapshots.slice(1)),t=now();
+        result=closeFirmDesk(current,symbol,snapshot,t,openedAt);
+        tx.set(r.desks[i],{account:clean(result.desks[symbol]),updatedAt:t});
+        tx.update(r.meta,{updatedAt:t});
+      });
+      return result;
+    },
+    // An older floor is archived once and replaced by fresh desks, keeping the pause.
     async upgrade(uid){
       const {db,fs}=getContext(),r=refs(db,fs,uid);
       const archive=fs.doc(fs.collection(db,'floor',uid,'archive'));

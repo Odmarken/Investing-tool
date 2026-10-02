@@ -85,7 +85,7 @@ molnet och skärmen kör exakt samma signalmotor.
 | | |
 |---|---|
 | `kontoCron` | Var femte minut: hämtar staplar, bygger setups, öppnar A- och B-affärer och stänger dem som nått stopp eller mål |
-| `molnCron` | Varje minut: AI-momentumkontot och trading floor-borden per inloggning, samma regler som sidan; uppgraderar en firma från golvets första version en gång, se [TRADING-FLOOR.md](TRADING-FLOOR.md) |
+| `molnCron` | Varje minut: AI-momentumkontot och trading floor-borden per inloggning, samma regler som sidan; uppgraderar en firma från golvets äldre versioner en gång, se [TRADING-FLOOR.md](TRADING-FLOOR.md) |
 | `GET /api/moln/tick?k=FEED_KEY` | Kör ett molnvarv för momentum och trading floor på studs |
 | `GET /api/proxy?url=…` | Marknadsdata och RSS åt sidan, med en lista över tillåtna värdar |
 | `POST /api/ingest` | TradingView-alertets webhook, samma format som workern |

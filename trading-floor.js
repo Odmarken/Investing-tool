@@ -1,12 +1,15 @@
 // Trading floor: six independent trend desks, one Bybit perpetual each. Every
-// desk runs the nine-horizon trend ensemble from floor-trend.js (selected and
-// validated in research/floor-trend-results.md). Nothing here sends orders.
+// desk follows the nine-horizon trend ensemble from floor-trend.js (selected in
+// research/floor-trend-results.md) and buys at Bybit's maximum leverage.
+// Nothing here sends orders.
 import {CONTRACTS} from './bybit-contracts.js';
-import {TREND,newTrendDesk,validateTrendDesk,advanceTrendDesk,settleTrendRisk,trendLiveValue,trendLiquidation,trendCount,trendStops} from './floor-trend.js';
+import {TREND,newTrendDesk,validateTrendDesk,advanceTrendDesk,settleTrendRisk,closeTrendDesk,trendLiveValue,trendLiquidation,trendCount,trendStops} from './floor-trend.js';
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const positive=x=>finite(x)&&x>0;
-export const FLOOR=Object.freeze({version:'trading-floor-v2',legacy:'trading-floor-v1',desks:Object.freeze(Object.keys(CONTRACTS).slice(0,6)),start:TREND.start,
+// v1 ran hourly SL/TP momentum and v2 sized the trend desks by volatility (at most 4×).
+export const FLOOR=Object.freeze({version:'trading-floor-v3',legacy:Object.freeze(['trading-floor-v1','trading-floor-v2']),desks:Object.freeze(Object.keys(CONTRACTS).slice(0,6)),start:TREND.start,
   decisionLimit:TREND.decisionLimit,equityLimit:1440,equityInterval:60000,storagePrefix:'riptide.floor.v1:'});
+const ARCHIVE_TAG=Object.freeze({'trading-floor-v1':'before-trend','trading-floor-v2':'before-max'});
 export const ROOMS=Object.freeze([
   {id:'elias',name:'Elias',role:'VD'},
   {id:'pablo',name:'Pablo',role:'Analys'},
@@ -25,7 +28,7 @@ export function newFirm(now){
 }
 export function validateFirm(firm){
   // A page loaded before a deploy meets the new format in the cloud: say so instead of failing silently.
-  if(typeof firm?.version==='string'&&firm.version.startsWith('trading-floor-')&&firm.version!==FLOOR.version&&firm.version!==FLOOR.legacy)
+  if(typeof firm?.version==='string'&&firm.version.startsWith('trading-floor-')&&firm.version!==FLOOR.version&&!FLOOR.legacy.includes(firm.version))
     throw Error('Golvet har uppdaterats ('+firm.version+'). Ladda om sidan.');
   if(firm?.version!==FLOOR.version||!positive(firm.createdAt)||typeof firm.paused!=='boolean'||!firm.desks||typeof firm.desks!=='object')throw Error('Ogiltig trading floor');
   const keys=Object.keys(firm.desks);
@@ -36,21 +39,23 @@ export function validateFirm(firm){
   }
   return firm;
 }
-// The first floor ran the hourly SL/TP momentum rules. Its firm is archived
-// and replaced by fresh trend desks; positions are not carried over.
-export const isLegacyFirm=value=>value?.version===FLOOR.legacy;
+// An older floor is archived and replaced by fresh desks whose trends start
+// from zero; positions are not carried over.
+export const isLegacyFirm=value=>FLOOR.legacy.includes(value?.version);
 export function readFirm(storage,key,now){
   const raw=storage.getItem(key);if(raw===null)return newFirm(now);
   const firm=JSON.parse(raw);
   return isLegacyFirm(firm)?newFirm(now):validateFirm(firm);
 }
-// Call inside the firm's tab lock. Archives an old firm and its curve, then stores new desks.
+// Call inside the firm's tab lock. Archives an old firm and its curve, then stores new desks with its pause.
 export function upgradeStoredFirm(storage,key,curveKey,now){
-  const raw=storage.getItem(key);if(raw===null||!isLegacyFirm(JSON.parse(raw)))return false;
-  let suffix=now,backup=key+':before-trend:'+suffix;while(storage.getItem(backup)!==null)backup=key+':before-trend:'+(++suffix);
+  const raw=storage.getItem(key);if(raw===null)return false;
+  const old=JSON.parse(raw);if(!isLegacyFirm(old))return false;
+  const tag=ARCHIVE_TAG[old.version];
+  let suffix=now,backup=key+':'+tag+':'+suffix;while(storage.getItem(backup)!==null)backup=key+':'+tag+':'+(++suffix);
   storage.setItem(backup,raw);
-  const chart=storage.getItem(curveKey);if(chart!==null)storage.setItem(curveKey+':before-trend:'+suffix,chart);
-  storage.setItem(key,JSON.stringify(newFirm(now)));storage.setItem(curveKey,'[]');
+  const chart=storage.getItem(curveKey);if(chart!==null)storage.setItem(curveKey+':'+tag+':'+suffix,chart);
+  storage.setItem(key,JSON.stringify(old.paused===true?setFirmPaused(newFirm(now),true):newFirm(now)));storage.setItem(curveKey,'[]');
   return true;
 }
 // Desks whose hour has not been decided yet need fresh candles.
@@ -72,6 +77,14 @@ export function advanceFirmRisk(firm,symbol,snapshot,now){
   if(!desk.position)return firm;
   const next=settleTrendRisk(desk,symbol,snapshot?.market?.[symbol],now);
   return next===desk?firm:validateFirm({...firm,desks:{...firm.desks,[symbol]:next}});
+}
+// The close button on a desk: settles its risk and sells the position the trader clicked.
+export function closeFirmDesk(firm,symbol,snapshot,now,openedAt){
+  validateFirm(firm);
+  const desk=firm.desks[symbol];if(!desk)throw Error('Okänt bord');
+  if(desk.position?.openedAt!==openedAt)throw Error('traden är redan stängd');
+  const next=closeTrendDesk(desk,symbol,snapshot?.market?.[symbol],now,openedAt);
+  return validateFirm({...firm,desks:{...firm.desks,[symbol]:next}});
 }
 export function setFirmPaused(firm,paused){
   validateFirm(firm);
@@ -105,6 +118,8 @@ export function dayStart(now){
 }
 export function deskStatus(desk){
   if(desk.position)return 'trade';
+  // A liquidation takes the whole balance: the desk cannot buy again until a reset.
+  if(desk.cash<=0)return 'liquidated';
   if(!desk.enabled)return 'paused';
   return 'waiting';
 }
@@ -133,13 +148,13 @@ export function sampleEquity(points,t,v,rules=FLOOR){
   const next=[...points.filter(p=>p.t<t),{t,v}];
   return next.length>rules.equityLimit?next.slice(-rules.equityLimit):next;
 }
-// Distance from the mark to the first trend stop (the position shrinks), the
-// last one (the position closes) and liquidation, per held desk.
+// Distance from the mark to liquidation, the first trend stop (the next horizon
+// to switch off) and the last one (the position closes), per held desk.
 export function riskRows(firm,live){
   return FLOOR.desks.map(symbol=>{
     const desk=firm.desks[symbol],p=desk.position;if(!p)return null;
     const mark=live?.desks[symbol]?.quote?.mark??null,liq=trendLiquidation(desk),stops=trendStops(desk.signal),rel=x=>mark===null||!x?null:(mark-x)/mark;
-    return {symbol,count:trendCount(desk.signal),exposure:live?.desks[symbol]?.exposure??null,units:p.units,entry:p.entry,mark,liquidation:liq,
+    return {symbol,count:trendCount(desk.signal),leverage:p.leverage,exposure:live?.desks[symbol]?.exposure??null,units:p.units,entry:p.entry,mark,liquidation:liq,
       firstStop:stops?.first??null,lastStop:stops?.last??null,toFirst:rel(stops?.first),toLast:rel(stops?.last),toLiq:rel(liq)};
   }).filter(Boolean);
 }
@@ -152,19 +167,20 @@ export function floorNarrative(firm,live,stats,now){
   const rows=[],n=TREND.lookbacks.length;
   rows.push(live.total===null?'Firman väntar på färska priser för '+live.waiting.join(', ')+', så totalen håller jag inne med.':
     'Firman står i '+money(live.total)+' av '+money(live.start)+' insatta. Det är '+signed(live.net)+' sedan start, och '+signed(stats.today)+' realiserat i dag.');
-  const inTrade=FLOOR.desks.filter(s=>stats.desks[s].status==='trade');
+  const inTrade=FLOOR.desks.filter(s=>stats.desks[s].status==='trade'),gone=FLOOR.desks.filter(s=>stats.desks[s].status==='liquidated');
   if(inTrade.length){
     rows.push(inTrade.length+' av '+FLOOR.desks.length+' bord sitter i affär: '+inTrade.map(s=>{
-      const d=live.desks[s],st=stats.desks[s],mark=d.quote?.mark;
-      return s+(d.openNet===null?' (väntar på pris)':' '+signed(d.openNet))+', '+st.count+' av '+n+' trender'+(finite(d.exposure)?', '+d.exposure.toFixed(1).replace('.',',')+'× exponering':'')+
-        (mark&&st.stops?', '+pct((mark-st.stops.first)/mark)+' till första stoppet':'');
+      const d=live.desks[s],st=stats.desks[s],mark=d.quote?.mark,liq=trendLiquidation(firm.desks[s]);
+      return s+(d.openNet===null?' (väntar på pris)':' '+signed(d.openNet))+', '+st.count+' av '+n+' trender, '+String(st.position.leverage).replace('.',',')+'× hävstång'+
+        (mark&&liq>0?', '+pct((mark-liq)/mark)+' till likvidation':'');
     }).join('; ')+'.');
   }else rows.push(firm.paused?'Inga bord är i affär och nya köp är pausade. Kontoret fikar.':'Inga bord är i affär just nu. Alla väntar på att någon trend ska bryta uppåt.');
-  const idle=FLOOR.desks.filter(s=>stats.desks[s].status!=='trade');
-  if(inTrade.length&&idle.length)rows.push('Utan position: '+idle.join(', ')+'. De köper först när en stängning slår sitt högsta på minst fem dygn.');
+  if(gone.length)rows.push('Likviderade: '+gone.join(', ')+'. De har inget kapital kvar och står still tills firman återställs.');
+  const idle=FLOOR.desks.filter(s=>stats.desks[s].status==='waiting'||stats.desks[s].status==='paused');
+  if(inTrade.length&&idle.length)rows.push('Utan position: '+idle.join(', ')+'. De köper när en ny trend slår på, alltså när en timstängning slår sitt högsta på minst fem dygn.');
   const ranked=FLOOR.desks.map(s=>[s,live.desks[s].pnl]).filter(([,v])=>v!==null).sort((a,b)=>b[1]-a[1]);
   if(ranked.length>1)rows.push('Bäst hittills är '+ranked[0][0]+' med '+signed(ranked[0][1])+'. Sämst är '+ranked.at(-1)[0]+' med '+signed(ranked.at(-1)[1])+'.');
   rows.push(stats.trades?stats.trades+' avslutade affärer sedan start: '+stats.wins+' vinster, '+stats.losses+' förluster'+(stats.liquidations?', '+stats.liquidations+' likvidationer':'')+'. Avgifter '+money(stats.fees)+', funding '+money(stats.funding)+'.':'Inga avslutade affärer ännu. Historiken börjar när första bordet säljer hela sin position.');
-  rows.push('Pablos bedömning: varje bord följer nio trender från 5 till 360 dygn och köper mer ju fler som pekar uppåt, med storlek efter volatiliteten. De flesta affärer blir små förluster; vinsten kommer från några få långa trender. Regeln var bäst av sju i historiska tester 2021–2026, men det är ett demospel med riktiga priser, inte ett löfte. Klockan är '+clock(now)+'.');
+  rows.push('Pablos bedömning: varje bord följer nio trender från 5 till 360 dygn. När en ny trend slår på köper bordet för hela saldot med Bybits maxhävstång och säljer först när alla nio slagit av. Med 50–150× räcker en rörelse på under en procent mot positionen för likvidation, och köp plus försäljning kostar 10–30 % av bordets kapital i avgifter och slippage. I ett test på Bybits egen historik 2021–2026 likviderades 98 % av borden inom 30 dagar, de flesta inom första timmen efter köpet. Det är ett demospel med riktiga priser, inte ett löfte. Klockan är '+clock(now)+'.');
   return rows.join('\n\n');
 }

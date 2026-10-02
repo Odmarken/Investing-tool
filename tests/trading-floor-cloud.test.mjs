@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createFloorCloud} from '../trading-floor-cloud.js';
-import {FLOOR,newFirm,setFirmPaused,validateFirm} from '../trading-floor.js';
+import {FLOOR,newFirm,setFirmPaused,validateFirm,advanceFirm,heldSymbols} from '../trading-floor.js';
+import {TIME,HOUR,unitBars,extendUnit,trendSnapshot,riskSnapshot} from './floor-fixtures.mjs';
 
-const TIME=Date.parse('2026-09-22T12:00:00Z');
 // A transactional document store with conflict retries, atomic commits and
 // individually delivered snapshot callbacks, matching the adapter's SDK surface.
-function fixture(){
+function fixture(clock=()=>TIME+60000){
   const data=new Map(),listeners=new Map();let sync,serial=0,version=0,interleave=null,fail=false;
   const snapshot=path=>({exists:()=>data.has(path),data:()=>structuredClone(data.get(path)),id:path.split('/').at(-1)});
   const fs={
@@ -38,7 +38,7 @@ function fixture(){
       throw Error('conflict');
     }
   };
-  const cloud=createFloorCloud({getContext:()=>({db:'',fs}),available:()=>true,now:()=>TIME+60000});
+  const cloud=createFloorCloud({getContext:()=>({db:'',fs}),available:()=>true,now:clock});
   return {cloud,data,listeners,conflict:fn=>{interleave=fn;},fail:()=>{fail=true;},
     emit(path){const cb=listeners.get(path);if(path.endsWith('/desks'))cb({forEach:fn=>FLOOR.desks.forEach(s=>fn(snapshot(path+'/'+s)))});else cb(snapshot(path));},
     flush:()=>sync?.(),firm:()=>validateFirm({...data.get('floor/one'),desks:Object.fromEntries(FLOOR.desks.map(s=>[s,data.get('floor/one/desks/'+s).account]))})};
@@ -86,20 +86,42 @@ test('listeners do not expose half of a multi-document pause and stop on unsubsc
   assert.equal(states[1].firm.paused,true);stop();assert.equal(f.listeners.size,0);
 });
 
-test('upgrade archives an old SL/TP firm once, keeps its pause and writes fresh trend desks',async()=>{
+for(const [version,account] of [['trading-floor-v1',{version:'momentum-hourly-sl-tp-v4',cash:88}],['trading-floor-v2',{version:'floor-trend-v1',cash:88}]])
+test('upgrade archives a '+version+' firm once, keeps its pause and writes fresh desks with every trend off',async()=>{
   const f=fixture();
-  f.data.set('floor/one',{version:FLOOR.legacy,createdAt:TIME-1e6,paused:true,updatedAt:TIME-1e6,lastRun:TIME-1000,lastError:null});
-  for(const s of FLOOR.desks)f.data.set('floor/one/desks/'+s,{account:{version:'momentum-hourly-sl-tp-v4',symbol:s,cash:88}});
+  f.data.set('floor/one',{version,createdAt:TIME-1e6,paused:true,updatedAt:TIME-1e6,lastRun:TIME-1000,lastError:null});
+  for(const s of FLOOR.desks)f.data.set('floor/one/desks/'+s,{account:{...account,symbol:s}});
   f.data.set('floor/one/data/equity',{points:[{t:TIME-1e6,v:600}]});
   const states=[],stop=f.cloud.subscribe('one',s=>states.push(s));
   for(const path of f.listeners.keys())f.emit(path);f.flush();
   assert.deepEqual(states,[{legacy:true}]);
   await f.cloud.upgrade('one');
   const firm=f.firm();
-  assert.equal(firm.version,FLOOR.version);assert.equal(firm.paused,true);assert.ok(FLOOR.desks.every(s=>firm.desks[s].cash===100&&!firm.desks[s].enabled));
-  assert.equal(f.data.get('floor/one/archive/auto1').reason,'strategy-change');assert.equal(f.data.get('floor/one/archive/auto1').equity.length,1);
+  assert.equal(firm.version,FLOOR.version);assert.equal(firm.paused,true);
+  assert.ok(FLOOR.desks.every(s=>firm.desks[s].cash===100&&!firm.desks[s].enabled&&firm.desks[s].signal.through===null));
+  assert.equal(f.data.get('floor/one/archive/auto1').reason,'strategy-change');assert.equal(f.data.get('floor/one/archive/auto1').version,version);
+  assert.equal(f.data.get('floor/one/archive/auto1').equity.length,1);
   assert.equal(f.data.get('floor/one/archive/auto1/desks/BTC').account.cash,88);
   assert.deepEqual(f.data.get('floor/one/data/equity').points,[]);assert.equal(f.data.get('floor/one').lastRun,null);
   const after=structuredClone(f.data);await f.cloud.upgrade('one');assert.deepEqual(f.data,after,'a second upgrade does nothing');
   stop();
+});
+
+test('Stäng trade closes the clicked desk in a transaction and never a trade the runner already closed',async()=>{
+  const buy=TIME+HOUR,at=buy+20*60000,unit=unitBars(TIME);
+  const held=advanceFirm(advanceFirm(newFirm(TIME),trendSnapshot(TIME,unit),TIME),trendSnapshot(buy,extendUnit(unit,1.001)),buy);
+  const f=fixture(()=>at);await f.cloud.initialize('one',{firm:held,equity:[]});
+  const snapshot=riskSnapshot(held,at),btc=held.desks.BTC.position.openedAt;
+  const result=await f.cloud.closeTrade('one','BTC',btc,snapshot);
+  assert.equal(result.desks.BTC.position,null);assert.equal(f.firm().desks.BTC.trades.at(-1).reason,'manuell');
+  assert.deepEqual(heldSymbols(f.firm()),FLOOR.desks.filter(s=>s!=='BTC'),'only that desk is written');
+  assert.equal(f.data.get('floor/one').updatedAt,at,'a newer revision keeps an older equity sample out');
+  const before=structuredClone(f.data);
+  await assert.rejects(f.cloud.closeTrade('one','BTC',btc,snapshot),/redan stängd/);
+  assert.deepEqual(f.data,before,'a second click writes nothing');
+  await assert.rejects(f.cloud.closeTrade('one','PEPE',btc,snapshot),/Okänt bord/);
+  // A runner write during the transaction is re-read before the close is applied.
+  f.conflict(()=>{f.data.get('floor/one/desks/ETH').account.waitReason='Runner';});
+  await f.cloud.closeTrade('one','ETH',held.desks.ETH.position.openedAt,snapshot);
+  assert.equal(f.firm().desks.ETH.position,null);assert.equal(f.firm().desks.ETH.waitReason,'Runner');
 });

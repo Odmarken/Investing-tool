@@ -374,8 +374,9 @@ export const kontoCron = onSchedule(
 /* ---------- momentumkontot och trading floor: molnkörning ----------
    Dokumenten ligger per inloggning: momentum/{uid} och floor/{uid} med
    borden under desks/ och kapitalkurvan under data/equity. Sidan lyssnar,
-   pausar och återställer; handeln sker här varje minut med samma frysta
-   regler som sidan kör lokalt utan moln. Inga order skickas till Bybit. */
+   pausar, återställer och stänger en trade på begäran; handeln sker här varje
+   minut med samma regler som sidan kör lokalt utan moln. Inga order skickas
+   till Bybit. */
 async function bybit(url, { json = false, timeout = 8000 } = {}){
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), timeout);
   try{
@@ -393,10 +394,11 @@ function lasFloor(meta, deskSnaps){
   for(const s of deskSnaps) if(s.exists) desks[s.id] = s.data().account;
   return validateFirm({ version: meta.version, createdAt: meta.createdAt, paused: !!meta.paused, desks });
 }
-/* Första trading floor-versionen körde timmomentum med SL och TP. En sådan
-   firma arkiveras en gång, med kurva och bord, och ersätts av nya trendbord
-   på 100 $. Pausläget följer med. Transaktionen gör inget om någon annan
-   (sidan eller ett parallellt varv) redan har uppgraderat. */
+/* Äldre trading floor-versioner (timmomentum med SL och TP, sedan trendbord
+   med volatilitetsstorlek) arkiveras en gång, med kurva och bord, och ersätts
+   av nya bord på 100 $ med avslagna trender och Bybits maxhävstång. Pausläget
+   följer med. Transaktionen gör inget om någon annan (sidan eller ett
+   parallellt varv) redan har uppgraderat. */
 async function uppgraderaFloor(uid){
   const metaRef = db.doc('floor/' + uid), eqRef = db.doc('floor/' + uid + '/data/equity');
   const deskRefs = FLOOR.desks.map(s => db.doc('floor/' + uid + '/desks/' + s));

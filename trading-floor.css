@@ -83,6 +83,12 @@ body.floor>.wrap,body.floor>footer,body.floor>.banner,body.floor .tape,body.floo
 .floor-modal .ph{border-color:#c6c0b0;background:#eae4d7}
 .floor-modal .ph .accent{background:#86704d}
 .floor-panel .btn,.floor-modal .btn{color:#343d3b;border-color:#bbb4a4;background:#eee9de}
+.floor-panel-actions{display:flex;justify-content:flex-end;margin:10px 0 0}
+.floor-panel .btn.floor-close{color:#fff;border-color:#b1493b;background:#b1493b;font-weight:700;padding:7px 14px;min-height:34px}
+.floor-panel .btn.floor-close:hover:not(:disabled){background:#963b2f;border-color:#963b2f}
+.floor-panel .btn.floor-close:disabled{opacity:.6;cursor:wait}
+.floor-close-note{margin:0 0 10px;font-weight:700;color:#28724e}
+.floor-panel-state.liquidated{color:#b1493b}
 .floor-modal-body{overflow-x:auto}
 .floor-panel .pos,.floor-modal .pos{color:#28724e}.floor-panel .neg,.floor-modal .neg{color:#b1493b}
 @media(prefers-reduced-motion:reduce){.floor-pablo .mark{animation:none}}

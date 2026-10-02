@@ -29,7 +29,7 @@ service cloud.firestore {
     }
     // Momentumkontot och trading floor ligger per inloggning. Molnfunktionen
     // handlar dem via admin-SDK:t; sidan läser, laddar upp sitt lokala konto
-    // första gången, pausar och återställer.
+    // första gången, pausar, återställer och stänger en trade på golvet.
     match /momentum/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
       match /{dok=**} { allow read, write: if request.auth != null && request.auth.uid == uid; }

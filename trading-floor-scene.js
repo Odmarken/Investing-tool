@@ -21,7 +21,7 @@ export function deskCelebration(desk,now){
 }
 const currentTradeReturn=(desk,now)=>desk?.status==='trade'&&Number.isFinite(desk.openReturn)&&Number.isFinite(desk.celebrationUntil)&&now<=desk.celebrationUntil;
 export function deskTradeLabel(desk,now){
-  if(desk?.status!=='trade')return desk?.status==='paused'?'pausad':desk?.status==='loading'?'laddar…':'väntar trend';
+  if(desk?.status!=='trade')return desk?.status==='paused'?'pausad':desk?.status==='loading'?'laddar…':desk?.status==='liquidated'?'likviderad':'väntar trend';
   if(!currentTradeReturn(desk,now))return 'väntar på pris';
   // Truncate to avoid displaying +20% while the actual return is still below it.
   const pct=Math.trunc(desk.openReturn*10000)/100;
@@ -529,7 +529,7 @@ export function createScene(canvas){
     }
     for(const r of ROOM_GEOMETRY)plate(2.2,r.y0+2,150,[{text:(r.name+' · '+r.role).toUpperCase(),font:'800 8px '+SANS,color:C.text}],C.pink,r.role.length>8?118:96);
     for(const d of DESK_GEOMETRY){
-      const v=view.desks[d.symbol],border=v.status==='trade'?(!currentTradeReturn(v,now)?C.cyan:v.openReturn>=0?C.pos:C.neg):v.status==='paused'?C.dim:'#bcc2b2';
+      const v=view.desks[d.symbol],border=v.status==='trade'?(!currentTradeReturn(v,now)?C.cyan:v.openReturn>=0?C.pos:C.neg):v.status==='paused'?C.dim:v.status==='liquidated'?C.neg:'#bcc2b2';
       const line=deskTradeLabel(v,now);
       plate(d.x0+0.75,d.y0+2,84,[{text:d.symbol,font:'800 11px '+SANS,color:C.text},{text:line,font:'700 8px '+MONO,color:border}],border,88);
     }
