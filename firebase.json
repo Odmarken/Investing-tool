@@ -5,7 +5,7 @@
       "firebase.json", ".firebaserc", "firestore.rules",
       "functions/**", "node_modules/**", ".git/**",
       "*.md", "*.toml", "*.pine", "worker.js", "konto.js", "dev-server.js",
-      "package.json", "package-lock.json", "**/.*", "trana.mjs",
+      "package.json", "package-lock.json", "**/.*", "**/.*/**", "trana.mjs",
       "tests/**", "research/**", "kopiera-motor.js", "rulla-ut.js"
     ],
     "rewrites": [
