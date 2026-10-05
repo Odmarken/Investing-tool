@@ -692,6 +692,7 @@ footer b{color:var(--muted)}
 </style>
 <link rel="stylesheet" href="./account-summary.css">
 <link rel="stylesheet" href="./trading-floor.css">
+<link rel="stylesheet" href="./forecast.css">
 <link rel="stylesheet" href="./landing.css">
 </head>
 <body class="landing">
@@ -741,6 +742,7 @@ footer b{color:var(--muted)}
     <button class="btn primary" id="btnRefresh">↻ Uppdatera</button>
     <a class="btn" id="btnSummary" href="#summary" aria-label="Öppna kryptokontots summary">◉ Summary</a>
     <a class="btn" id="btnFloor" href="#floor" aria-label="Öppna trading floor">▦ Trading floor</a>
+    <a class="btn" id="btnForecast" href="#forecast" aria-label="Öppna AI Forecast">◭ AI Forecast</a>
     <button class="btn krypto" id="btnKrypto" title="Växla till krypto: samma motor och samma familjer för BTC, ETH, SOL, XRP, DOGE, SHIB och PEPE — dygnet runt, utan konto. Klicka igen för Nasdaq.">◈ Crypto</button>
     <button class="btn" id="btnAuth" title="Logga in för att se demokontot">Logga in</button>
     <button class="btn" id="btnSettings">⚙ Inställningar</button>
@@ -749,6 +751,7 @@ footer b{color:var(--muted)}
 </header>
 <main id="accountSummary" hidden aria-labelledby="summaryTitle"></main>
 <main id="tradingFloor" hidden aria-labelledby="floorTitle"></main>
+<main id="aiForecast" hidden aria-labelledby="forecastTitle"></main>
 
 <div class="banner warn" id="bnDemo">
   <span>⚠</span>
@@ -859,6 +862,7 @@ footer b{color:var(--muted)}
           <div class="chart-tabs account-tabs" role="group" aria-label="Konton och regler">
             <button type="button" class="ct on" data-crypto-view="standard" aria-pressed="true" aria-controls="cryptoStandardView">Vanliga kontot</button>
             <button type="button" class="ct" data-crypto-view="momentum" aria-pressed="false" aria-controls="cryptoMomentumView">AI-momentum</button>
+            <button type="button" class="ct" data-crypto-view="forecast" aria-pressed="false" aria-controls="cryptoForecastView">AI Forecast</button>
             <button type="button" class="ct" data-crypto-view="rules" aria-pressed="false" aria-controls="cryptoRulesView">Regler &amp; inställningar</button>
           </div>
             <div id="cryptoStandardView" class="account-view">
@@ -878,6 +882,7 @@ footer b{color:var(--muted)}
           <div id="cryptoMomentumView" class="account-view crypto-ai" hidden>
             <section id="cryptoAI" aria-label="AI-momentumkonto"></section>
           </div>
+          <div id="cryptoForecastView" class="account-view crypto-ai" hidden><section id="forecastSummary"></section></div>
           <div id="cryptoRulesView" class="account-view crypto-ai" hidden>
             <p>Flikarna och den hopfällbara panelen styr bara vad du ser. Kontona fortsätter följa sina respektive handelsinställningar.</p>
             <h3>Vanliga kryptokontot</h3>
@@ -1069,6 +1074,7 @@ import { CRYPTO_AI_MODEL } from './crypto-ai-model.js';
 import { mountCryptoAI } from './crypto-ai-ui.js';
 import { mountMomentum } from './crypto-momentum-ui.js';
 import { mountFloor } from './trading-floor-ui.js';
+import { mountForecast } from './forecast-ui.js';
 import { createFloorCloud } from './trading-floor-cloud.js';
 import { CONTRACTS, createContractCache, maxLeverageFor, isolatedLevel } from './bybit-contracts.js';
 const bybitContracts = createContractCache((url,options) => grab(url,options));
@@ -1076,6 +1082,7 @@ let krLimitsBusy = false, krLimitsAt = -Infinity;
 let cryptoAI;
 let momentumDemo;
 let floorView = null;
+let forecastView = null;
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
@@ -2353,6 +2360,8 @@ function renderSignals(){
     void momentumDemo.refresh();
     floorMount();
     void floorView.refresh();
+    forecastMount();
+    forecastView?.renderSummary($('#forecastSummary'));
     cryptoAI.update({userId:AUTH.anvandare.uid, signals:STATE.signals, contexts:STATE.ctx, now:reviewTime, snapshots});
   }
   if(crypto){
@@ -3282,6 +3291,7 @@ function authRitaOm(){
   if(inne) $('#authModal').classList.remove('show');
   summaryRoute();
   floorRoute();
+  forecastRoute();
   const knapp = $('#btnAuth');
   if(knapp){
     knapp.textContent = inne ? (AUTH.anvandare.email || 'Inloggad') : 'Logga in';
@@ -3484,7 +3494,7 @@ const KRYPTO = { start:100, kapital:100, havstang:20, mmr:0.005, avgift:0.00055,
 let krLocalError = false, summaryView = null;
 
 function setCryptoAccountView(value){
-  const view=['standard','momentum','rules'].includes(value)?value:'standard';
+  const view=['standard','momentum','forecast','rules'].includes(value)?value:'standard';
   for(const button of $$('[data-crypto-view]')){
     const selected=button.dataset.cryptoView===view;
     button.classList.toggle('on',selected);button.setAttribute('aria-pressed',String(selected));
@@ -3561,6 +3571,29 @@ function floorRoute(){
     floorMount();
     floorView.show(); $('#floorTitle').focus();
   }else floorView?.hide();
+}
+/* AI Forecast at #forecast: chart, signals, forecasts and its own demo account.
+   The view's runner trades that account in crypto mode even while the view is
+   closed; the chart fetches and draws only while #forecast is shown. */
+function forecastMount(){
+  if(forecastView || !$('#aiForecast')) return;
+  forecastView = mountForecast($('#aiForecast'), {
+    getUser: () => AUTH.anvandare?.uid || null,
+    isActive: () => STATE.lage === 'krypto' && !!AUTH.anvandare,
+    isVisible: () => location.hash === '#forecast' && !!AUTH.anvandare,
+    grab: (url,options) => grab(url,options),
+    contracts: bybitContracts
+  });
+}
+function forecastRoute(){
+  const open = location.hash === '#forecast' && !!AUTH.anvandare;
+  document.body.classList.toggle('forecast', open);
+  $('#aiForecast').hidden = !open;
+  if(open){
+    if(STATE.lage !== 'krypto') tillLage('krypto');
+    forecastMount();
+    void forecastView.show(); $('#forecastTitle').focus();
+  }else forecastView?.hide();
 }
 
 function krLadda(){
@@ -3863,7 +3896,7 @@ function spelaLjud(){
 }
 
 function visaAktivering(s){
-  if(location.hash === '#floor') return;
+  if(location.hash === '#floor' || location.hash === '#forecast') return;
   let box = $('#aktivRuta');
   if(!box){ box = document.createElement('div'); box.id = 'aktivRuta'; document.body.appendChild(box); }
   const d = INSTR[s.inst] ? INSTR[s.inst].dec : 2, st = kryptoStorlek(s);
@@ -3904,7 +3937,7 @@ function bevakaAktiveringar(){
   for(const x of aktiva){
     if(AKTIVA_SEDDA.has(x.id)) continue;
     AKTIVA_SEDDA.add(x.id);
-    if(location.hash === '#floor' || STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // inga signalrutor eller ljud på trading floor
+    if(location.hash === '#floor' || location.hash === '#forecast' || STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // inga signalrutor eller ljud på trading floor eller AI Forecast
     visaAktivering(x);
     if(!larmat){ spelaLjud(); larmat = true; }
   }
@@ -4720,6 +4753,7 @@ function tick(){
   if(kalTick % 5 === 0 && momentumDemo) void momentumDemo.refreshLive();
   if(kalTick % 30 === 15 && floorView) void floorView.refresh();   // borden, förskjutna så anropen inte klumpar ihop sig
   if(kalTick % 5 === 2 && floorView) void floorView.refreshLive();
+  if(kalTick % 5 === 4 && forecastView) void forecastView.refreshLive();   // AI Forecast: the account's runner, and the chart while the view is open
   $('#clkSe').textContent = timeIn('Europe/Stockholm',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   $('#clkNy').textContent = timeIn('America/New_York',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const s = sessionState();
@@ -4738,6 +4772,7 @@ function wire(){
   };
   window.addEventListener('hashchange', summaryRoute);
   window.addEventListener('hashchange', floorRoute);
+  window.addEventListener('hashchange', forecastRoute);
   $('#cryptoSelective').onchange = e => {
     CFG.cryptoSelective = e.target.value === 'selective';
     saveCfg(); renderSignals(); renderKrypto();
@@ -4879,6 +4914,7 @@ useLocalProxy();
 wire();
 summaryRoute();
 floorRoute();
+forecastRoute();
 liveLadda();
 demoLadda();
 renderDemo();

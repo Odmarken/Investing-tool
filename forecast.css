@@ -1,0 +1,368 @@
+/* AI Forecast: a full-height dark view in crypto mode (#forecast). Chart on the
+   left, signal, forecast, demo account and evaluation in a column on the right.
+   The theme tokens are scoped to #aiForecast; the rest of the page keeps its own. */
+#btnForecast{text-decoration:none;display:none;align-items:center}
+body.krypto #btnForecast{display:inline-flex}
+/* With this button the crypto top bar is wider than a laptop screen: the brand's long subtitle
+   gives way (ellipsis) instead of the rightmost buttons being pushed off-screen. Phones wrap the row. */
+@media (min-width:681px){
+  body.krypto .tb-row .brand{flex:0 1 auto;min-width:0}
+  body.krypto .tb-row .brand>div:last-child{min-width:0}
+  body.krypto .tb-row .brand :is(h1,.sub){overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+}
+/* Below 1280 px the subtitle alone cannot make room and the title itself would be cut: the row wraps
+   instead, so neither the title nor the buttons are clipped. */
+@media (min-width:681px) and (max-width:1279px){body.krypto .tb-row{flex-wrap:wrap}}
+/* The full-height views hide the Crypto button, so before this button their top bar fitted on one line. From 1440 px
+   the brand's subtitle (ellipsis) makes room for it again instead of the buttons and the pill breaking into two lines. */
+@media (min-width:1440px){body:is(.summary,.floor,.forecast) .tb-row>:is(.btn,.sesspill){white-space:nowrap}}
+body.forecast #btnForecast{border-color:#3DDC84;color:#d7fbe6;box-shadow:0 0 0 1px rgba(61,220,132,.3),0 0 16px rgba(61,220,132,.18)}
+body.forecast{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .tape,body.forecast #btnKrypto,body.forecast #aktivRuta{display:none!important}
+#aiForecast[hidden]{display:none}
+#aiForecast{
+  --fc-bg:#0b0f14;--fc-panel:#10161d;--fc-panel-2:#151c25;--fc-line:#1e2833;--fc-line-2:#2a3644;--fc-text:#e6edf3;
+  --fc-text-2:#a9b6c4;--fc-muted:#6f8094;--fc-accent:#3DDC84;--fc-up:#14a7a0;--fc-down:#e2483c;--fc-warn:#f0a020;--fc-gray:#9aa4b2;
+  /* Lighter steps of up, down and warn for small text on the panels. */
+  --fc-up-text:#3cc9c1;--fc-down-text:#f47d72;--fc-warn-text:#f6bd55;
+  flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;color-scheme:dark;
+  background:var(--fc-bg);color:var(--fc-text);font-family:var(--sans,system-ui,sans-serif);font-size:13px;line-height:1.45;
+  /* The containing block of the view's absolutely placed screen-reader texts: without one they keep their static place
+     deep in the side column and stretch the page behind the full-height view, which scrollIntoView then scrolls. */
+  position:relative}
+#aiForecast *{box-sizing:border-box}
+#aiForecast .pos{color:var(--fc-up-text)}
+#aiForecast .neg{color:var(--fc-down-text)}
+#aiForecast :is(button,select,input,a):focus-visible{outline:2px solid var(--fc-accent);outline-offset:2px}
+/* The heading takes focus only so screen readers start at the view; it is not a control. */
+#forecastTitle:focus{outline:none}
+
+/* Header */
+.fc-shell{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.fc-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px 18px;padding:12px 18px 8px}
+.fc-titles{min-width:0}
+.fc-eyebrow{font-size:10px;font-weight:700;letter-spacing:1.8px;color:var(--fc-accent)}
+#forecastTitle{margin:2px 0 0;font-size:20px;line-height:1.2;font-weight:750;letter-spacing:-.3px;color:var(--fc-text);border-radius:4px}
+.fc-quote{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;min-width:0}
+.fc-pair{font-size:12px;font-weight:600;color:var(--fc-text-2)}
+.fc-last{padding:1px 7px;border-radius:6px;font:650 22px/1.25 var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text);
+  transition:background-color .6s ease,color .6s ease}
+.fc-last.up{background:rgba(20,167,160,.26);color:#e4fffd;transition:none}
+.fc-last.down{background:rgba(226,72,60,.26);color:#fff0ee;transition:none}
+.fc-pill{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:999px;border:1px solid var(--fc-line-2);background:var(--fc-panel);
+  font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--fc-text-2);white-space:nowrap}
+.fc-pill i{width:8px;height:8px;border-radius:50%;background:var(--fc-muted)}
+.fc-pill[data-state=live]{color:#a6f3c8;border-color:rgba(61,220,132,.45)}
+.fc-pill[data-state=live] i{background:var(--fc-accent);box-shadow:0 0 8px rgba(61,220,132,.8)}
+.fc-pill[data-state=warn]{color:var(--fc-warn-text);border-color:rgba(240,160,32,.55)}
+.fc-pill[data-state=warn] i{background:var(--fc-warn)}
+.fc-pill[data-state=bad]{color:#ffa79f;border-color:rgba(226,72,60,.65)}
+.fc-pill[data-state=bad] i{background:var(--fc-down)}
+.fc-back{margin-left:auto}
+.fc-banner{margin:0 18px 8px;padding:8px 12px;border-radius:8px;border:1px solid rgba(240,160,32,.55);background:rgba(240,160,32,.1);
+  color:var(--fc-warn-text);font-size:12.5px;font-weight:650}
+.fc-banner::before{content:'⚠ '}
+.fc-banner[hidden]{display:none}
+
+/* Buttons and fields */
+#aiForecast .fc-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--fc-line-2);background:var(--fc-panel-2);color:var(--fc-text);font:600 12px/1.2 var(--sans,system-ui,sans-serif);
+  letter-spacing:.2px;text-decoration:none;white-space:nowrap;cursor:pointer;transition:border-color .15s,background-color .15s,color .15s}
+#aiForecast .fc-btn:hover:not(:disabled):not([aria-disabled=true]){border-color:var(--fc-accent);color:#d7fbe6}
+/* aria-disabled: busy while its action runs, but still focusable so keyboard focus stays put. */
+#aiForecast .fc-btn:is(:disabled,[aria-disabled=true]){opacity:.5;cursor:default}
+#aiForecast .fc-primary{background:#123a27;border-color:#2a8f5c;color:#d7fbe6}
+#aiForecast .fc-danger{border-color:rgba(226,72,60,.55);color:#ffc2bc}
+#aiForecast .fc-close{min-height:30px;padding:4px 14px;border-color:rgba(226,72,60,.65);background:rgba(226,72,60,.14);color:#ffe0dc}
+#aiForecast select,#aiForecast input[type=number]{min-height:32px;max-width:100%;padding:5px 8px;border-radius:8px;border:1px solid var(--fc-line-2);
+  background:var(--fc-panel-2);color:var(--fc-text);font:500 12px var(--sans,system-ui,sans-serif)}
+#aiForecast :is(select,input):is(:disabled,[aria-disabled=true]){opacity:.55}
+
+/* Toolbar: what is shown on the left, how it is drawn (toggles, zoom) on the right. */
+.fc-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;padding:4px 18px 10px;border-bottom:1px solid var(--fc-line)}
+.fc-toggles{margin-left:auto}
+.fc-field,.fc-group{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.fc-field>span,.fc-cap{font-size:11px;font-weight:600;color:var(--fc-text-2);white-space:nowrap}
+.fc-seg{display:inline-flex;border:1px solid var(--fc-line-2);border-radius:8px;overflow:hidden;background:var(--fc-panel)}
+.fc-seg button{min-height:30px;min-width:34px;padding:5px 10px;border:0;border-right:1px solid var(--fc-line-2);background:transparent;
+  color:var(--fc-text-2);font:600 12px var(--sans,system-ui,sans-serif);cursor:pointer}
+.fc-seg button:last-child{border-right:0}
+.fc-seg button:hover{background:var(--fc-panel-2);color:var(--fc-text)}
+.fc-seg button[aria-pressed=true]{background:rgba(61,220,132,.16);color:#d7fbe6;box-shadow:inset 0 -2px 0 var(--fc-accent)}
+/* Inside the segment, which clips (overflow:hidden): the ring sits within the button. The id keeps this above the
+   view-wide ring rule, whose outside offset would leave only two vertical bars between the neighbours. */
+#aiForecast .fc-seg button:focus-visible{outline-offset:-2px}
+.fc-zoom button{font-size:15px;line-height:1}
+/* Comparison bar, right above the chart it changes: the version select and quick picks of earlier versions. */
+.fc-comparebar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;min-width:0}
+.fc-compare select{max-width:min(340px,100%)}
+.fc-chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.fc-chips[hidden]{display:none}
+.fc-chip{min-height:28px;padding:3px 10px;border-radius:999px;border:1px solid var(--fc-line-2);background:var(--fc-panel);color:var(--fc-text-2);
+  font:600 11px/1.2 var(--sans,system-ui,sans-serif);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:pointer;transition:border-color .15s,color .15s}
+.fc-chip:hover{border-color:var(--fc-gray);color:var(--fc-text)}
+.fc-chip[aria-pressed=true]{border-color:var(--fc-gray);background:var(--fc-panel-2);color:var(--fc-text);box-shadow:inset 0 0 0 1px rgba(154,164,178,.35)}
+
+/* Chart and side column */
+.fc-grid{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 360px}
+.fc-chart{min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px 12px 10px 18px}
+.fc-canvas-wrap{position:relative;flex:1 1 auto;min-height:420px;border:1px solid var(--fc-line);border-radius:10px;overflow:hidden;background:var(--fc-bg);
+  transition:border-color .2s,box-shadow .2s}
+/* Data that is not live: the frame takes the warning colour of the badge drawn in the chart. */
+.fc-canvas-wrap.fc-stale{border-color:rgba(240,160,32,.7);box-shadow:0 0 0 1px rgba(240,160,32,.22)}
+.fc-canvas-wrap canvas{position:absolute;inset:0;display:block;width:100%;height:100%;cursor:crosshair}
+/* An inset shadow would sit under the chart's own pixels; the outline is drawn inside the wrap, which clips. */
+#aiForecast .fc-canvas-wrap canvas:focus-visible{outline:2px solid var(--fc-accent);outline-offset:-2px}
+/* A stored signal's explanation lines are long: the tooltip wraps them (white-space:pre-wrap, set by the chart) at a
+   width that also fits a phone's chart. */
+.fc-tooltip{z-index:2;max-width:min(360px,calc(100% - 16px));padding:7px 9px;border-radius:8px;border:1px solid var(--fc-line-2);background:rgba(21,28,37,.96);color:var(--fc-text);
+  font:500 11.5px/1.5 var(--mono,monospace);font-variant-numeric:tabular-nums;box-shadow:0 10px 26px rgba(0,0,0,.45)}
+.fc-tooltip[hidden]{display:none}
+.fc-chart-note{position:absolute;inset:14px 14px auto;margin:0;color:var(--fc-warn-text);font-weight:600}
+.fc-chart-note[hidden]{display:none}
+.fc-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0;padding:0 2px;list-style:none;font-size:11px;color:var(--fc-text-2)}
+.fc-legend li{display:inline-flex;align-items:center;gap:6px}
+.fc-sw{display:inline-block;flex:none;width:8px;height:12px;border-radius:2px}
+.fc-sw.body{background:var(--c)}
+.fc-sw.outline{border:1px solid var(--c)}
+.fc-sw.band{width:16px;height:10px;background:rgba(156,166,180,.32);box-shadow:inset 0 0 0 3px rgba(156,166,180,.14)}
+.fc-sw.dash,.fc-sw.line,.fc-sw.dot{width:16px;height:0;border-radius:0;border-top:2px dashed var(--c)}
+.fc-sw.line{border-top-style:solid}
+.fc-sw.dot{border-top-style:dotted}
+.fc-tri{color:var(--c);font-size:10px}
+.fc-side{min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:12px;padding:12px 18px 24px 6px}
+
+/* Cards */
+/* Positioned, so a card's screen-reader texts stay inside the scrolling side column. */
+.fc-card{position:relative;min-width:0;padding:13px 14px;border:1px solid var(--fc-line);border-radius:12px;background:var(--fc-panel)}
+.fc-card h2{margin:0 0 10px;font-size:11px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--fc-text-2)}
+.fc-card h3{margin:14px 0 6px;font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--fc-text-2)}
+.fc-h3-note{font-weight:500;letter-spacing:0}
+.fc-card p{margin:8px 0 0;overflow-wrap:anywhere}
+.fc-muted{font-size:11.5px;color:var(--fc-text-2)}
+.fc-warn{font-size:12px;font-weight:600;color:var(--fc-warn-text)}
+.fc-warn::before{content:'⚠ '}
+.fc-empty{color:var(--fc-text-2)}
+.fc-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+.fc-num{font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}
+.fc-dir.long{color:var(--fc-up-text)}
+.fc-dir.short{color:var(--fc-down-text)}
+
+/* Signal card */
+.fc-signal-top{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.fc-badge{display:inline-flex;align-items:center;padding:7px 13px;border-radius:8px;border:1px solid var(--fc-line-2);background:var(--fc-panel-2);
+  color:var(--fc-text-2);font:800 15px/1 var(--sans,system-ui,sans-serif);letter-spacing:.8px}
+.fc-badge.long{border-color:rgba(20,167,160,.75);background:rgba(20,167,160,.2);color:#d2fffc}
+.fc-badge.short{border-color:rgba(226,72,60,.75);background:rgba(226,72,60,.2);color:#ffe0dc}
+.fc-regime{padding:3px 9px;border-radius:999px;border:1px solid var(--fc-line-2);font-size:11px;font-weight:700;color:var(--fc-text-2)}
+.fc-regime[data-regime=trend-up]{border-color:rgba(20,167,160,.55);color:var(--fc-up-text)}
+.fc-regime[data-regime=trend-down]{border-color:rgba(226,72,60,.55);color:var(--fc-down-text)}
+.fc-checks{list-style:none;margin:10px 0 0;padding:0}
+.fc-checks li{display:grid;grid-template-columns:16px minmax(0,1fr) auto;align-items:baseline;gap:6px;padding:4px 0;border-bottom:1px solid var(--fc-line);font-size:12px}
+.fc-checks li:last-child{border-bottom:0}
+.fc-mark{font-weight:800;text-align:center}
+.fc-checks li.ok .fc-mark{color:var(--fc-up-text)}
+.fc-checks li.no{color:var(--fc-text-2)}
+.fc-checks li.no .fc-mark{color:var(--fc-muted)}
+.fc-checks b{font:500 11.5px var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text);text-align:right}
+.fc-lines{margin:10px 0 0;padding-left:16px;font-size:12px;color:var(--fc-text-2)}
+.fc-lines li+li{margin-top:2px}
+.fc-levels,.fc-pos-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 10px;margin:10px 0 0}
+.fc-levels dt,.fc-pos-grid dt{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--fc-text-2)}
+.fc-levels dd,.fc-pos-grid dd{margin:2px 0 0;font:600 12.5px var(--mono,monospace);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+/* One column grid for all rows (subgrid), so times, sides and prices line up from row to row. A signal's price is
+   right-aligned, so the decimals stay in line when the whole part changes length (124,15 / 77,17), and its column is
+   never narrower than the price: a PEPE price in the 300 px side column ran under "efterhand"; there "▲ KÖP" now
+   wraps onto two lines instead. */
+.fc-recent,.fc-trades{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;column-gap:10px}
+.fc-recent{grid-template-columns:auto auto minmax(min-content,1fr) auto}
+/* Rows only (>): an open signal row holds a list of its own explanation lines. */
+.fc-recent>li,.fc-trades li{display:grid;grid-column:1/-1;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-columns:subgrid;
+  align-items:baseline;padding:4px 0;border-bottom:1px solid var(--fc-line);font-size:12px}
+.fc-recent>li{grid-template-columns:auto auto minmax(min-content,1fr) auto;grid-template-columns:subgrid}
+.fc-recent .fc-num{text-align:right}
+.fc-recent>li:last-child,.fc-trades li:last-child{border-bottom:0}
+.fc-recent time,.fc-trades time{font:500 11px var(--mono,monospace);color:var(--fc-text-2);white-space:nowrap}
+.fc-recent small{justify-self:end;font-size:10.5px;color:var(--fc-text-2);white-space:nowrap}
+/* A stored signal's row is a button that opens its record: it spans the list's columns as a subgrid of its own, so
+   its cells stay in line with the other rows. The chevron turns when the row is open. */
+.fc-recent>li.fc-sig{padding:0}
+.fc-recent .fc-sig-row{grid-column:1/-1;display:grid;grid-template-columns:auto auto minmax(min-content,1fr) auto;grid-template-columns:subgrid;
+  align-items:baseline;min-height:30px;padding:6px 0;border:0;border-radius:6px;background:none;color:var(--fc-text);font:inherit;text-align:left;cursor:pointer}
+.fc-recent .fc-sig-row:hover,.fc-recent .fc-sig.open .fc-sig-row{background:var(--fc-panel-2)}
+.fc-chev{display:inline-block;margin-left:3px;transition:transform .15s}
+.fc-sig-row[aria-expanded=false] .fc-chev{transform:rotate(-90deg)}
+.fc-sig-detail{grid-column:1/-1;padding:4px 2px 12px}
+.fc-sig-detail[hidden]{display:none}
+.fc-sig-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;font-size:11.5px;color:var(--fc-text-2)}
+.fc-card p.fc-sig-meta{margin:4px 0 0}
+.fc-sig-detail .fc-levels{margin-top:8px}
+.fc-sig-detail .fc-lines{margin-top:8px}
+.fc-trades li>b:last-child{justify-self:end;font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}
+/* The account's log: time and text; a refusal's reason in the warning colour. */
+.fc-events{list-style:none;margin:0;padding:0}
+.fc-events li{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--fc-line);font-size:12px}
+.fc-events li:last-child{border-bottom:0}
+.fc-events time{font:500 11px var(--mono,monospace);color:var(--fc-text-2);white-space:nowrap}
+.fc-events span{overflow-wrap:anywhere}
+.fc-events li.no span{color:var(--fc-warn-text)}
+/* Research verdicts: measured history, set apart quietly from the live values. */
+.fc-research{margin-top:10px;padding-left:8px;border-left:2px solid var(--fc-line-2);font-size:11.5px;color:var(--fc-text-2)}
+.fc-card p.fc-research{margin-top:10px}
+.fc-research h3{margin:0 0 4px}
+.fc-research p{margin:4px 0 0}
+#aiForecast .fc-research a{color:var(--fc-text);text-decoration:underline;text-underline-offset:2px}
+#aiForecast .fc-research a:hover{color:#d7fbe6}
+
+/* Forecast card */
+.fc-meta{display:grid;gap:4px;margin:0}
+.fc-meta div{display:grid;grid-template-columns:118px minmax(0,1fr);gap:8px}
+.fc-meta dt{font-size:11.5px;color:var(--fc-text-2)}
+.fc-meta dd{margin:0;font-size:12px}
+.fc-stats{padding:8px 10px;border-radius:8px;background:var(--fc-panel-2);font-size:12px}
+.fc-stats b{display:block;margin-bottom:2px;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--fc-text-2)}
+.fc-fixed{font-size:12px}
+.fc-integrity{margin-top:10px;padding:8px 10px;border-radius:8px;border:1px solid rgba(240,160,32,.5);background:rgba(240,160,32,.07)}
+.fc-integrity h3{margin:0 0 4px;color:var(--fc-warn-text)}
+.fc-integrity ul{margin:0;padding-left:16px;font-size:11.5px}
+
+/* Demo account card */
+.fc-status{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;font-weight:600}
+.fc-card p.fc-status{margin:0}
+.fc-status i{flex:none;width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--fc-muted)}
+.fc-status[data-state=trading] i{background:var(--fc-accent);box-shadow:0 0 8px rgba(61,220,132,.7)}
+.fc-status[data-state=waiting],.fc-status[data-state=unreliable]{color:var(--fc-warn-text)}
+.fc-status[data-state=waiting] i,.fc-status[data-state=unreliable] i{background:var(--fc-warn)}
+.fc-status[data-state=error]{color:#ffa79f}
+.fc-status[data-state=error] i{background:var(--fc-down)}
+.fc-status[data-state=paused] i{background:var(--fc-gray)}
+.fc-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+/* The account's own history: five measures in two rows. */
+.fc-tiles.fc-history{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:0}
+.fc-tile{min-width:0;padding:8px 10px;border:1px solid var(--fc-line);border-radius:9px;background:var(--fc-panel-2)}
+.fc-tile span{display:block;font-size:10.5px;color:var(--fc-text-2)}
+.fc-tile b{display:block;margin-top:3px;font:650 14px/1.3 var(--sans,system-ui,sans-serif);overflow-wrap:anywhere}
+.fc-positions{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.fc-pos{padding:9px 10px;border:1px solid var(--fc-line-2);border-radius:9px;background:var(--fc-panel-2)}
+.fc-pos-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px}
+.fc-pos-head>b{font-size:13px}
+.fc-pos-head .fc-dir{font-size:11px;font-weight:800;letter-spacing:.6px}
+.fc-pnl{margin-left:auto;font:650 12.5px var(--mono,monospace);font-variant-numeric:tabular-nums}
+.fc-pos-foot{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:8px}
+.fc-pos-foot small{font-size:11px;color:var(--fc-text-2)}
+.fc-msg{font-size:12px;font-weight:600;color:var(--fc-up-text)}
+/* Empty messages stay in the page (they are live regions) but take no room. */
+.fc-card p.fc-msg:empty{margin:0}
+.fc-msg.bad{color:#ffa79f}
+.fc-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.fc-settings{margin-top:12px;padding-top:2px;border-top:1px solid var(--fc-line)}
+.fc-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.fc-form-grid label{display:grid;align-content:start;gap:3px;min-width:0;font-size:12px;font-weight:600}
+.fc-form-grid small{font-size:10.5px;font-weight:500;color:var(--fc-text-2)}
+.fc-form-grid input,.fc-form-grid select{width:100%}
+.fc-pairs{display:flex;flex-wrap:wrap;gap:6px 12px;margin:10px 0 0;padding:8px 10px;border:1px solid var(--fc-line-2);border-radius:9px}
+.fc-pairs legend{padding:0 4px;font-size:12px;font-weight:600}
+.fc-pairs label{display:inline-flex;align-items:center;gap:5px;min-height:24px;font-size:12px;cursor:pointer}
+.fc-pairs input{width:15px;height:15px;margin:0;accent-color:var(--fc-accent)}
+.fc-note{padding-left:8px;border-left:2px solid var(--fc-warn);font-size:11.5px;color:var(--fc-text-2)}
+
+/* Walk-forward card */
+.fc-eval-head{font-size:12px}
+.fc-table-wrap{margin-top:10px;overflow-x:auto;border:1px solid var(--fc-line);border-radius:8px}
+.fc-table{width:100%;border-collapse:collapse;font-size:11.5px}
+.fc-table caption{padding:7px 9px;caption-side:top;text-align:left;font-size:11px;font-weight:700;color:var(--fc-text-2)}
+.fc-table th,.fc-table td{padding:5px 7px;border-top:1px solid var(--fc-line);text-align:right;white-space:nowrap}
+.fc-table th:first-child,.fc-table td:first-child{text-align:left}
+.fc-table th{font-size:10.5px;font-weight:600;color:var(--fc-text-2)}
+.fc-table tbody th{white-space:normal;color:var(--fc-text)}
+.fc-table tbody th small{display:block;font-size:10px;font-weight:500;color:var(--fc-text-2)}
+.fc-table tbody th small span{white-space:nowrap}
+.fc-table td{font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}
+.fc-notes{margin:10px 0 0;padding-left:16px;font-size:11.5px;color:var(--fc-text-2)}
+.fc-notes li+li{margin-top:2px}
+
+/* 900–1100 px: a narrower side column. Below 900 px everything stacks and the view scrolls. */
+@media (max-width:1100px){.fc-grid{grid-template-columns:minmax(0,1fr) 300px}}
+@media (max-width:900px){
+  /* Vertical swipes on the chart scroll the view; at its ends they stop here instead of reaching the page (a pull to refresh). */
+  #aiForecast{overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain}
+  .fc-shell,.fc-grid{display:block}
+  .fc-head{padding:10px 12px 6px}
+  .fc-banner{margin:0 12px 8px}
+  .fc-toolbar{padding:4px 12px 10px}
+  .fc-chart{padding:10px 12px 8px}
+  .fc-canvas-wrap{flex:none;height:max(320px,58vh);min-height:0}
+  .fc-side{overflow:visible;padding:4px 12px 28px}
+}
+/* Tablets: what is shown on the first toolbar row and how it is drawn (the toggles with zoom) on the second,
+   instead of zoom wrapping alone; a zero-height break item splits the rows. The breadcrumb gives way, so a long
+   price (PEPE) keeps the header on one row. */
+@media (min-width:561px) and (max-width:900px){
+  .fc-eyebrow{display:none}
+  .fc-toolbar{row-gap:4px}
+  .fc-toolbar::after{content:'';order:1;flex-basis:100%}
+  .fc-toggles,.fc-zoom{order:2}
+  .fc-toggles{margin-left:0}
+}
+/* Phones: the chart starts on the first screen. One header row (title, price, data status, a back arrow whose
+   words stay for screen readers), then two toolbar rows: pair, timeframe and forecast length under small
+   captions, and the toggles with zoom. The version select and its quick picks share one row under the chart
+   that scrolls sideways. The top bar above belongs to the page and keeps its own layout. */
+@media (max-width:560px){
+  .fc-head{flex-wrap:nowrap;gap:8px;padding:8px 12px 6px}
+  .fc-titles{flex:none}
+  .fc-eyebrow{display:none}
+  #forecastTitle{margin:0;font-size:16px;white-space:nowrap}
+  .fc-quote{flex:0 1 auto;min-width:0}
+  .fc-pair,.fc-back-text{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  .fc-last{padding:1px 5px;font-size:17px}
+  .fc-pill{margin-left:auto;padding:3px 9px;font-size:10px}
+  #aiForecast .fc-back{flex:none;margin-left:0;padding:6px 12px;font-size:15px}
+  .fc-banner{margin:0 12px 6px;padding:6px 10px}
+  .fc-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:end;gap:6px 8px;padding:0 12px 8px}
+  .fc-field,.fc-group{flex-direction:column;align-items:stretch;gap:2px}
+  .fc-field>span,.fc-cap{font-size:9.5px;letter-spacing:.6px;text-transform:uppercase}
+  .fc-symbol select{width:100%;min-width:0}
+  .fc-symbol{grid-column:1}
+  .fc-tf{grid-column:2}
+  .fc-horizon{grid-column:3}
+  /* The toggles span the select and the timeframes above them; zoom sits under the forecast lengths. */
+  .fc-toggles{grid-column:1/3;margin-left:0}
+  .fc-zoom{grid-column:3}
+  .fc-toggles button,.fc-zoom button{flex:1 1 0}
+  .fc-seg button{min-width:28px;padding:5px 7px}
+  .fc-chart{padding:8px 12px}
+  .fc-canvas-wrap{order:1;height:max(300px,min(58vh,calc(100dvh - 355px)))}
+  /* The vertical padding keeps the focus rings of the select and the chips inside the scrolling row. */
+  .fc-comparebar{order:2;flex-wrap:nowrap;overflow-x:auto;margin:-4px -12px 0;padding:4px 12px;scrollbar-width:none}
+  .fc-comparebar::-webkit-scrollbar{display:none}
+  .fc-compare,.fc-chips{flex:none}
+  .fc-comparebar .fc-field{flex-direction:row;align-items:center;gap:6px}
+  .fc-compare select{max-width:230px}
+  .fc-chips{flex-wrap:nowrap}
+  .fc-legend{order:3}
+  .fc-meta div{grid-template-columns:minmax(0,1fr);gap:0}
+}
+@media (pointer:coarse){
+  .fc-seg button,.fc-chip,#aiForecast .fc-btn,#aiForecast select,#aiForecast input[type=number]{min-height:40px}
+  .fc-pairs label{min-height:36px}
+}
+@media (prefers-reduced-motion:reduce){#aiForecast *,#aiForecast *::before,#aiForecast *::after{transition:none!important;animation:none!important}}
+
+/* The Kryptokonton tab: the page's own theme. */
+#forecastSummary .fc-sum{display:grid;gap:10px}
+.fc-sum-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px 12px}
+.fc-sum-head h3{margin:0;font-size:12px;color:var(--text)}
+.fc-sum-state{font-size:11px;color:var(--text-2)}
+.fc-sum-state[data-state=trading]{color:var(--green)}
+.fc-sum-state[data-state=waiting],.fc-sum-state[data-state=unreliable]{color:var(--amber)}
+.fc-sum-state[data-state=error]{color:var(--red)}
+.fc-sum-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.fc-sum-grid div{min-width:0;padding:9px 10px;border:1px solid var(--line-2);border-radius:9px;background:var(--panel-2)}
+.fc-sum-grid span{display:block;font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+.fc-sum-grid b{display:block;margin-top:4px;font:700 14px var(--mono);color:var(--text);overflow-wrap:anywhere}
+.fc-sum-grid b.pos{color:var(--green)}
+.fc-sum-grid b.neg{color:var(--red)}
+.fc-sum-note{margin:0;font-size:11px;line-height:1.55;color:var(--text-2)}
+.fc-sum-note.fc-sum-warn{color:var(--amber)}
+#forecastSummary .btn{justify-self:start;text-decoration:none}

@@ -2,7 +2,7 @@
 
 AI-momentum är ett separat lokalt demokonto med 100 dollar vid start. Den aktiva versionen är ett **förvalt, ej lönsamhetsvaliderat 12-timmarsexperiment**. Ingen av de tre testade profilerna klarade utvecklingskraven. Namnet AI-momentum är kontots etikett; den nya signalen är regelbaserad och använder ingen tränad AI-modell.
 
-I Crypto ligger **Kryptokonton** ovanför signalerna. Flikarna **Vanliga kontot**, **AI-momentum** och **Regler & inställningar** växlar visning. Att byta kontovy eller fälla ihop panelen ändrar inte handeln. Det vanliga kryptokontot är separat.
+I Crypto ligger **Kryptokonton** ovanför signalerna. Flikarna **Vanliga kontot**, **AI-momentum**, **AI Forecast** (se [AI-FORECAST.md](AI-FORECAST.md)) och **Regler & inställningar** växlar visning. Att byta kontovy eller fälla ihop panelen ändrar inte handeln. Det vanliga kryptokontot är separat.
 
 Kryssrutan **AI-momentum · aktiv demo med SL / TP** tillåter nya köp. Den är avmarkerad för nya konton och vid övergång från äldre momentumversioner. Avmarkering stoppar nya köp; SL, TP, tidsgräns, funding och likvidation fortsätter följas när kryptosidan körs. Inga order, stopp eller kontoändringar skickas till Bybit.
 

@@ -61,17 +61,38 @@ test('trading floor suppresses signal popups and sound without replaying them on
 });
 
 test('authentication swaps landing/panel, resumes once, and invalidates pending work on logout',()=>{
-  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0,floors=0;
+  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0,floors=0,forecasts=0;
   const auth={anvandare:null},state={modeVersion:5,refreshPending:true};
   const ctx=context(['authRitaOm'],{
     AUTH:auth,STATE:state,document:{body:{classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key)}}},
     $:key=>{if(!nodes.has(key))nodes.set(key,{...element(),style:{}});return nodes.get(key);},
-    summaryRoute:()=>routes++,floorRoute:()=>floors++,renderDemo:noop,refresh:()=>refreshes++
+    summaryRoute:()=>routes++,floorRoute:()=>floors++,forecastRoute:()=>forecasts++,renderDemo:noop,refresh:()=>refreshes++
   });
   ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,false);assert.equal(refreshes,0);
   auth.anvandare={email:'member@example.com'};ctx.authRitaOm();assert.ok(!classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,true);assert.equal(refreshes,1);
   ctx.authRitaOm();assert.equal(refreshes,1);
-  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);assert.equal(floors,4);
+  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);assert.equal(floors,4);assert.equal(forecasts,4);
+});
+
+test('AI Forecast suppresses signal popups and sound like the trading floor, and has its own account tab',()=>{
+  const location={hash:'#forecast'},seen=new Set(),state={lage:'krypto',signals:[{id:'first',inst:'BTC',status:'ACTIVE'}]};
+  let popups=0,sounds=0;
+  const ctx=context(['bevakaAktiveringar'],{location,STATE:state,AKTIVA_SEDDA:seen,aktivSeddInit:true,
+    INSTR:{BTC:{}},grupp:()=> 'crypto',visaAktivering:()=>popups++,spelaLjud:()=>sounds++});
+  ctx.bevakaAktiveringar();assert.ok(seen.has('first'));assert.equal(popups,0);assert.equal(sounds,0);
+  location.hash='';ctx.bevakaAktiveringar();assert.equal(popups,0,'nothing replayed on exit');
+  state.signals.push({id:'second',inst:'BTC',status:'ACTIVE'});ctx.bevakaAktiveringar();assert.equal(popups,1);assert.equal(sounds,1);
+  context(['visaAktivering'],{location:{hash:'#forecast'}}).visaAktivering({});
+  // The Kryptokonton tabs accept the new view; unknown values still fall back to the ordinary account.
+  const views=['standard','momentum','forecast','rules'],panels=Object.fromEntries(views.map(v=>[v,{hidden:false}]));
+  const buttons=views.map(v=>({dataset:{cryptoView:v},classList:{on:false,toggle(k,on){this.on=on;}},attrs:{'aria-controls':v},
+    setAttribute(k,x){this.attrs[k]=x;},getAttribute(k){return this.attrs[k];}}));
+  const tabs=context(['setCryptoAccountView'],{$$:()=>buttons,document:{getElementById:id=>panels[id]}});
+  tabs.setCryptoAccountView('forecast');
+  assert.deepEqual(views.filter(v=>!panels[v].hidden),['forecast']);
+  assert.deepEqual(buttons.map(b=>[b.classList.on,b.attrs['aria-pressed']]),views.map(v=>[v==='forecast',String(v==='forecast')]));
+  tabs.setCryptoAccountView('okänd');
+  assert.deepEqual(views.filter(v=>!panels[v].hidden),['standard']);
 });
 
 test('login always signs into an existing account even if a legacy signup mode is supplied',async()=>{

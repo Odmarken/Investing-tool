@@ -21,6 +21,9 @@ för Yahoos fördröjda data.
 | `trading-floor.js`, `trading-floor-scene.js`, `trading-floor-ui.js` | Trading floor: sex trendbord i ett isometriskt kontor, beskrivet i [TRADING-FLOOR.md](TRADING-FLOOR.md) |
 | `floor-trend.js`, `floor-trend-market.js` | Bordens trendstrategi (nio Donchian-horisonter, volatilitetsstyrd storlek) och deras timstaplar från Bybit; valet finns i [research/floor-trend-results.md](research/floor-trend-results.md) |
 | `cloud-runner.js` | Molnkörningen av momentumkontot och borden: två oberoende planer per inloggning och minut, körs av `molnCron` i `functions/` |
+| `forecast-ui.js`, `forecast-chart.js`, `forecast.css` | AI Forecast: helskärmsvy med candlestick-graf, grå prognoscandles, signaler, demokonto och utvärdering, beskriven i [AI-FORECAST.md](AI-FORECAST.md) |
+| `forecast-config.js`, `forecast-model.js`, `forecast-market.js`, `forecast-store.js` | AI Forecasts signalregler (`af-signal-v1`) och analogprognos (`af-forecast-v1`), Bybit-candles stängda enligt Bybits klocka och oföränderliga, versionerade signaler och prognoser |
+| `forecast-account.js`, `forecast-runner.js`, `forecast-backtest.js` | AI Forecasts eget demokonto på 100 $ (Bybits maxhävstång som standard), motorn som handlar det i webbläsaren och walk-forward-testet; resultaten finns i [research/ai-forecast-results.md](research/ai-forecast-results.md) |
 | `motor.js` | Signalmotorn: indikatorer, de fyra familjerna, ICT, gradering. Delas av sidan och workern |
 | `konto.js` | Demokontot i Cloudflare-workern — öppnar, stänger och sparar i KV |
 | `functions/index.js` | Samma sak på Firebase: cron var 5:e minut, proxy, ingest och Firestore |
@@ -78,14 +81,16 @@ npm run fb:deploy
 
 `deploy` tar med tre saker: funktionerna (`kontoCron` + `api`), Firestore-reglerna och
 sidan på Firebase Hosting. `motor.js` kopieras automatiskt in i `functions/` först, så
-molnet och skärmen kör exakt samma signalmotor.
+molnet och skärmen kör exakt samma signalmotor. Sidan laddas upp utan tester, forskning
+och dokumentation (`hosting.ignore` i `firebase.json`), och utan filer och mappar som
+börjar med punkt, till exempel mätcachen i `.matning/`.
 
 ### Vad du får
 
 | | |
 |---|---|
 | `kontoCron` | Var femte minut: hämtar staplar, bygger setups, öppnar A- och B-affärer och stänger dem som nått stopp eller mål |
-| `molnCron` | Varje minut: AI-momentumkontot och trading floor-borden per inloggning, samma regler som sidan; uppgraderar en firma från golvets äldre versioner en gång, se [TRADING-FLOOR.md](TRADING-FLOOR.md) |
+| `molnCron` | Varje minut: AI-momentumkontot och trading floor-borden per inloggning, samma regler som sidan; uppgraderar en firma från golvets äldre versioner en gång, se [TRADING-FLOOR.md](TRADING-FLOOR.md). AI Forecast-kontot körs inte i molnet, bara i webbläsaren, se [AI-FORECAST.md](AI-FORECAST.md) |
 | `GET /api/moln/tick?k=FEED_KEY` | Kör ett molnvarv för momentum och trading floor på studs |
 | `GET /api/proxy?url=…` | Marknadsdata och RSS åt sidan, med en lista över tillåtna värdar |
 | `POST /api/ingest` | TradingView-alertets webhook, samma format som workern |
@@ -387,12 +392,13 @@ och sedan var femte minut, så du kan prova hela kedjan innan du rullar ut.
   `SYMBOLS` i `worker.js`, `options` i Pine-skriptet och `INSTR` i html-filen.
   `SYMS` i html-filen härleds ur `INSTR`, så resten av sidan följer med.
 * **Telefonvänlig.** Under 1240 px lägger sig kolumnerna på rad, under 680 px byter
-  toppbaren till två rader, knapparna blir fingerstora, korten smalnar av och graferna
-  blir lägre. Signalkärnan ritar kortare nodetiketter och en lägre ruta på smal skärm,
-  och avläsningsloggen kapas efter kanten. Inställningsrutan blir helskärm, och fälten
-  får 16 px text på pekskärm så att iOS inte zoomar in när du klickar i dem. Mätt i
-  webbläsaren vid 390 px: sidans bredd är 382 px, alltså inget vågrätt skrollande —
-  utom tickerbandet, som ska skrollas.
+  toppbaren till två rader (i kryptoläget, som också har knapparna Summary, Trading floor
+  och AI Forecast, radbryts den efter behov redan under 1280 px), knapparna blir
+  fingerstora, korten smalnar av och graferna blir lägre. Signalkärnan ritar kortare
+  nodetiketter och en lägre ruta på smal skärm, och avläsningsloggen kapas efter kanten.
+  Inställningsrutan blir helskärm, och fälten får 16 px text på pekskärm så att iOS inte
+  zoomar in när du klickar i dem. Mätt i webbläsaren vid 390 px: sidans bredd är 382 px,
+  alltså inget vågrätt skrollande — utom tickerbandet, som ska skrollas.
 * **ACTIVE betyder att affären är igång.** En setup blir aktiv först när priset
   faktiskt träffar entrynivån — att ligga nära räcker inte, och en omladdning fyller
   inte gamla nivåer. Därefter står den kvar som aktiv tills målet eller stoppen nås,
