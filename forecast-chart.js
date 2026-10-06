@@ -7,8 +7,9 @@
 // data, trades or changes the records it draws.
 //
 // The optional tooltip element should be absolutely positioned in the same
-// offset parent as the canvas: the chart only sets its textContent, hidden and
-// left/top. The canvas size comes from CSS (clientWidth/clientHeight).
+// offset parent as the canvas: the chart only sets its textContent, hidden,
+// left/top and a data-state while it explains a level drag. The canvas size
+// comes from CSS (clientWidth/clientHeight).
 import {TF} from './forecast-config.js';
 
 export const CHART_COLORS=Object.freeze({surface:'#0b0f14',grid:'rgba(148,163,184,.08)',axisText:'#8b9bb0',text:'#e6edf3',
@@ -38,6 +39,9 @@ const AXIS_LINE='rgba(148,163,184,.18)',START_LINE='rgba(139,155,176,.6)',PILL_F
   PILL_LINE='rgba(186,195,208,.38)',TAG_DARK='#283240',FORMING_LINE='rgba(230,237,243,.55)';
 const LEVELS=Object.freeze({entry:{color:C.entry,dash:[],name:'Entry'},sl:{color:C.sl,dash:[6,4],name:'SL'},
   tp:{color:C.tp,dash:[6,4],name:'TP'},liq:{color:C.liq,dash:[1,3],name:'Likv.'}});
+// The levels a position's owner may drag; LINE_HIT: how far from a line (px) a mouse or pen still takes it; a finger takes
+// a level by its handle, at least HANDLE_W × HANDLE_H px over its tag. A tap's hint stays HINT_MS.
+const EDITABLE=Object.freeze(['sl','tp']),LINE_HIT=6,HANDLE_W=44,HANDLE_H=36,HINT_MS=4000,BAD_TEXT='#ffa79f';
 
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const positive=x=>finite(x)&&x>0;
@@ -162,21 +166,50 @@ export function comparisonStats(forecast,bars,horizon){
  * compareAhead:false draws an older compared version only where its outcome is known.
  * dataEnd: the text after 'Data t.o.m.' at the forecast start (the page's own, with
  * the date and year when they are not today's); without it the chart writes the time.
+ * tick: the decimals of Bybit's price tick for the coin, when known: the last price's
+ * axis tag and a real candle's prices in the tooltip are written with them, as the page
+ * writes the price now (dec otherwise).
  * picked: a stored signal record whose entry, SL and TP are drawn from its candle
  * on, marked as that signal's (a label just left of its candle, outlined axis tags).
  * View {rightT,barPx,price:null|{lo,hi}}: rightT is the time at the plot's
  * right edge. While following (until the user pans) every data update moves
  * the view with the newest candle or forecast; price:null is the auto range.
+ *
+ * Moving a position's stop and target: setData's `edit` is the id of the
+ * position whose SL and TP the user may move, and its lines are the levels that
+ * carry that id as `edit`. With an `editor` ({preview({id,kind,price}) →
+ * {ok,price,text,note}, commit({id,kind,price,pointer}) → promise,
+ * cancel?({id,kind,note})}, price null removing the level, pointer the
+ * pointerType that dragged it) and the levels shown, a mouse or pen drags such
+ * an SL or TP by its axis tag or its line (±6 px); a missing one has a ghost tag
+ * ("+ SL", "+ TP") beside the entry tag that creates it. On a phone the canvas
+ * leaves vertical swipes to the page, so `handles` ({sl,tp}: elements in the
+ * canvas's offset parent) are laid over those tags with touch-action none and take
+ * a finger's drag. While dragging, a dashed line and its tag follow the pointer
+ * (keeping the distance at which it took the level, a ghost's from the entry) at
+ * the chart's price precision, the tag showing the editor's text (and its note,
+ * red when not ok, in the tooltip); past the top or the bottom of the plot the
+ * level is removed. Esc cancels. A valid drop is committed: the line stays where it
+ * was dropped until the editor's promise settles, then the data shows the outcome
+ * (the new level, or the old one back). An invalid drop goes back, with its note
+ * passed to editor.cancel.
  */
-export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=globalThis.requestAnimationFrame?.bind(globalThis)??null,dpr,reducedMotion}={}){
+export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=globalThis.requestAnimationFrame?.bind(globalThis)??null,dpr,reducedMotion,
+  editor=null,handles=null}={}){
   const ctx=canvas?.getContext?.('2d');
   if(!ctx)throw Error('Diagrammet kan inte ritas: canvas saknas');
   const vs={rightT:null,barPx:BAR_PX,price:null},plot={left:0,top:0,right:0,bottom:0},listeners=[];
   let W=0,H=0,ratio=1,axisW=56,follow=true,anchor=null,auto=null,range={lo:0,hi:1},g={bw:1,wd:1},autoBar=true;
   // closedT: the newest closed candle; lastT: the newest real candle, the forming one included. pick: the picked signal.
-  let d=null,tfMs=HOUR,bars=[],byT=new Map(),forming=null,closedT=null,lastT=null,dec=2,horizon=10,latest=null,compare=null,same=false,pick=null;
+  // tickDec: the decimals of Bybit's price tick for the coin (setData's tick), for the last price's tag and the real
+  // candles' prices in the tooltip; null: dec's.
+  let d=null,tfMs=HOUR,bars=[],byT=new Map(),forming=null,closedT=null,lastT=null,dec=2,tickDec=null,horizon=10,latest=null,compare=null,same=false,pick=null;
   // pinned: the candle slot ({t,y}) a tap on a touch screen holds the crosshair and tooltip at.
   let hover=null,pinned=null,drag=null,dirty=true,queued=false,destroyed=false,anim=null,shown=null,emitted='',cursor='';
+  // lv: the level being dragged ({id,kind,pointerId,source,el,start,y,moved,raw,price,view}); pending: a dropped level
+  // whose commit has not settled ({id,kind,price,text}); hint: what a tap on a level's tag says ({kind,text,until}).
+  let lv=null,pending=null,hint=null;
+  const editing=!!editor&&typeof editor.preview==='function'&&typeof editor.commit==='function';
   const clock=()=>globalThis.performance?.now?.()??Date.now();
   const reduced=()=>typeof reducedMotion==='function'?!!reducedMotion():reducedMotion!==undefined?!!reducedMotion:
     !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
@@ -237,8 +270,25 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   }
   const levelList=()=>(Array.isArray(d?.levels)?d.levels:[]).filter(l=>LEVELS[l?.kind]&&positive(l.price));
   function levelText(l){
+    if(typeof l.text==='string'&&l.text)return l.text;
     const name=typeof l.label==='string'&&l.label?l.label:LEVELS[l.kind].name;
     return /\d/.test(name)?name:name+' '+fmt(l.price,dec);
+  }
+  // The position whose stop and target may be dragged: only with an editor and while the levels are shown.
+  const editId=()=>editing&&d&&d.showLevels!==false&&typeof d.edit==='string'&&d.edit?d.edit:null;
+  // The level being dragged, or the one whose drop is being saved, of the editable position.
+  const moving=()=>{const id=editId();return lv&&lv.id===id?lv:pending&&pending.id===id?pending:null;};
+  // The levels as drawn: a dragged level follows the pointer (nothing while it is over the remove zone), a dropped one
+  // stays where it was dropped until its commit settles. state: 'drag', 'bad' (an invalid zone) or 'pending'.
+  function shownLevels(){
+    const list=levelList(),id=editId(),m=moving();
+    if(!m)return list;
+    const out=list.filter(l=>!(l.edit===id&&l.kind===m.kind));
+    if(!positive(m.price))return out;
+    const entry=list.find(l=>l.edit===id&&l.kind==='entry');
+    out.push({kind:m.kind,price:m.price,from:entry?.from,label:LEVELS[m.kind].name,edit:id,text:m.text,
+      state:m===pending?'pending':m.view&&!m.view.ok?'bad':'drag'});
+    return out;
   }
   // A signal of this chart's coin and timeframe, with a side.
   const marked=s=>(s?.side==='long'||s?.side==='short')&&!(s.tf&&s.tf!==d.tf)&&!(s.symbol&&d.symbol&&s.symbol!==d.symbol);
@@ -258,7 +308,8 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     let hi=forming?.h??0;
     for(const b of bars)if(b.h>hi)hi=b.h;
     for(const f of [latest,compare])if(f)for(const c of f.candles)if(c.h>hi)hi=c.h;
-    ctx.font=FONT;let w=ctx.measureText(fmt(hi||1,dec)).width+20;
+    // The last price's tag has the tick's decimals where those are more (BTC's tenth).
+    ctx.font=FONT;let w=ctx.measureText(fmt(hi||1,Math.max(dec,tickDec??dec))).width+20;
     // Level tags ("Entry 85 230") are wider than a bare price, so the axis makes room while they are shown, but at
     // most 30 % of the width: on a phone a long price ("Entry 0,0000045070") would halve the plot, so it reaches into it.
     const list=[...(d.showLevels!==false?levelList():[]),...pickLevels()];
@@ -287,9 +338,14 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     same=!!(latest&&compare&&latest.key===compare.key);
     pick=pickOf(next.picked);
     dec=Number.isInteger(next.dec)&&next.dec>=0&&next.dec<=12?next.dec:priceDecimals((forming??bars.at(-1))?.c);
+    tickDec=Number.isInteger(next.tick)&&next.tick>=0&&next.tick<=12?next.tick:null;
     // Ease the forming close from what is on screen; a new candle, a new series or reduced motion jumps.
     anim=!series&&forming&&shown?.t===forming.t&&shown.c!==forming.c&&!reduced()?{t:forming.t,from:shown.c,to:forming.c,start:null}:null;
-    if(series)shown=pinned=null;
+    if(series)shown=pinned=hint=null;
+    // A drag whose position is no longer the editable one (closed, or another coin) ends; otherwise its preview is asked
+    // again, since the price moves while the level is held.
+    if(lv&&editId()!==lv.id)cancelLevel('');
+    else if(lv?.moved)ask();
     axisW=axisWidth();
     const a=anchorTime();
     if(a===null)vs.rightT=null;
@@ -309,7 +365,8 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   // view the previous range stays, so an empty stretch does not jump.
   function computeRange(){
     if(vs.price)return range=vs.price;
-    if(vs.rightT===null)return range;
+    // While a level is dragged the prices hold still, so the pointer and the level's price stay together.
+    if(vs.rightT===null||lv)return range;
     const t0=timeAt(plot.left)-tfMs,t1=timeAt(plot.right);let lo=Infinity,hi=-Infinity;
     const add=(l,h)=>{if(l<lo)lo=l;if(h>hi)hi=h;};
     for(let i=firstAt(t0);i<bars.length&&bars[i].t<=t1;i++)add(bars[i].l,bars[i].h);
@@ -499,15 +556,19 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       halo(long?'KÖP':'SÄLJ',x,long?base+3:base-3);
     }
   }
-  function levels(){
-    const list=levelList(),entries=list.filter(l=>l.kind==='entry');
-    const startX=l=>clamp(finite(l.from)?xOf(l.from):plot.left,plot.left,plot.right);
+  const startX=l=>clamp(finite(l.from)?xOf(l.from):plot.left,plot.left,plot.right);
+  // A dragged or dropped level is a short-dashed line; in an invalid zone it is red and its zone is left out.
+  function levels(list){
+    const entries=list.filter(l=>l.kind==='entry');
     for(const e of entries)for(const [kind,color] of [['sl',C.down],['tp',C.up]]){
-      const o=list.find(l=>l.kind===kind&&l.from===e.from)??(entries.length===1?list.find(l=>l.kind===kind):null);if(!o)continue;
+      const o=list.find(l=>l.kind===kind&&l.from===e.from)??(entries.length===1?list.find(l=>l.kind===kind):null);if(!o||o.state==='bad')continue;
       const x=startX(e),y0=yOf(e.price),y1=yOf(o.price);
       ctx.fillStyle=rgba(color,.07);ctx.fillRect(x,Math.min(y0,y1),plot.right-x,Math.abs(y1-y0));
     }
-    for(const l of list){const st=LEVELS[l.kind];hline(yOf(l.price),startX(l),plot.right,st.color,css1(),st.dash);}
+    for(const l of list){
+      const st=LEVELS[l.kind],color=l.state==='bad'?C.down:st.color;
+      hline(yOf(l.price),startX(l),plot.right,color,l.state?css1()+1:css1(),l.state?[3,3]:st.dash);
+    }
   }
   // The picked stored signal: its entry, SL and TP from the centre of its candle to the right edge, with the zones
   // between them, and a label at the start that names the signal (side and the close that confirmed it), so its
@@ -537,28 +598,59 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   // Right-axis tags for the levels and the last price, placed before the axis
   // labels so labels they would cover are left out. Tags are nudged apart; a
   // level outside the visible prices is pinned to the edge with an arrow.
-  function placeTags(close){
-    const tags=[],last=lastCandle(close),lo=plot.top+TAG_H/2,hi=plot.bottom-TAG_H/2;
-    if(d.showLevels!==false)for(const l of levelList())tags.push({y:yOf(l.price),text:levelText(l),fill:LEVELS[l.kind].color});
+  // `list`: the levels as shown (shownLevels). The editable position's SL and TP tags say which level they move (drag);
+  // its entry tag is where the ghost tags of a missing level go (anchor). Each item has its box: x, w and the text drawn.
+  function placeTags(close,list){
+    const tags=[],last=lastCandle(close),lo=plot.top+TAG_H/2,hi=plot.bottom-TAG_H/2,id=editId();
+    if(d.showLevels!==false)for(const l of list)tags.push({y:yOf(l.price),text:levelText(l),fill:LEVELS[l.kind].color,state:l.state??'',kind:l.kind,
+      drag:id&&l.edit===id&&!l.state&&EDITABLE.includes(l.kind)?l.kind:null,anchor:!!id&&l.edit===id&&l.kind==='entry'});
     for(const l of pickLevels())tags.push({y:yOf(l.price),text:levelText(l),fill:LEVELS[l.kind].color,outlined:true});
-    if(last)tags.push({y:yOf(last.c),text:fmt(last.c,dec),fill:last.color});
+    if(last)tags.push({y:yOf(last.c),text:fmt(last.c,tickDec??dec),fill:last.color});
     if(hi<lo)return [];
     const items=tags.map(t=>({...t,edge:t.y<lo?-1:t.y>hi?1:0,y:clamp(t.y,lo,hi)})).sort((a,b)=>a.y-b.y);
     for(let i=1;i<items.length;i++)items[i].y=Math.max(items[i].y,items[i-1].y+TAG_H+1);
     for(let i=items.length-1;i>=0;i--)items[i].y=Math.min(items[i].y,i===items.length-1?hi:items[i+1].y-TAG_H-1);
+    ctx.font=BOLD;
+    for(const t of items){t.label=(t.edge<0?'▲ ':t.edge>0?'▼ ':'')+t.text;t.w=Math.ceil(ctx.measureText(t.label).width)+12;t.x=Math.min(plot.right+1,W-t.w-1);}
     return items;
   }
+  // "+ SL" / "+ TP" left of the editable position's entry tag, for each level it does not have (and is not being dragged).
+  function ghostTags(items){
+    const id=editId(),at=id&&!pending?items.find(t=>t.anchor):null;
+    if(!at)return [];
+    const have=new Set(levelList().filter(l=>l.edit===id).map(l=>l.kind)),out=[];
+    ctx.font=BOLD;let right=at.x-4;
+    for(const kind of ['tp','sl']){
+      if(have.has(kind)||lv?.kind===kind)continue;
+      const text='+ '+LEVELS[kind].name,w=Math.ceil(ctx.measureText(text).width)+12;
+      out.unshift({kind,text,x:right-w,w,y:at.y});right-=w+4;
+    }
+    return out;
+  }
   // `cross`: the crosshair's tags. A tag the crosshair's price tag overlaps yields to it, so no strip of it
-  // peeks out above or below. A picked signal's tags are outlined in their line colour on the dark tag fill.
+  // peeks out above or below. A picked signal's tags are outlined in their line colour on the dark tag fill. A dragged
+  // or saving level's tag is outlined too; in an invalid zone it is red, marked ⚠.
   function axisTags(items,cross){
     ctx.font=BOLD;ctx.textAlign='left';ctx.textBaseline='middle';
     for(const t of items){
       if(cross&&Math.abs(t.y-cross.y)<TAG_H)continue;
-      const text=(t.edge<0?'▲ ':t.edge>0?'▼ ':'')+t.text,w=Math.ceil(ctx.measureText(text).width)+12,x=Math.min(plot.right+1,W-w-1);
+      const bad=t.state==='bad',text=(bad?'⚠ ':'')+t.label,w=bad?Math.ceil(ctx.measureText(text).width)+12:t.w,x=bad?Math.min(plot.right+1,W-w-1):t.x;
       rr(x,t.y-TAG_H/2,w,TAG_H,3);
-      if(t.outlined){ctx.fillStyle=TAG_DARK;ctx.fill();ctx.setLineDash([]);ctx.strokeStyle=t.fill;ctx.lineWidth=1.5;ctx.stroke();ctx.fillStyle=C.text;}
+      if(t.outlined||t.state){
+        ctx.fillStyle=TAG_DARK;ctx.fill();ctx.setLineDash(t.state==='pending'?[3,2]:[]);ctx.strokeStyle=bad?C.down:t.fill;ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+        ctx.fillStyle=bad?BAD_TEXT:C.text;
+      }
       else{ctx.fillStyle=rgba(t.fill,.9);ctx.fill();ctx.fillStyle=ink(t.fill);}
       ctx.fillText(text,x+6,t.y+.5);
+    }
+  }
+  // Ghost tags: a dashed outline in the level's colour on the dark pill fill.
+  function drawGhosts(list){
+    ctx.font=BOLD;ctx.textAlign='left';ctx.textBaseline='middle';
+    for(const gh of list){
+      rr(gh.x,gh.y-TAG_H/2,gh.w,TAG_H,TAG_H/2);ctx.fillStyle=PILL_FILL;ctx.fill();
+      ctx.setLineDash([3,2]);ctx.strokeStyle=LEVELS[gh.kind].color;ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle=C.text;ctx.fillText(gh.text,gh.x+6,gh.y+.5);
     }
   }
   function crossLines(hit){
@@ -639,11 +731,12 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     return out;
   }
   function tooltipLines(hit){
-    const ohlc=c=>['O '+fmt(c.o,dec)+'   H '+fmt(c.h,dec),'L '+fmt(c.l,dec)+'   C '+fmt(c.c,dec)];
+    const ohlc=(c,p=dec)=>['O '+fmt(c.o,p)+'   H '+fmt(c.h,p),'L '+fmt(c.l,p)+'   C '+fmt(c.c,p)];
     if(hit.bar){
       // Change is always against the previous candle's close. When that candle is not loaded (first loaded
       // candle, data gap) the line is left out, so the number never depends on where the history starts.
-      const b=hit.bar,prev=byT.get(b.t-tfMs),out=[stamp(b.t,tfMs)+(hit.forming?' · pågår':''),...ohlc(b)];
+      // Bybit's own prices, with its tick's decimals when known (the forming close is the last price's tag).
+      const b=hit.bar,prev=byT.get(b.t-tfMs),out=[stamp(b.t,tfMs)+(hit.forming?' · pågår':''),...ohlc(b,tickDec??dec)];
       if(prev)out.push('Förändring '+pct(b.c/prev.c-1));
       if(hit.compare)out.push('Prognos vs utfall: '+pct(hit.compare.error));
       // The marker sits on the candle that made the signal; the signal lists give the close that confirmed it.
@@ -661,6 +754,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     if(!tooltip)return;
     const lines=hit&&!drag?.moved?tooltipLines(hit):[];
     if(!lines.length){if(!tooltip.hidden)tooltip.hidden=true;return;}
+    tooltip.removeAttribute?.('data-state');
     const text=lines.join('\n');if(tooltip.textContent!==text)tooltip.textContent=text;
     tooltip.hidden=false;
     // Measured at the canvas's left edge: an absolutely placed box shrinks to the room right of where it stands, and its
@@ -684,13 +778,13 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     if(!d||vs.rightT===null){
       if(d){ctx.font=FONT;ctx.fillStyle=C.axisText;ctx.textAlign='center';ctx.textBaseline='middle';
         ctx.fillText(d.status?.state==='loading'?'Hämtar candles…':'Ingen kursdata ännu',W/2,H/2);}
-      badge(badgeBox());tip(null);return;
+      badge(badgeBox());placeHandles([],[]);tip(null);return;
     }
     computeRange();geometry();
     // A mouse or pen points; a tap on a touch screen pins the crosshair to its candle until the next tap.
-    const at=hover??(pinned?{x:cxOf(pinned.t),y:pinned.y}:null);
+    const at=lv?null:hover??(pinned?{x:cxOf(pinned.t),y:pinned.y}:null);
     const hit=at?hitAt(at.x,at.y):null,cross=hit?crossBox(hit):null;
-    const close=formingClose(finite(ts)?ts:clock()),tags=placeTags(close);
+    const list=shownLevels(),close=formingClose(finite(ts)?ts:clock()),tags=placeTags(close,list),ghosts=ghostTags(tags);
     // The "pågår" mark yields to the crosshair's time tag on or beside it, as level tags yield to its price tag: a
     // strip of it next to the time would read as part of it ("pågår 5 okt 18:00").
     let mark=formingBox();
@@ -703,7 +797,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     if(latest)forecastCandles();
     realCandles(close);
     if(d.showSignals!==false)signals();
-    if(d.showLevels!==false)levels();
+    if(d.showLevels!==false)levels(list);
     if(pick)pickedLevels();
     lastPrice(close);
     if(pick)pickedLabel();
@@ -712,10 +806,14 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     const badgeAt=badgeBox();
     if(latest)regionLabels(badgeAt);else noteLabel(badgeAt);
     axisTags(tags,cross);
+    drawGhosts(ghosts);
     formingTag(mark);
     if(cross)crossTags(cross);
     badge(badgeAt);
-    tip(hit);
+    placeHandles(tags,ghosts);
+    // A dragged level's note (an invalid zone's reason, or what a drop there does), else a tap's hint, else the tooltip.
+    const note=lv?.moved&&lv.view?.note?{text:lv.view.note,y:lv.y,bad:!lv.view.ok}:hint&&hint.until>clock()?hintBox(tags,ghosts):null;
+    if(note)callout(note.text,note.y,note.bad);else tip(hit);
     if(anim)invalidate();
   }
 
@@ -733,6 +831,138 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       compare:ref?{candle:ref.c,error:(ref.c.c-bar.c)/ref.base}:null};
   }
   function hitTest(x,y){measure();if(d)computeRange();return hitAt(x,y);}
+
+  // ---- Moving a position's stop and target ----------------------------------------------------------------
+  const pos=e=>{const r=canvas.getBoundingClientRect?.()??{left:0,top:0};return {x:e.clientX-r.left,y:e.clientY-r.top};};
+  const setCursor=c=>{if(canvas.style&&c!==cursor)canvas.style.cursor=cursor=c;};
+  const doc=()=>canvas.ownerDocument??null;
+  // The tags and ghost tags as the next frame places them, for a hit test between frames.
+  function layout(){
+    measure();
+    if(!d||vs.rightT===null||!editId())return {tags:[],ghosts:[]};
+    computeRange();
+    const tags=placeTags(shown?.c??forming?.c??null,shownLevels());
+    return {tags,ghosts:ghostTags(tags)};
+  }
+  const inBox=(p,b,pad=2)=>p.x>=b.x-pad&&p.x<=b.x+b.w+pad&&Math.abs(p.y-b.y)<=TAG_H/2+pad;
+  // The SL or TP a mouse or pen at p takes: by its ghost tag, its axis tag, or its line within LINE_HIT px.
+  function levelHit(p){
+    if(!editId()||lv||pending)return null;
+    const {tags,ghosts}=layout(),id=editId();
+    for(const gh of ghosts)if(inBox(p,gh))return gh.kind;
+    for(const t of tags)if(t.drag&&inBox(p,t))return t.drag;
+    if(p.x<plot.left||p.x>plot.right||p.y<plot.top||p.y>plot.bottom)return null;
+    let best=null,near=LINE_HIT+.5;
+    for(const l of levelList())if(l.edit===id&&EDITABLE.includes(l.kind)&&p.x>=startX(l)){
+      const dist=Math.abs(p.y-yOf(l.price));if(dist<near){near=dist;best=l.kind;}
+    }
+    return best;
+  }
+  const levelPrice=kind=>levelList().find(l=>l.edit===editId()&&l.kind===kind)?.price??null;
+  // offset: how far from the level's own line (a ghost tag's: the entry's line) the pointer took it, a tag nudged off
+  // its line included, so the level moves with the pointer instead of jumping to it. A line outside the plot counts from
+  // where its tag is drawn (pinned to the edge, or stacked on other pinned tags there; a ghost tag's beside the entry's),
+  // so the level comes into view under the pointer.
+  function startLevel(kind,pointerId,source,p,el=null,pointerType=null){
+    hint=null;hover=null;pinned=null;drag=null;
+    const price=levelPrice(kind),base=price??levelPrice('entry'),y=positive(base)?yOf(base):null;
+    let from=y;
+    if(y!==null&&(y<plot.top||y>plot.bottom)){
+      const {tags,ghosts}=layout(),tag=price===null?ghosts.find(g=>g.kind===kind)??tags.find(t=>t.anchor):tags.find(t=>t.drag===kind);
+      from=finite(tag?.y)?tag.y:clamp(y,plot.top+TAG_H/2,plot.bottom-TAG_H/2);
+    }
+    const offset=from===null?0:p.y-from;
+    lv={id:editId(),kind,pointerId,pointerType,source,el,start:p,offset,y:p.y-offset,moved:false,raw:price,price,text:null,view:null};
+    doc()?.addEventListener?.('keydown',escape,true);
+    setCursor('ns-resize');invalidate();
+  }
+  // The chart's own price precision: a level lands on a price its tag can show exactly.
+  const onGrid=x=>{const k=10**dec;return Math.round(x*k)/k;};
+  function moveLevel(p){
+    if(!lv.moved&&Math.abs(p.y-lv.start.y)<3)return;
+    lv.moved=true;lv.y=p.y-lv.offset;
+    // Past the top or the bottom of the plot (where the pointer is), the level is removed.
+    lv.raw=p.y<plot.top||p.y>plot.bottom?null:onGrid(priceAt(lv.y));
+    ask();invalidate();
+  }
+  // The editor's word on the level at lv.raw: the price it would be set to (Bybit's tick), its tag text, and a note.
+  function ask(){
+    let v=null;try{v=editor.preview({id:lv.id,kind:lv.kind,price:lv.raw});}catch{v=null;}
+    const name=LEVELS[lv.kind].name,ok=!!v?.ok,removing=lv.raw===null;
+    const note=typeof v?.note==='string'&&v.note?v.note:removing&&ok?'Släpp för att ta bort '+name:'';
+    lv.view={ok,note,text:typeof v?.text==='string'&&v.text?v.text:removing?'Ta bort '+name:name+' '+fmt(lv.raw,dec)};
+    lv.price=removing?null:positive(v?.price)?v.price:lv.raw;
+    lv.text=lv.view.text;
+  }
+  function escape(e){if(e.key==='Escape'&&lv){e.preventDefault?.();e.stopPropagation?.();cancelLevel('');}}
+  function release(){doc()?.removeEventListener?.('keydown',escape,true);setCursor('crosshair');}
+  // Back to the level as it was; a note (the reason a drop was refused) goes to the editor. `was`: the drag that ends,
+  // the one under way by default.
+  function cancelLevel(note,was=lv){
+    if(was===lv){lv=null;release();}
+    if(was&&note)try{editor.cancel?.({id:was.id,kind:was.kind,note});}catch{/* the page's problem */}
+    invalidate();
+  }
+  async function dropLevel(){
+    const was=lv;lv=null;release();
+    if(!was)return;
+    // A tap or click on a tag says what dragging it does.
+    if(!was.moved){
+      const name=LEVELS[was.kind].name;
+      hint={kind:was.kind,until:clock()+HINT_MS,text:was.price===null?'Dra uppåt eller nedåt för att sätta '+name+'.':
+        'Dra för att flytta '+name+'. Dra den ovanför eller under diagrammet för att ta bort den.'};
+      globalThis.setTimeout?.(invalidate,HINT_MS+50)?.unref?.();
+      invalidate();return;
+    }
+    if(!was.view?.ok){cancelLevel(was.view?.note||'',was);return;}
+    const job=pending={id:was.id,kind:was.kind,price:was.price,text:was.view.text};
+    invalidate();
+    try{await editor.commit({id:was.id,kind:was.kind,price:was.price,pointer:was.pointerType});}catch{/* the editor reports its own failures */}
+    if(pending===job){pending=null;invalidate();}
+  }
+  // Where a tap's hint points: at the tag or the ghost tag of its level.
+  function hintBox(tags,ghosts){
+    const at=tags.find(t=>t.drag===hint.kind)??ghosts.find(g=>g.kind===hint.kind);
+    return at?{text:hint.text,y:at.y,bad:false}:null;
+  }
+  // The tooltip as a note beside a level: right-aligned in the plot, over the level (under it near the top).
+  function callout(text,y,bad){
+    if(!tooltip)return;
+    if(tooltip.textContent!==text)tooltip.textContent=text;
+    tooltip.hidden=false;tooltip.setAttribute?.('data-state',bad?'bad':'note');
+    if(!tooltip.style)return;
+    tooltip.style.left=Math.round(canvas.offsetLeft||0)+'px';
+    const w=tooltip.offsetWidth||0,h=tooltip.offsetHeight||0,at=clamp(finite(y)?y:plot.top,plot.top,plot.bottom);
+    const top=at-TAG_H/2-6-h>=plot.top+4?at-TAG_H/2-6-h:Math.min(plot.bottom-4-h,at+TAG_H/2+6);
+    tooltip.style.left=Math.round((canvas.offsetLeft||0)+Math.max(plot.left+4,plot.right-8-w))+'px';
+    tooltip.style.top=Math.round((canvas.offsetTop||0)+Math.max(plot.top+4,top))+'px';
+  }
+  // Each handle covers its level's tag (or ghost tag), at least HANDLE_W × HANDLE_H px; it follows its own drag.
+  function placeHandles(tags,ghosts){
+    if(!handles)return;
+    const id=editId();
+    for(const kind of EDITABLE){
+      const el=handles[kind];if(!el)continue;
+      let box=null,state='';
+      if(lv&&lv.el===el){
+        state='drag';
+        box=tags.find(t=>t.state&&t.kind===kind)??{x:plot.right+1,w:Math.max(0,W-plot.right-2),y:clamp(lv.y,plot.top+TAG_H/2,plot.bottom-TAG_H/2)};
+      }else if(id&&!lv&&!pending){
+        const t=tags.find(x=>x.drag===kind),gh=ghosts.find(x=>x.kind===kind);
+        box=t??gh??null;state=t?'level':gh?'ghost':'';
+      }
+      if(!box){if(!el.hidden)el.hidden=true;continue;}
+      const w=Math.max(HANDLE_W,box.w+8),x=clamp(box.x+box.w/2-w/2,0,Math.max(0,W-w)),y=clamp(box.y-HANDLE_H/2,0,Math.max(0,H-HANDLE_H));
+      if(el.style){
+        const set=(k,v)=>{if(el.style[k]!==v)el.style[k]=v;};
+        set('left',Math.round((canvas.offsetLeft||0)+x)+'px');set('top',Math.round((canvas.offsetTop||0)+y)+'px');set('width',Math.round(w)+'px');set('height',HANDLE_H+'px');
+      }
+      if(el.getAttribute?.('data-state')!==state)el.setAttribute?.('data-state',state);
+      const name=LEVELS[kind].name,title=state==='ghost'?'Dra för att sätta '+name:'Dra för att flytta '+name+', ovanför eller under diagrammet för att ta bort den';
+      if(el.title!==title)el.title=title;
+      if(el.hidden)el.hidden=false;
+    }
+  }
 
   function snapshot(){
     measure();
@@ -796,6 +1026,13 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     clampView();invalidate();emit();return true;
   }
 
+  function wheel(e){
+    e.preventDefault?.();measure();
+    const p=pos(e),k=e.deltaMode===1?16:e.deltaMode===2?Math.max(1,H):1,dx=(e.deltaX||0)*k,dy=clamp((e.deltaY||0)*k,-200,200);
+    if(Math.abs(dx)>Math.abs(dy))panBy(-dx,0);
+    else if(p.x>plot.right)scalePrice(Math.exp(-dy*.0015));
+    else zoomAt(p.x,Math.exp(-dy*.0015));
+  }
   if(typeof canvas.addEventListener==='function'){
     const on=(type,fn,opts)=>{canvas.addEventListener(type,fn,opts);listeners.push([type,fn,opts]);};
     const pointers=new Map();let pinch=null,tap=null;
@@ -803,20 +1040,26 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     // scrolls the view around it, while sideways drags (pan, stretch) and pinches still arrive here.
     if(canvas.style)canvas.style.touchAction='pan-y';
     if(!(canvas.tabIndex>=0))canvas.tabIndex=0;
-    const pos=e=>{const r=canvas.getBoundingClientRect?.()??{left:0,top:0};return {x:e.clientX-r.left,y:e.clientY-r.top};};
     const zone=p=>p.x>plot.right?'price':p.y>plot.bottom?'time':'plot';
     const inPlot=p=>p.x>=plot.left&&p.x<=plot.right&&p.y>=plot.top&&p.y<=plot.bottom;
-    const setCursor=c=>{if(canvas.style&&c!==cursor)canvas.style.cursor=cursor=c;};
     on('pointerdown',e=>{
       if(e.pointerType==='mouse'&&e.button!==0)return;
       // No focus() here: the press focuses the canvas by itself, and a scripted focus would light the keyboard ring on every click.
-      measure();canvas.setPointerCapture?.(e.pointerId);
-      const p=pos(e);pointers.set(e.pointerId,p);
+      measure();
+      // One level at a time, and nothing else while it moves.
+      if(lv)return;
+      hint=null;
+      const p=pos(e),kind=e.pointerType==='touch'?null:levelHit(p);
+      canvas.setPointerCapture?.(e.pointerId);
+      // A mouse or pen on an SL or TP (its tag or its line) takes that level instead of the chart.
+      if(kind){startLevel(kind,e.pointerId,'canvas',p,null,e.pointerType);return;}
+      pointers.set(e.pointerId,p);
       if(pointers.size===1)drag={id:e.pointerId,start:p,last:p,moved:false,zone:zone(p),touch:e.pointerType==='touch'};
       else if(pointers.size===2){const [a,b]=[...pointers.values()];pinch={dist:Math.hypot(a.x-b.x,a.y-b.y),mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}};drag=pinned=null;}
     });
     on('pointermove',e=>{
       measure();const p=pos(e);
+      if(lv){if(lv.source==='canvas'&&lv.pointerId===e.pointerId)moveLevel(p);return;}
       if(pointers.has(e.pointerId))pointers.set(e.pointerId,p);
       if(pinch&&pointers.size===2){
         const [a,b]=[...pointers.values()],dist=Math.hypot(a.x-b.x,a.y-b.y),mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
@@ -849,10 +1092,15 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       // A finger shows the crosshair by a tap only, never under a moving finger.
       if(e.pointerType==='touch')return;
       const inside=inPlot(p);
-      if(!drag)setCursor(inside?'crosshair':p.x>plot.right?'ns-resize':'ew-resize');
+      // Over an SL or TP that can be moved, the pointer says it moves up and down.
+      if(!drag)setCursor(levelHit(p)||p.x>plot.right?'ns-resize':inside?'crosshair':'ew-resize');
       hover=inside?p:null;invalidate();
     });
     const end=e=>{
+      if(lv){
+        if(lv.source==='canvas'&&lv.pointerId===e.pointerId){canvas.releasePointerCapture?.(e.pointerId);if(e.type==='pointerup')void dropLevel();else cancelLevel('');}
+        return;
+      }
       const p=pos(e),touch=e.pointerType==='touch';
       if(e.type==='pointerup'&&touch&&drag?.id===e.pointerId&&!drag.moved){
         const at=clock();
@@ -876,16 +1124,11 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       invalidate();
     };
     on('pointerup',end);on('pointercancel',end);
-    on('pointerleave',()=>{if(!drag){hover=null;invalidate();}});
-    on('wheel',e=>{
-      e.preventDefault?.();measure();
-      const p=pos(e),k=e.deltaMode===1?16:e.deltaMode===2?Math.max(1,H):1,dx=(e.deltaX||0)*k,dy=clamp((e.deltaY||0)*k,-200,200);
-      if(Math.abs(dx)>Math.abs(dy))panBy(-dx,0);
-      else if(p.x>plot.right)scalePrice(Math.exp(-dy*.0015));
-      else zoomAt(p.x,Math.exp(-dy*.0015));
-    },{passive:false});
-    on('dblclick',e=>{e.preventDefault?.();measure();if(zone(pos(e)).startsWith('price'))autoPrice();else resetView();});
+    on('pointerleave',()=>{if(!drag&&!lv){hover=null;if(hint?.until>clock())hint=null;invalidate();}});
+    on('wheel',wheel,{passive:false});
+    on('dblclick',e=>{e.preventDefault?.();if(lv)return;measure();if(zone(pos(e)).startsWith('price'))autoPrice();else resetView();});
     on('keydown',e=>{
+      if(e.key==='Escape'&&lv){escape(e);return;}
       if(e.ctrlKey||e.metaKey||e.altKey)return;
       measure();
       const w=plot.right-plot.left,at=follow?plot.right:(plot.left+plot.right)/2;
@@ -895,14 +1138,42 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       e.preventDefault?.();act();
     });
   }
+  // The handles take any pointer that lands on them (a finger, and a mouse or pen over a tag); vertical drags there never
+  // scroll the page (touch-action none). A wheel over one works as over the canvas.
+  const handleListeners=[];
+  if(handles&&editing)for(const kind of EDITABLE){
+    const el=handles[kind];
+    if(!el||typeof el.addEventListener!=='function')continue;
+    if(el.style)el.style.touchAction='none';
+    el.hidden=true;
+    const add=(type,fn,opts)=>{el.addEventListener(type,fn,opts);handleListeners.push([el,type,fn,opts]);};
+    const own=e=>!!lv&&lv.el===el&&lv.pointerId===e.pointerId;
+    add('pointerdown',e=>{
+      if(e.pointerType==='mouse'&&e.button!==0||lv||pending||!editId())return;
+      e.preventDefault?.();measure();computeRange();
+      el.setPointerCapture?.(e.pointerId);
+      startLevel(kind,e.pointerId,'handle',pos(e),el,e.pointerType);
+    });
+    add('pointermove',e=>{if(own(e)){measure();moveLevel(pos(e));}});
+    add('pointerup',e=>{if(own(e)){el.releasePointerCapture?.(e.pointerId);void dropLevel();}});
+    add('pointercancel',e=>{if(own(e))cancelLevel('');});
+    add('wheel',wheel,{passive:false});
+  }
   const observer=typeof globalThis.ResizeObserver==='function'&&canvas.nodeType===1?new globalThis.ResizeObserver(()=>invalidate()):null;
   observer?.observe(canvas);
 
   function destroy(){
     destroyed=true;
+    if(lv){lv=null;release();}
     for(const [type,fn,opts] of listeners)canvas.removeEventListener?.(type,fn,opts);
-    listeners.length=0;observer?.disconnect();
+    for(const [el,type,fn,opts] of handleListeners){el.removeEventListener?.(type,fn,opts);el.hidden=true;}
+    listeners.length=0;handleListeners.length=0;observer?.disconnect();
     if(tooltip)tooltip.hidden=true;
   }
-  return {setData,render:()=>draw(clock()),resize:()=>draw(clock()),zoomAt,panBy,scalePrice,resetView,autoPrice,scrollToLatest,reveal,destroy,view:snapshot,hitTest};
+  // The level being moved or saved, if any: {kind, price (null: removed), state:'drag'|'bad'|'pending', text}.
+  function levelState(){
+    if(lv)return Object.freeze({kind:lv.kind,price:lv.price,state:lv.view&&!lv.view.ok?'bad':'drag',text:lv.text??null});
+    return pending?Object.freeze({kind:pending.kind,price:pending.price,state:'pending',text:pending.text}):null;
+  }
+  return {setData,render:()=>draw(clock()),resize:()=>draw(clock()),zoomAt,panBy,scalePrice,resetView,autoPrice,scrollToLatest,reveal,destroy,view:snapshot,hitTest,levelState};
 }

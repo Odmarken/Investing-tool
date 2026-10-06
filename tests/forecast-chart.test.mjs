@@ -609,6 +609,25 @@ test('pointer, wheel and keyboard interactions pan, zoom, scale and reset the vi
   assert.deepEqual([v().rightT,v().follow],[anchor,true]);
 });
 
+test('with Bybit\'s tick (setData\'s tick) the last price\'s tag and a real candle\'s prices have its decimals, as the page writes the price now; a forecast keeps the chart\'s',()=>{
+  const tooltip={hidden:false,textContent:'',style:{},offsetWidth:150,offsetHeight:70},frames=[];
+  const d=scene(),{chart,calls,fire}=setup({listeners:true,tooltip,raf:fn=>frames.push(fn)});
+  const hover=t=>{fire('pointermove',{clientX:centre(chart,t),clientY:150});frames.shift()(16);return tooltip.textContent.split('\n');};
+  // Without the tick: the chart's whole dollars.
+  chart.setData(d);frames.shift()(0);
+  assert.ok(texts(calls).includes(sv(d.forming.c,0)));assert.equal(hover(d.forming.t)[2],`L ${sv(d.forming.l,0)}   C ${sv(d.forming.c,0)}`);
+  // BTC's 0,10 $ tick: the last price's tag and the forming candle's close read alike, with its tenth.
+  calls.length=0;chart.setData({...d,tick:1});frames.shift()(0);
+  assert.ok(texts(calls).includes(sv(d.forming.c,1)),texts(calls).join(' | '));assert.ok(!texts(calls).includes(sv(d.forming.c,0)));
+  const live=hover(d.forming.t),b=d.bars[117],real=hover(b.t);
+  assert.equal(live[2],`L ${sv(d.forming.l,1)}   C ${sv(d.forming.c,1)}`);assert.equal(real[1],`O ${sv(b.o,1)}   H ${sv(b.h,1)}`);
+  // A forecast candle is no price Bybit traded at: the chart's decimals, as the axis.
+  const c=d.latest.forecast.candles[4];
+  assert.equal(hover(c.t)[1],`O ${sv(c.o,0)}   H ${sv(c.h,0)}`);
+  // Nonsense is ignored.
+  calls.length=0;chart.setData({...d,tick:-1});frames.shift()(0);assert.ok(texts(calls).includes(sv(d.forming.c,0)));
+});
+
 test('the tooltip uses textContent for real candles, forecast slots and forecast vs outcome',()=>{
   const tooltip={hidden:false,textContent:'',style:{},offsetWidth:150,offsetHeight:70},frames=[];
   const d=scene(),compare=makeRecord(d.bars,{at:115,id:'older'}),{chart,fire}=setup({listeners:true,tooltip,raf:fn=>frames.push(fn)});
@@ -1016,4 +1035,315 @@ test('reveal brings a candle far back into view a third from the left, like a pa
   chart.setData(sceneFrom(makeBars(121)));assert.equal(chart.view().rightT,v.rightT);
   chart.scrollToLatest();assert.equal(chart.view().follow,true);
   assert.equal(chart.reveal(NaN),false);
+});
+
+// ---- Moving a position's SL and TP ----------------------------------------------------------------------------------
+// A page element over the canvas, as the chart sees a handle: style, hidden, attributes, title and its own listeners.
+function fakeHandle(){
+  return {hidden:false,style:{},title:'',attrs:new Map(),handlers:{},captured:null,
+    addEventListener(type,fn){(this.handlers[type]??=[]).push(fn);},removeEventListener(type,fn){this.handlers[type]=(this.handlers[type]??[]).filter(f=>f!==fn);},
+    setAttribute(k,v){this.attrs.set(k,String(v));},getAttribute(k){return this.attrs.get(k)??null;},
+    setPointerCapture(id){this.captured=id;},releasePointerCapture(){this.captured=null;},
+    fire(type,e={}){for(const fn of this.handlers[type]??[])fn({preventDefault(){},pointerId:7,pointerType:'touch',button:0,...e,type});},
+    box(){const n=k=>parseFloat(this.style[k]);return {x:n('left'),y:n('top'),w:n('width'),h:n('height'),cx:n('left')+n('width')/2,cy:n('top')+n('height')/2};}};
+}
+// A tooltip with the attribute calls the chart makes while it explains a drag.
+const noteBox=()=>({hidden:true,textContent:'',style:{},offsetWidth:160,offsetHeight:36,attrs:new Map(),
+  setAttribute(k,v){this.attrs.set(k,String(v));},removeAttribute(k){this.attrs.delete(k);},getAttribute(k){return this.attrs.get(k)??null;}});
+// A long position's lines as the page passes them (each carries the position's id as edit), entry 85 300.
+function editable({sl=85000,tp=85750,over={}}={}){
+  const d=scene(),from=d.bars[110].t,mine=(kind,price,label)=>price===null?[]:[{kind,price,from,label,edit:'p1'}];
+  return {...d,levels:[...mine('entry',85300,'Entry'),...mine('sl',sl,'SL'),...mine('tp',tp,'TP'),...mine('liq',84600,'Likv.')],edit:'p1',...over};
+}
+// An editor that takes a stop under 85 400 and a target over it, on whole dollars; commit answers with `settle`.
+function editorStub({settle=null}={}){
+  const log={previews:[],commits:[],cancels:[]};
+  const editor={
+    preview:({id,kind,price})=>{
+      log.previews.push({id,kind,price});
+      if(price===null)return {ok:true,price:null,text:'Ta bort '+kind.toUpperCase()};
+      const p=Math.round(price),ok=kind==='sl'?p<85400:p>85400;
+      return {ok,price:p,text:kind.toUpperCase()+' '+sv(p,0)+(ok?' · −1,00 $':''),note:ok?'':'fel sida om priset'};
+    },
+    commit:x=>{log.commits.push(x);return settle??Promise.resolve({ok:true});},
+    cancel:x=>{log.cancels.push(x);}};
+  return {editor,log};
+}
+function editSetup({width=800,height=400,editor=null,handles=null,tooltip=null}={}){
+  const f=fakeCanvas({width,height,listeners:true});
+  return {...f,chart:createForecastChart(f.canvas,{tooltip,raf:null,dpr:1,reducedMotion:true,editor,handles})};
+}
+// The y of a price (the price scale falls as y grows), found through hitTest.
+function yAt(chart,price,x=300){
+  const v=chart.view();let lo=v.plot.top,hi=v.plot.bottom;
+  for(let k=0;k<60;k++){const m=(lo+hi)/2;if(chart.hitTest(x,m).price>price)lo=m;else hi=m;}
+  return (lo+hi)/2;
+}
+const tagAt=(calls,text)=>calls.find(k=>k.op==='fillText'&&k.text===text);
+// Right of the position's opening candle, where its lines run.
+const X=650;
+const turn=()=>new Promise(r=>setImmediate(r));
+
+test('a mouse drags an editable position\'s SL by its line: a dashed preview with the editor\'s text follows the pointer, and the dropped level stays until its commit settles',async()=>{
+  let done;const settle=new Promise(r=>{done=r;});
+  const {editor,log}=editorStub({settle}),{chart,calls,fire,canvas}=editSetup({editor});
+  chart.setData(editable());chart.render();
+  const y=yAt(chart,85000),to=yAt(chart,84900),before=chart.view();
+  // Over the line (±6 px) the pointer says the level moves up and down; further away it is the crosshair again.
+  fire('pointermove',{clientX:X,clientY:y+4});assert.equal(canvas.style.cursor,'ns-resize');
+  fire('pointermove',{clientX:X,clientY:y+30});assert.equal(canvas.style.cursor,'crosshair');
+  // Left of the opening candle there is no line to take.
+  fire('pointermove',{clientX:300,clientY:y});assert.equal(canvas.style.cursor,'crosshair');
+  // Taken 4 px below its line, the level keeps that distance to the pointer.
+  fire('pointerdown',{clientX:X,clientY:y+4});fire('pointermove',{clientX:X,clientY:to+4});
+  calls.length=0;chart.render();
+  // The editor is asked about the price where the level is now, at the chart's precision (whole dollars here).
+  assert.deepEqual(log.previews.at(-1),{id:'p1',kind:'sl',price:84900});
+  const tag='SL '+sv(84900,0)+' · −1,00 $';
+  assert.ok(tagAt(calls,tag),texts(calls).join(' | '));assert.equal(tagAt(calls,'SL '+sv(85000,0)),undefined,'the old tag gives way to the dragged one');
+  const line=calls.find(k=>k.op==='stroke'&&k.stroke===C.sl&&k.dash.join()==='3,3');
+  assert.ok(line,'a short-dashed preview line');near(line.path[0][2],to,1);
+  // Its tag is outlined in the level's colour on the dark tag fill, as a picked signal's.
+  const i=calls.indexOf(tagAt(calls,tag));assert.equal(calls.slice(0,i).findLast(k=>k.op==='fill').fill,'#283240');
+  assert.deepEqual(chart.levelState(),{kind:'sl',price:84900,state:'drag',text:tag});
+  fire('pointerup',{clientX:X,clientY:to+4});
+  assert.deepEqual(log.commits,[{id:'p1',kind:'sl',price:84900,pointer:'mouse'}]);
+  // Nothing else moved: no pan, and the prices stay automatic.
+  assert.deepEqual([chart.view().rightT,chart.view().price,chart.view().follow],[before.rightT,null,true]);
+  // While it is saved the line stays where it was dropped.
+  calls.length=0;chart.render();
+  assert.ok(tagAt(calls,tag));assert.equal(chart.levelState().state,'pending');
+  // The runner wrote it: the page's data has the new level, then the commit settles and the plain line is drawn.
+  chart.setData(editable({sl:84900}));done({ok:true});await turn();
+  assert.equal(chart.levelState(),null);
+  calls.length=0;chart.render();assert.ok(tagAt(calls,'SL '+sv(84900,0)));assert.equal(tagAt(calls,tag),undefined);
+});
+
+test('a mouse drags a TP by its axis tag; when the commit fails the data still has the old level and the line goes back',async()=>{
+  const {editor,log}=editorStub({settle:Promise.resolve({ok:false})}),{chart,calls,fire}=editSetup({editor});
+  chart.setData(editable());chart.render();
+  const k=tagAt(calls,'TP '+sv(85750,0)),v=chart.view();
+  assert.ok(k.args[0]>v.plot.right,'the tag is on the price axis');
+  const to=k.args[1]+yAt(chart,85900)-yAt(chart,85750);
+  fire('pointerdown',{clientX:k.args[0]+4,clientY:k.args[1]});fire('pointermove',{clientX:k.args[0]+4,clientY:to});
+  fire('pointerup',{clientX:k.args[0]+4,clientY:to});
+  assert.deepEqual(log.commits,[{id:'p1',kind:'tp',price:85900,pointer:'mouse'}]);
+  await turn();
+  assert.equal(chart.levelState(),null);
+  calls.length=0;chart.render();assert.ok(tagAt(calls,'TP '+sv(85750,0)),'back where it was');
+});
+
+test('a missing SL or TP has a ghost tag beside the entry tag that creates it by dragging; a click only says how',()=>{
+  const tooltip=noteBox(),{editor,log}=editorStub(),{chart,calls,fire}=editSetup({editor,tooltip});
+  chart.setData(editable({sl:null,tp:null}));chart.render();
+  const entry=tagAt(calls,'Entry '+sv(85300,0)),sl=tagAt(calls,'+ SL'),tp=tagAt(calls,'+ TP');
+  assert.ok(entry&&sl&&tp,texts(calls).join(' | '));
+  // On the entry tag's line, just left of it: "+ SL" then "+ TP".
+  assert.ok(sl.args[0]<tp.args[0]&&tp.args[0]<entry.args[0]);near(sl.args[1],entry.args[1],.01);near(tp.args[1],entry.args[1],.01);
+  // Each in a dashed outline of its level's colour.
+  const outline=t=>calls.slice(0,calls.indexOf(t)).findLast(k=>k.op==='stroke');
+  assert.equal(outline(sl).stroke,C.sl);assert.deepEqual(outline(sl).dash,[3,2]);assert.equal(outline(tp).stroke,C.tp);
+  // A click explains, and changes nothing.
+  fire('pointerdown',{clientX:sl.args[0]+2,clientY:sl.args[1]});fire('pointerup',{clientX:sl.args[0]+2,clientY:sl.args[1]});chart.render();
+  assert.equal(tooltip.textContent,'Dra uppåt eller nedåt för att sätta SL.');assert.equal(tooltip.getAttribute('data-state'),'note');assert.deepEqual(log.commits,[]);
+  // Dragged down from the ghost tag the stop is set, from the entry's line by as much as the pointer moved; its ghost is
+  // gone while it is dragged.
+  const down=sl.args[1]+yAt(chart,85100)-yAt(chart,85300);
+  fire('pointerdown',{clientX:sl.args[0]+2,clientY:sl.args[1]});fire('pointermove',{clientX:sl.args[0]+2,clientY:down});
+  calls.length=0;chart.render();
+  assert.ok(tagAt(calls,'SL '+sv(85100,0)+' · −1,00 $'));assert.equal(tagAt(calls,'+ SL'),undefined);assert.ok(tagAt(calls,'+ TP'));
+  fire('pointerup',{clientX:sl.args[0]+2,clientY:down});
+  assert.deepEqual(log.commits,[{id:'p1',kind:'sl',price:85100,pointer:'mouse'}]);
+});
+
+test('dragged past the top or the bottom of the plot a level is removed: the line goes, the note says so, and the drop commits a missing level',async()=>{
+  let done;const settle=new Promise(r=>{done=r;});
+  const tooltip=noteBox(),{editor,log}=editorStub({settle}),{chart,calls,fire}=editSetup({editor,tooltip});
+  chart.setData(editable());chart.render();
+  const k=tagAt(calls,'TP '+sv(85750,0)),v=chart.view();
+  fire('pointerdown',{clientX:k.args[0]+4,clientY:k.args[1]});fire('pointermove',{clientX:k.args[0]+4,clientY:v.plot.top-12});
+  calls.length=0;chart.render();
+  assert.deepEqual(log.previews.at(-1),{id:'p1',kind:'tp',price:null});
+  assert.ok(!texts(calls).some(t=>/^TP /.test(t)),'no target line or tag');assert.ok(!calls.some(c=>c.op==='stroke'&&c.stroke===C.tp&&c.path.length===2));
+  // The editor gave no note for it, so the chart says what a drop does.
+  assert.equal(tooltip.textContent,'Släpp för att ta bort TP');assert.equal(tooltip.getAttribute('data-state'),'note');assert.equal(tooltip.hidden,false);
+  fire('pointerup',{clientX:k.args[0]+4,clientY:v.plot.top-12});
+  assert.deepEqual(log.commits,[{id:'p1',kind:'tp',price:null,pointer:'mouse'}]);
+  // Saved without it, then a ghost "+ TP" takes its place.
+  chart.setData(editable({tp:null}));done({ok:true});await turn();
+  calls.length=0;chart.render();assert.ok(tagAt(calls,'+ TP'));
+  // Below the plot (the time axis) removes too.
+  const s=tagAt(calls,'SL '+sv(85000,0));
+  fire('pointerdown',{clientX:s.args[0]+4,clientY:s.args[1]});fire('pointermove',{clientX:s.args[0]+4,clientY:v.plot.bottom+8});fire('pointerup',{clientX:s.args[0]+4,clientY:v.plot.bottom+8});
+  assert.deepEqual(log.commits.at(-1),{id:'p1',kind:'sl',price:null,pointer:'mouse'});
+});
+
+test('in an invalid zone the tag turns red with the editor\'s reason beside it; a drop there goes back and hands the reason on, and Esc cancels a drag',()=>{
+  const tooltip=noteBox(),{editor,log}=editorStub(),{chart,calls,fire}=editSetup({editor,tooltip});
+  chart.setData(editable());chart.render();
+  const y=yAt(chart,85000),up=yAt(chart,85500);
+  fire('pointerdown',{clientX:X,clientY:y});fire('pointermove',{clientX:X,clientY:up});
+  calls.length=0;chart.render();
+  const bad=tagAt(calls,'⚠ SL '+sv(85500,0));
+  assert.ok(bad,texts(calls).join(' | '));assert.equal(bad.fill,'#ffa79f','light red text');
+  assert.equal(calls.slice(0,calls.indexOf(bad)).findLast(k=>k.op==='stroke').stroke,C.down,'a red outline');
+  assert.ok(calls.some(k=>k.op==='stroke'&&k.stroke===C.down&&k.dash.join()==='3,3'),'a red dashed line');
+  assert.equal(tooltip.textContent,'fel sida om priset');assert.equal(tooltip.getAttribute('data-state'),'bad');
+  assert.equal(chart.levelState().state,'bad');
+  fire('pointerup',{clientX:X,clientY:up});
+  assert.deepEqual(log.commits,[]);assert.deepEqual(log.cancels,[{id:'p1',kind:'sl',note:'fel sida om priset'}]);
+  assert.equal(chart.levelState(),null);
+  calls.length=0;chart.render();assert.ok(tagAt(calls,'SL '+sv(85000,0)),'back where it was');
+  // Esc in the middle of a drag: back, nothing committed, and the release that follows does nothing.
+  fire('pointerdown',{clientX:X,clientY:y});fire('pointermove',{clientX:X,clientY:yAt(chart,84950)});
+  assert.equal(chart.levelState().state,'drag');
+  fire('keydown',{key:'Escape'});
+  assert.equal(chart.levelState(),null);
+  fire('pointerup',{clientX:X,clientY:yAt(chart,84950)});
+  assert.deepEqual(log.commits,[]);assert.equal(log.cancels.length,1);
+  calls.length=0;chart.render();assert.ok(tagAt(calls,'SL '+sv(85000,0)));
+});
+
+test('the handles cover the SL and TP tags (or their ghost tags) with touch-action none, so a finger drags a level while the canvas leaves vertical swipes to the page',async()=>{
+  const handles={sl:fakeHandle(),tp:fakeHandle()},{editor,log}=editorStub(),{chart,calls,canvas}=editSetup({editor,handles});
+  assert.deepEqual([handles.sl.style.touchAction,handles.tp.style.touchAction,canvas.style.touchAction],['none','none','pan-y']);
+  assert.deepEqual([handles.sl.hidden,handles.tp.hidden],[true,true],'hidden before there is anything to move');
+  chart.setData(editable({tp:null}));chart.render();
+  const sl=tagAt(calls,'SL '+sv(85000,0)),ghost=tagAt(calls,'+ TP'),a=handles.sl.box(),b=handles.tp.box();
+  assert.deepEqual([handles.sl.hidden,handles.tp.hidden,handles.sl.getAttribute('data-state'),handles.tp.getAttribute('data-state')],[false,false,'level','ghost']);
+  // At least 44 × 36 px for a finger, centred on the tag it covers.
+  assert.ok(a.w>=44&&a.h===36&&b.w>=44&&b.h===36);near(a.cy,sl.args[1],1);near(b.cy,ghost.args[1],1);
+  assert.ok(a.x<=sl.args[0]&&a.x+a.w>=sl.args[0]+6*sl.text.length,'over the whole tag');
+  assert.match(handles.sl.title,/^Dra för att flytta SL/);assert.equal(handles.tp.title,'Dra för att sätta TP');
+  // A finger's vertical drag on the SL handle moves the stop.
+  handles.sl.fire('pointerdown',{clientX:a.cx,clientY:a.cy});
+  assert.equal(handles.sl.captured,7,'the handle holds the pointer');
+  const finger=a.cy+yAt(chart,84800)-yAt(chart,85000);
+  handles.sl.fire('pointermove',{clientX:a.cx,clientY:finger});
+  assert.equal(chart.levelState().price,84800);
+  handles.sl.fire('pointerup',{clientX:a.cx,clientY:finger});
+  assert.deepEqual(log.commits,[{id:'p1',kind:'sl',price:84800,pointer:'touch'}]);
+  // While it is saved no other level can be taken.
+  const busy=handles.tp.box();handles.tp.fire('pointerdown',{clientX:busy.cx,clientY:busy.cy,pointerId:8});assert.equal(chart.levelState().state,'pending');
+  await turn();
+  // A cancelled touch (the browser took it over) commits nothing.
+  chart.setData(editable({tp:null}));chart.render();
+  const c=handles.tp.box();
+  handles.tp.fire('pointerdown',{clientX:c.cx,clientY:c.cy});handles.tp.fire('pointermove',{clientX:c.cx,clientY:yAt(chart,85900)});handles.tp.fire('pointercancel');
+  assert.equal(chart.levelState(),null);assert.equal(log.commits.length,1);
+  // Nothing to move: no editable position, or the levels hidden.
+  chart.setData(scene());chart.render();assert.deepEqual([handles.sl.hidden,handles.tp.hidden],[true,true]);
+  chart.setData(editable({over:{showLevels:false}}));calls.length=0;chart.render();
+  assert.deepEqual([handles.sl.hidden,handles.tp.hidden],[true,true]);assert.equal(tagAt(calls,'+ TP'),undefined);
+  // destroy() takes the handles' listeners away.
+  chart.destroy();assert.equal(Object.values(handles.sl.handlers).flat().length+Object.values(handles.tp.handlers).flat().length,0);
+});
+
+test('a level taken off its line (low on its handle, or by a tag nudged away from it) moves as far as the pointer does, never jumping to it',()=>{
+  const handles={sl:fakeHandle(),tp:fakeHandle()},{editor,log}=editorStub(),{chart,calls}=editSetup({editor,handles});
+  chart.setData(editable());chart.render();
+  // A finger 14 px below the middle of the SL handle, moved 4 px down: the stop moves 4 px, not 18.
+  const y0=yAt(chart,85000),a=handles.sl.box();near(a.cy,y0,1);
+  handles.sl.fire('pointerdown',{clientX:a.cx,clientY:a.cy+14});handles.sl.fire('pointermove',{clientX:a.cx,clientY:a.cy+18});
+  near(yAt(chart,chart.levelState().price),y0+4,.5);
+  handles.sl.fire('pointercancel');assert.equal(chart.levelState(),null);
+  // A stop 10 $ under the entry: its tag is nudged below the entry's, away from its own line. Taken by the middle of that
+  // tag and moved 4 px down, the stop moves 4 px from its line.
+  chart.setData(editable({sl:85290}));calls.length=0;chart.render();
+  const tag=tagAt(calls,'SL '+sv(85290,0)),line=yAt(chart,85290);
+  assert.ok(tag.args[1]-line>10,'the tag sits '+(tag.args[1]-line)+' px below its line');
+  const b=handles.sl.box();near(b.cy,tag.args[1],1);
+  handles.sl.fire('pointerdown',{clientX:b.cx,clientY:b.cy});handles.sl.fire('pointermove',{clientX:b.cx,clientY:b.cy+4});
+  near(yAt(chart,chart.levelState().price),line+4,.5);
+  handles.sl.fire('pointerup',{clientX:b.cx,clientY:b.cy+4});
+  assert.equal(log.commits.at(-1).price,chart.levelState().price);
+});
+
+test('a level outside the prices in view is pinned to the edge; dragged by its tag, its handle or a ghost tag beside a pinned entry, it comes to the pointer',()=>{
+  // A target far above the prices in view: its tag sits at the top of the price axis with an arrow.
+  const {editor,log}=editorStub(),{chart,calls,fire}=editSetup({editor});
+  chart.setData(editable({tp:90000}));chart.render();
+  const pinned=tagAt(calls,'▲ TP '+sv(90000,0));
+  assert.ok(pinned,texts(calls).join(' | '));assert.ok(pinned.args[1]<chart.view().plot.top+18,'at the top edge');
+  // Taken by that tag and dropped where 85 600 is drawn, the target is set there, not 90 000 less the distance moved.
+  const to=yAt(chart,85600);
+  fire('pointerdown',{clientX:pinned.args[0]+4,clientY:pinned.args[1]});fire('pointermove',{clientX:pinned.args[0]+4,clientY:to});
+  near(yAt(chart,chart.levelState().price),to,1.5);
+  calls.length=0;chart.render();
+  const tag='TP '+sv(chart.levelState().price,0)+' · −1,00 $';
+  assert.ok(tagAt(calls,tag),texts(calls).join(' | '));assert.ok(!texts(calls).some(t=>t.startsWith('▲ TP')),'no longer pinned');
+  fire('pointerup',{clientX:pinned.args[0]+4,clientY:to});
+  assert.deepEqual(log.commits.at(-1),{id:'p1',kind:'tp',price:chart.levelState().price,pointer:'mouse'});
+  // A finger on its handle: the target comes as far as the finger moves, from where its tag is drawn.
+  const handles={sl:fakeHandle(),tp:fakeHandle()},touch=editSetup({editor,handles});
+  touch.chart.setData(editable({tp:90000}));touch.chart.render();
+  const edge=tagAt(touch.calls,'▲ TP '+sv(90000,0)).args[1]-.5,b=handles.tp.box();
+  handles.tp.fire('pointerdown',{clientX:b.cx,clientY:b.cy});handles.tp.fire('pointermove',{clientX:b.cx,clientY:to});
+  near(yAt(touch.chart,touch.chart.levelState().price),edge+to-b.cy,1.5);
+  assert.ok(touch.chart.levelState().price<86000,'in view');
+  handles.tp.fire('pointercancel');
+  // An entry far below the prices in view: "+ SL" beside its pinned tag sets the stop where it is dropped.
+  const d=scene(),from=d.bars[110].t,mine=(kind,price,label)=>({kind,price,from,label,edit:'p1'}),ghost=editSetup({editor});
+  ghost.chart.setData({...d,levels:[mine('entry',80000,'Entry'),mine('tp',85750,'TP')],edit:'p1'});ghost.chart.render();
+  const plus=tagAt(ghost.calls,'+ SL');
+  assert.ok(tagAt(ghost.calls,'▼ Entry '+sv(80000,0))&&plus,texts(ghost.calls).join(' | '));
+  const down=yAt(ghost.chart,85000);
+  ghost.fire('pointerdown',{clientX:plus.args[0]+2,clientY:plus.args[1]});ghost.fire('pointermove',{clientX:plus.args[0]+2,clientY:down});
+  near(yAt(ghost.chart,ghost.chart.levelState().price),down,1.5);
+  ghost.fire('pointerup',{clientX:plus.args[0]+2,clientY:down});
+  assert.deepEqual(log.commits.at(-1),{id:'p1',kind:'sl',price:ghost.chart.levelState().price,pointer:'mouse'});
+  assert.ok(Math.abs(log.commits.at(-1).price-85000)<20,String(log.commits.at(-1).price));
+});
+
+test('a pinned tag stacked on others at the edge, or a ghost tag beside a stacked entry, brings its level to the pointer from where that tag is drawn',()=>{
+  // An entry, a stop and a liquidation far below the prices in view: their tags stack up from the bottom edge, the entry's
+  // two tag heights above it, the stop's one.
+  const d=scene(),from=d.bars[110].t,mine=(kind,price,label)=>({kind,price,from,label,edit:'p1'}),{editor,log}=editorStub(),{chart,calls,fire}=editSetup({editor});
+  chart.setData({...d,levels:[mine('entry',80000,'Entry'),mine('sl',79000,'SL'),mine('liq',78000,'Likv.')],edit:'p1'});chart.render();
+  const edge=chart.view().plot.bottom-9,entry=tagAt(calls,'▼ Entry '+sv(80000,0)),sl=tagAt(calls,'▼ SL '+sv(79000,0)),plus=tagAt(calls,'+ TP');
+  assert.ok(entry&&sl&&tagAt(calls,'▼ Likv. '+sv(78000,0))&&plus,texts(calls).join(' | '));
+  near(edge-(sl.args[1]-.5),19,.01,'the stop one tag above the edge');near(edge-(entry.args[1]-.5),38,.01,'the entry two');near(plus.args[1],entry.args[1],.01);
+  // Taken by its stacked tag and moved to where 85 100 is drawn, the stop is set there, not 19 px under the pointer.
+  const down=yAt(chart,85100);
+  fire('pointerdown',{clientX:sl.args[0]+4,clientY:sl.args[1]});fire('pointermove',{clientX:sl.args[0]+4,clientY:down});
+  near(yAt(chart,chart.levelState().price),down,1.5,'the stop');
+  fire('pointerup',{clientX:sl.args[0]+4,clientY:down});
+  assert.deepEqual(log.commits.at(-1),{id:'p1',kind:'sl',price:chart.levelState().price,pointer:'mouse'});
+  assert.ok(Math.abs(log.commits.at(-1).price-85100)<20,String(log.commits.at(-1).price));
+  // "+ TP" beside the stacked entry tag: the target comes to the pointer, not 38 px under it.
+  const ghost=editSetup({editor});
+  ghost.chart.setData({...d,levels:[mine('entry',80000,'Entry'),mine('sl',79000,'SL'),mine('liq',78000,'Likv.')],edit:'p1'});ghost.chart.render();
+  const tp=tagAt(ghost.calls,'+ TP'),up=yAt(ghost.chart,85600);
+  ghost.fire('pointerdown',{clientX:tp.args[0]+2,clientY:tp.args[1]});ghost.fire('pointermove',{clientX:tp.args[0]+2,clientY:up});
+  near(yAt(ghost.chart,ghost.chart.levelState().price),up,1.5,'the target');
+  ghost.fire('pointerup',{clientX:tp.args[0]+2,clientY:up});
+  assert.ok(Math.abs(log.commits.at(-1).price-85600)<20&&log.commits.at(-1).kind==='tp',JSON.stringify(log.commits.at(-1)));
+});
+
+test('while a level is dragged the prices hold still and new data asks the preview again; a position that closes ends the drag',()=>{
+  const {editor,log}=editorStub(),{chart,fire}=editSetup({editor});
+  chart.setData(editable());chart.render();
+  const y=yAt(chart,85000),to=yAt(chart,84900);
+  fire('pointerdown',{clientX:X,clientY:y});fire('pointermove',{clientX:X,clientY:to});
+  const asked=log.previews.length,before=chart.hitTest(300,to).price;
+  // A new candle far outside the visible prices would move the automatic range; it does not while the level is held.
+  const d=editable(),last=d.bars.at(-1),wild={...d,forming:{...d.forming,h:last.c+3000,c:last.c+2900}};
+  chart.setData(wild);chart.render();
+  assert.equal(chart.hitTest(300,to).price,before);assert.equal(log.previews.length,asked+1,'asked again on the new data');
+  // The position closes (no editable position any more): the drag ends and nothing is committed.
+  chart.setData({...wild,edit:null});
+  assert.equal(chart.levelState(),null);fire('pointerup',{clientX:X,clientY:to});assert.deepEqual(log.commits,[]);
+});
+
+test('without an editor, or for lines no position owns, nothing is draggable and a press on a line pans as before',()=>{
+  const {chart,calls,fire}=editSetup();
+  chart.setData(editable());chart.render();
+  assert.equal(tagAt(calls,'+ SL'),undefined);
+  const y=yAt(chart,85000),r0=chart.view().rightT;
+  fire('pointerdown',{clientX:X,clientY:y});fire('pointermove',{clientX:X+40,clientY:y});fire('pointerup',{clientX:X+40,clientY:y});
+  assert.ok(chart.view().rightT<r0,'panned');assert.equal(chart.levelState(),null);
+  const {editor,log}=editorStub(),other=editSetup({editor});
+  other.chart.setData({...editable(),edit:'p2'});other.chart.render();
+  other.fire('pointerdown',{clientX:X,clientY:yAt(other.chart,85000)});other.fire('pointermove',{clientX:X,clientY:yAt(other.chart,84900)});other.fire('pointerup',{clientX:X,clientY:yAt(other.chart,84900)});
+  assert.deepEqual(log.commits,[]);
 });

@@ -5,19 +5,31 @@
 // overwritten. Signals are built exactly as the runner builds them, so both make
 // the same record: the same id, content and contentHash. Only recordedAt and
 // origin can differ, and the record stored first stands. Every account change
-// goes through the runner, which keeps trading in crypto mode when the view is
-// hidden. Demo only: public market data through the page's grab(), no orders.
+// goes through the runner, which keeps the account's protection (and its
+// auto-trading, when on) running in crypto mode while the view is hidden. The
+// user trades by hand from the order ticket at the top right (market orders in
+// isolated margin, as Bybit fills them) and moves a position's SL and TP by
+// dragging them on the chart; the account terminal under the chart
+// (forecast-terminal.js) shows the money, the positions and the history. Demo
+// only: public market data through the page's grab(), no orders to Bybit.
 import {TF,CHART_TFS,SYMBOLS,SIGNAL_PARAMS,FORECAST_PARAMS} from './forecast-config.js';
 import {requiredLookback,computeIndicators,aggregateClosed,evaluateBar,signalsInRange,forecastFeatures,forecastAt} from './forecast-model.js';
 import {createForecastStore,defaultBackend,signalRecord,forecastRecord} from './forecast-store.js';
 import {createLiveSeries,dataStatus,fetchHistory,fetchFunding,splitForming} from './forecast-market.js';
 import {createForecastChart,CHART_COLORS,REGIME_LABELS,keepNumbers,priceDecimals,comparisonStats} from './forecast-chart.js';
 import {createForecastRunner} from './forecast-runner.js';
-import {ACCOUNT,SETTING_LIMITS,accountStats,tradeReasons} from './forecast-account.js';
+import {ACCOUNT,SETTING_LIMITS,accountStats,stepDecimals,levelDecimals} from './forecast-account.js';
 import {walkForwardSteps,DEV_END} from './forecast-backtest.js';
-import {createContractCache} from './bybit-contracts.js';
+import {createContractCache,roundPrice} from './bybit-contracts.js';
+import {mountTerminal,terminalFigures} from './forecast-terminal.js';
 
 const PREFS='riptide.forecast.ui.v1',HISTORY=2000,HORIZONS=Object.freeze([5,10,20]),BACKFILL=Object.freeze([20,10,5]);
+// The order ticket's choices per browser: the stake as typed, the leverage per coin and whether an order is confirmed
+// first. A new ticket starts at a 10 $ stake and Bybit's default 10×; LEVEL_MSG_MS: how long a level change's result stays.
+const TICKET='riptide.forecast.ticket.v1',STAKE='10',LEVERAGE=10,CHIPS=Object.freeze([10,25,50]),LEVEL_MSG_MS=10000;
+// MKT_ROOM: the share by which the price may fall between Max and the order's fill while the quantity a Max stake buys
+// stays within Bybit's largest market order (a lower price buys more for the same stake).
+const MKT_ROOM=.005;
 const LEVERAGES=Object.freeze(['max',1,2,3,5,10,20,50]),EVAL_BARS=12000,VERSIONS_SHOWN=300,OLDER='older';
 // A chart read still open after STUCK_MS never settles (a stalled response body has no deadline; a slow
 // two-page load through the proxies can take about 45 s); an archive call gets ARCHIVE_MS before it fails.
@@ -52,6 +64,7 @@ const MONTHS=['jan','feb','mar','apr','maj','jun','jul','aug','sep','okt','nov',
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
+const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
 const dated=t=>finite(t)&&Math.abs(t)<=DATE_MAX;
 // Browser errors arrive in English ('Failed to fetch', an aborted request, a proxy's HTML page read as
 // JSON, blocked or full storage); the page speaks Swedish.
@@ -86,6 +99,26 @@ const signedPct=(x,d=1)=>finite(x)?signed(x*100,d,'\xa0%'):'–';
 const price=(x,dec)=>finite(x)?fixed(x,Number.isInteger(dec)?dec:priceDecimals(x)):'–';
 const tone=x=>!finite(x)||Math.abs(x)<.005?'':x>0?'pos':'neg';
 const leverageText=v=>v==='max'?'Bybit max':fixed(v,Number.isInteger(v)?0:2)+'×';
+// An amount as typed in the ticket: digits with a decimal comma or point, spaces between the thousands allowed
+// ("1 000,50"). Anything else, a sign included, is NaN, which the preview refuses with its reason.
+function amount(text){
+  const s=String(text??'').replace(/[\s\u00a0\u202f]/g,'').replace(',','.');
+  return /^(\d+(\.\d*)?|\.\d+)$/.test(s)?Number(s):NaN;
+}
+// A number for an input field: a decimal comma, no thousands separators.
+const field=(x,d)=>x.toFixed(d).replace('.',',');
+// The two sides' reasons as one when they differ only in their figures (a buy fills a little higher than a sell), each
+// differing figure as the range of the two: 'Otillräckligt tillgängligt saldo: 504,21–504,25 $ behövs, 92,94 $ finns'.
+// null when they say different things.
+const FIGURE=/\d+(?:[\u00a0\u202f ]\d{3})*(?:,\d+)?/g;
+function mergedReason(a,b){
+  const ta=a.split(FIGURE),tb=b.split(FIGURE),na=a.match(FIGURE)??[],nb=b.match(FIGURE)??[];
+  if(ta.length!==tb.length||na.length!==nb.length||ta.some((x,i)=>x!==tb[i]))return null;
+  const value=x=>Number(x.replace(/[\u00a0\u202f ]/g,'').replace(',','.'));
+  return ta.map((x,i)=>i<na.length?x+(na[i]===nb[i]?na[i]:value(na[i])<=value(nb[i])?na[i]+'–'+nb[i]:nb[i]+'–'+na[i]):x).join('');
+}
+// A quantity in Bybit's own steps (0,001 BTC; 10 000 SHIB), trailing zeros left out.
+const quantity=(x,step)=>x.toLocaleString('sv-SE',{maximumFractionDigits:finite(step)&&step>0?stepDecimals(step):8});
 // The model's display rule for a value that misses a limit, so a check shows the same number as the
 // explanation line: ADX 17,96 under 18 reads 17,9, never 18.
 function below(x,limit,dec){
@@ -134,19 +167,19 @@ export function checkText(c,e,dec,params=SIGNAL_PARAMS){
 
 /**
  * Level lines for the chart. An open AI Forecast position on this symbol shows
- * its entry, SL, TP and liquidation. Without one, the latest stored signal of
- * the series shows entry, SL and TP only while it is still live: fewer than
- * maxHold candles have closed since it was confirmed, all of them are loaded,
- * and none of them touched its SL or TP. Decided signals get no lines.
- * bars: closed candles of the chart's series.
+ * its entry, SL, TP and liquidation; each of its lines carries the position's
+ * id as `edit`, and a manual position's missing SL or TP has no line. Without
+ * one, the latest stored signal of the series shows entry, SL and TP only while
+ * it is still live: fewer than maxHold candles have closed since it was
+ * confirmed, all of them are loaded, and none of them touched its SL or TP.
+ * Decided signals get no lines. bars: closed candles of the chart's series.
  */
 export function chartLevels({symbol,tf,positions=[],signals=[],bars=[],params=SIGNAL_PARAMS}={}){
   const T=TF[tf];if(!T)return [];
   const held=(Array.isArray(positions)?positions:[]).filter(p=>p?.symbol===symbol);
   if(held.length)return held.flatMap(p=>{
-    const from=Math.floor(p.openedAt/T.ms)*T.ms;
-    return [{kind:'entry',price:p.entry,from,label:'Entry'},{kind:'sl',price:p.sl,from,label:'SL'},{kind:'tp',price:p.tp,from,label:'TP'},
-      ...(p.liq>0?[{kind:'liq',price:p.liq,from,label:'Likv.'}]:[])];
+    const from=Math.floor(p.openedAt/T.ms)*T.ms,line=(kind,price,label)=>finite(price)&&price>0?[{kind,price,from,label,edit:p.id}]:[];
+    return [...line('entry',p.entry,'Entry'),...line('sl',p.sl,'SL'),...line('tp',p.tp,'TP'),...line('liq',p.liq,'Likv.')];
   });
   const list=(Array.isArray(signals)?signals:[]).filter(s=>s&&s.symbol===symbol&&s.tf===tf&&finite(s.barTime)&&(s.side==='long'||s.side==='short'));
   const s=list.reduce((a,b)=>!a||b.barTime>a.barTime?b:a,null),last=Array.isArray(bars)?bars.at(-1):null;
@@ -157,17 +190,44 @@ export function chartLevels({symbol,tf,positions=[],signals=[],bars=[],params=SI
   return [{kind:'entry',price:s.entry,from:s.barTime,label:'Entry'},{kind:'sl',price:s.sl,from:s.barTime,label:'SL'},{kind:'tp',price:s.tp,from:s.barTime,label:'TP'}];
 }
 
+// The order ticket: auto-trading on or off, the stake (margin) and the leverage for the chart's coin, a market buy and
+// sell with what each would open, and the result of the last order. Its texts are set with textContent. The two switches
+// come first, as phones show them, then the order itself. Each side shows its value, Bybit's order cost (what it takes
+// from the free cash) and its liquidation price; the shared line the quantity, the margin and the opening fee. A phone has
+// room for the liquidation price only under each button, so its shared line takes the value and the cost (CSS).
+function ticketHtml(){
+  return `<section class="fc-ticket" data-fc-ticket aria-labelledby="fcTicketTitle" tabindex="-1">
+    <h2 class="fc-sr" id="fcTicketTitle">Order i demokontot</h2>
+    <div class="fc-tk-auto"><span class="fc-tk-cap" id="fcAutoCap">Auto-handel</span>
+      <button type="button" class="fc-switch" role="switch" aria-checked="false" aria-labelledby="fcAutoCap" data-fc-auto><i aria-hidden="true"></i><span data-fc-auto-text>Av</span></button></div>
+    <label class="fc-tk-confirm"><input type="checkbox" data-fc-confirm> Bekräfta order</label>
+    <div class="fc-tk-stake"><label class="fc-tk-cap" for="fcStake">Insats (marginal)</label>
+      <div class="fc-tk-row"><span class="fc-tk-box"><input id="fcStake" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-fc-stake aria-describedby="fcTkShared"><span aria-hidden="true">$</span></span>
+        <span class="fc-tk-chips" role="group" aria-label="Insats av tillgängligt saldo">${CHIPS.map(k=>`<button type="button" data-fc-stake-pct="${k}" aria-label="${k} procent av tillgängligt saldo">${k}\xa0%</button>`).join('')}<button type="button" data-fc-stake-pct="max" aria-label="Max: hela tillgängliga saldot med plats för avgifterna att öppna och stänga, för både köp och sälj, inom Bybits största marknadsorder">Max</button></span></div></div>
+    <div class="fc-tk-lev"><label class="fc-tk-cap" for="fcLev">Hävstång</label><span class="fc-tk-hint" id="fcLevHint" data-fc-lev-hint><span data-fc-lev-hint-text aria-hidden="true"></span><span class="fc-sr" data-fc-lev-hint-full></span></span>
+      <div class="fc-tk-row"><input type="range" class="fc-tk-range" data-fc-lev-range min="1" max="100" step="1" value="10" aria-label="Hävstång, reglage" aria-describedby="fcLevHint">
+        <span class="fc-tk-box fc-tk-x"><input id="fcLev" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" data-fc-lev aria-describedby="fcLevHint"><span aria-hidden="true">×</span></span></div></div>
+    ${['long','short'].map(side=>`<div class="fc-tk-side fc-tk-${side}"><button type="button" class="fc-tk-btn" data-fc-order="${side}" aria-describedby="fcTk-${side} fcTkShared fcTkWhy">${side==='long'?'Köp / Lång':'Sälj / Kort'}</button>`+
+      `<p class="fc-tk-est" id="fcTk-${side}" data-fc-est="${side}"><span class="fc-tk-wide" data-fc-est-value></span><span class="fc-tk-wide" data-fc-est-cost></span><span data-fc-est-liq></span></p></div>`).join('')}
+    <div class="fc-tk-info" data-fc-info><p class="fc-tk-shared" id="fcTkShared" data-fc-shared><span class="fc-tk-wide" data-fc-shared-wide></span><span class="fc-tk-narrow" data-fc-shared-narrow></span></p>
+      <p class="fc-tk-msg" data-fc-ticket-msg role="status" aria-live="polite"></p><p class="fc-tk-why" id="fcTkWhy" data-fc-why></p></div>
+  </section>`;
+}
 function skeleton(){
   // The forecast swatch takes the chart's own fill, so the legend always shows what the canvas draws.
   const swatch=(cls,color,text)=>`<li><i class="fc-sw ${cls}" style="--c:${color}" aria-hidden="true"></i>${text}</li>`;
   return `<div class="fc-shell">
+  <div class="fc-top">
   <header class="fc-head">
     <div class="fc-titles"><div class="fc-eyebrow">RIPTIDE / KRYPTO / AI FORECAST</div><h1 id="forecastTitle" tabindex="-1">AI Forecast</h1></div>
     <div class="fc-quote"><span class="fc-pair" data-fc-pair></span><b class="fc-last" data-fc-last>–</b></div>
     <span class="fc-pill" data-fc-pill data-state="idle"><i aria-hidden="true"></i><span class="fc-sr">Datastatus: </span><span data-fc-pill-text>Hämtar…</span></span>
-    <a class="fc-btn fc-back" href="#"><span aria-hidden="true">←</span><span class="fc-back-text">Tillbaka till signaler</span></a>
+    <a class="fc-btn fc-back" href="#" title="Tillbaka till signaler"><span aria-hidden="true">←</span><span class="fc-back-text">Tillbaka till signaler</span></a>
   </header>
+  ${ticketHtml()}
+  </div>
   <p class="fc-banner" data-fc-banner hidden></p><p class="fc-sr" data-fc-announce role="status" aria-live="polite"></p>
+  <p class="fc-sr" data-fc-terminal-announce role="status" aria-live="polite"></p>
   <div class="fc-toolbar" role="toolbar" aria-label="Diagraminställningar">
     <label class="fc-field fc-symbol"><span>Par</span><select data-fc-symbol>${SYMBOLS.map(s=>`<option value="${s}">${s}</option>`).join('')}</select></label>
     <div class="fc-group fc-tf"><span class="fc-cap" id="fcTfCap">Tidsram</span><div class="fc-seg" role="group" aria-labelledby="fcTfCap">${CHART_TFS.map(k=>`<button type="button" data-fc-tf="${k}" aria-pressed="false">${TF[k].label}</button>`).join('')}</div></div>
@@ -181,10 +241,14 @@ function skeleton(){
         <label class="fc-field fc-compare"><span>Jämför med</span><select data-fc-compare disabled><option value="">Ingen sparad prognos ännu</option></select></label>
         <div class="fc-chips" data-fc-chips role="group" aria-label="Tidigare prognoser med utfall" hidden></div>
       </div>
-      <div class="fc-canvas-wrap" data-fc-canvas-wrap><canvas data-fc-canvas tabindex="0" role="img" aria-label="Candlestick-diagram"></canvas><div class="fc-tooltip" data-fc-tooltip hidden></div><p class="fc-chart-note" data-fc-chart-note hidden></p></div>
+      <div class="fc-canvas-wrap" data-fc-canvas-wrap><canvas data-fc-canvas tabindex="0" role="img" aria-label="Candlestick-diagram"></canvas>
+        <div class="fc-handle" data-fc-handle="sl" aria-hidden="true" hidden></div><div class="fc-handle" data-fc-handle="tp" aria-hidden="true" hidden></div>
+        <div class="fc-tooltip" data-fc-tooltip hidden></div><p class="fc-chart-note" data-fc-chart-note hidden></p>
+        <p class="fc-level-msg" data-fc-level-msg role="status" aria-live="polite"></p></div>
       <ul class="fc-legend" aria-label="Teckenförklaring">${swatch('body',C.up,'Stigande')}${swatch('body',C.down,'Fallande')}${swatch('body',C.fcFill,'Prognos (scenario)')}${swatch('band',C.band50,'50\xa0%/80\xa0%-band (spridning)')}${swatch('dash',C.median,'Median')}${swatch('outline',C.fcOutline,'Jämförd prognos (kontur)')}
         <li><span class="fc-tri" style="--c:${C.up}" aria-hidden="true">▲</span>Köp <span class="fc-tri" style="--c:${C.down}" aria-hidden="true">▼</span>Sälj</li>
         <li><i class="fc-sw line" style="--c:${C.entry}" aria-hidden="true"></i>Entry <i class="fc-sw dash" style="--c:${C.sl}" aria-hidden="true"></i>SL <i class="fc-sw dash" style="--c:${C.tp}" aria-hidden="true"></i>TP <i class="fc-sw dot" style="--c:${C.liq}" aria-hidden="true"></i>Likv.</li></ul>
+      <section class="fc-terminal" data-fc-terminal aria-label="Kontoterminal"></section>
     </section>
     <aside class="fc-side" aria-label="Signal, prognos och demokonto">
       <section class="fc-card" aria-labelledby="fcSignalTitle"><h2 id="fcSignalTitle">Signal · senaste stängda candle</h2><div data-fc-signal></div>
@@ -193,9 +257,10 @@ function skeleton(){
       <section class="fc-card" aria-labelledby="fcAccountTitle"><h2 id="fcAccountTitle" tabindex="-1">Demokonto · AI Forecast</h2>
         <div data-fc-account></div>
         <p class="fc-msg" data-fc-account-msg role="status" aria-live="polite"></p>
-        <div class="fc-actions"><button type="button" class="fc-btn" data-fc-pause>⏸ Pausa nya affärer</button><button type="button" class="fc-btn fc-danger" data-fc-reset title="Arkivera kontot och börja om med 100 $">Återställ kontot</button></div>
+        <div class="fc-actions"><button type="button" class="fc-btn" data-fc-pause>⏸ Pausa nya signalaffärer</button><button type="button" class="fc-btn fc-danger" data-fc-reset title="Arkivera kontot och börja om med 100 $">Återställ kontot</button></div>
         <form class="fc-settings" data-fc-settings novalidate>
-          <h3>Inställningar</h3>
+          <h3>Auto-handel · inställningar för signalaffärer</h3>
+          <p class="fc-muted">Gäller bara affärer som auto-handeln öppnar på signalerna. Dina egna order tar insats och hävstång från orderrutan.</p>
           <div class="fc-form-grid">
             <label><span>Positionsstorlek</span><small>marginal, % av kapitalet</small><input type="number" name="positionPct" min="${SETTING_LIMITS.positionPct[0]*100}" max="${SETTING_LIMITS.positionPct[1]*100}" step="1" inputmode="decimal"></label>
             <label><span>Risk per affär</span><small>% av kapitalet</small><input type="number" name="riskPct" min="${SETTING_LIMITS.riskPct[0]*100}" max="${SETTING_LIMITS.riskPct[1]*100}" step="0.1" inputmode="decimal"></label>
@@ -242,12 +307,13 @@ function markBusy(x,busy){if(busy)x.setAttribute('aria-disabled','true');else x.
 
 /**
  * mountForecast(root,{getUser,isActive,isVisible,grab,contracts,storage,store,locks,now,confirm,raf})
- *   → {show(),hide(),refreshLive(),renderSummary(el)}
- * Also injectable: runner, createChart, prefs (storage for the UI choices), defer (yield to the page),
- * reducedMotion, archiveTimeout (ms) and versions (how many forecast versions a read of the archive lists,
- * newest first, and how many more each "Visa äldre versioner" adds).
+ *   → {show(),hide(),refreshLive(),renderSummary(el),destroy()}
+ * Also injectable: runner, createChart, mountTerminal (the account terminal's mount, forecast-terminal.js by default),
+ * prefs (storage for the UI choices), defer (yield to the page), reducedMotion, archiveTimeout (ms) and versions (how
+ * many forecast versions a read of the archive lists, newest first, and how many more each "Visa äldre versioner" adds).
  * refreshLive() is meant to run every 5 s while the view is mounted: it always ticks the runner, and polls
- * and draws the chart only while the view is shown.
+ * and draws the chart only while the view is shown. destroy() tears the view down: the terminal, the chart and
+ * every listener, and the runner stops reading the chart's coin for the ticket.
  */
 export function mountForecast(root,deps={}){
   const {getUser=()=>null,isActive=()=>true,isVisible=null,grab,storage,locks,now=()=>Date.now(),
@@ -260,13 +326,24 @@ export function mountForecast(root,deps={}){
   const limits=deps.contracts??(typeof grab==='function'?createContractCache(grab,now):null);
   const store=bounded(deps.store??createForecastStore(defaultBackend(globalThis)),archiveTimeout);
   const runner=deps.runner??createForecastRunner({grab,storage,store,locks,now,getUser:uid,isActive,contracts:limits,onChange:()=>paint()});
+  // The manual-trading part of the runner, absent from a runner stand-in: a missing method leaves its control disabled.
+  const can=name=>typeof runner?.[name]==='function';
 
   // UI choices per browser; optional, so every access is guarded.
   const prefStore=()=>{try{return prefs??globalThis.localStorage??null;}catch{return null;}};
-  const saved=(()=>{try{const v=JSON.parse(prefStore()?.getItem(PREFS)??'null');return v&&typeof v==='object'?v:{};}catch{return {};}})();
+  const readPref=key=>{try{const v=JSON.parse(prefStore()?.getItem(key)??'null');return v&&typeof v==='object'&&!Array.isArray(v)?v:{};}catch{return {};}};
+  const saved=readPref(PREFS);
   const view={symbol:SYMBOLS.includes(saved.symbol)?saved.symbol:'BTC',tf:CHART_TFS.includes(saved.tf)?saved.tf:'1h',
     horizon:HORIZONS.includes(saved.horizon)?saved.horizon:10,band:saved.band!==false,signals:saved.signals!==false,levels:saved.levels!==false};
   const savePrefs=()=>{try{prefStore()?.setItem(PREFS,JSON.stringify(view));}catch{/* the choices are optional */}};
+  // The ticket's own choices: the stake as typed, a leverage per coin, and whether an order is confirmed first (on by default).
+  const keptTicket=readPref(TICKET);
+  const ticket={stake:typeof keptTicket.stake==='string'&&keptTicket.stake.length<=24?keptTicket.stake:STAKE,confirm:keptTicket.confirm!==false,
+    lev:Object.fromEntries(SYMBOLS.map(s=>[s,keptTicket.lev?.[s]]).filter(([,v])=>finite(v)&&v>=1&&v<=SETTING_LIMITS.leverage[1]))};
+  const saveTicket=()=>{try{prefStore()?.setItem(TICKET,JSON.stringify(ticket));}catch{/* the choices are optional */}};
+  // The UI prefs as storage, for the terminal's own choices (its collapsed state).
+  const prefStorage=Object.freeze({getItem:key=>{try{return prefStore()?.getItem(key)??null;}catch{return null;}},
+    setItem:(key,value)=>{try{prefStore()?.setItem(key,value);}catch{/* the choices are optional */}}});
 
   root.innerHTML=skeleton();
   const q=s=>root.querySelector(s);
@@ -275,7 +352,17 @@ export function mountForecast(root,deps={}){
     chartNote:q('[data-fc-chart-note]'),announce:q('[data-fc-announce]'),signal:q('[data-fc-signal]'),forecast:q('[data-fc-forecast]'),account:q('[data-fc-account]'),
     accountMsg:q('[data-fc-account-msg]'),pause:q('[data-fc-pause]'),reset:q('[data-fc-reset]'),form:q('[data-fc-settings]'),
     settingsMsg:q('[data-fc-settings-msg]'),evalPair:q('[data-fc-eval="pair"]'),evalAll:q('[data-fc-eval="portfolio"]'),
-    progress:q('[data-fc-eval-progress]'),evalAnnounce:q('[data-fc-eval-announce]'),result:q('[data-fc-eval-result]'),accountTitle:q('#fcAccountTitle')};
+    progress:q('[data-fc-eval-progress]'),evalAnnounce:q('[data-fc-eval-announce]'),result:q('[data-fc-eval-result]'),
+    auto:q('[data-fc-auto]'),autoText:q('[data-fc-auto-text]'),stake:q('[data-fc-stake]'),stakeChips:root.querySelectorAll('[data-fc-stake-pct]'),
+    lev:q('[data-fc-lev]'),range:q('[data-fc-lev-range]'),levHint:q('[data-fc-lev-hint]'),levHintText:q('[data-fc-lev-hint-text]'),levHintFull:q('[data-fc-lev-hint-full]'),
+    buy:q('[data-fc-order="long"]'),sell:q('[data-fc-order="short"]'),
+    est:Object.fromEntries(['long','short'].map(side=>{const box=q(`[data-fc-est="${side}"]`);
+      return [side,{value:box.querySelector('[data-fc-est-value]'),cost:box.querySelector('[data-fc-est-cost]'),liq:box.querySelector('[data-fc-est-liq]')}];})),
+    shared:q('[data-fc-shared]'),sharedWide:q('[data-fc-shared-wide]'),sharedNarrow:q('[data-fc-shared-narrow]'),
+    why:q('[data-fc-why]'),ticketMsg:q('[data-fc-ticket-msg]'),info:q('[data-fc-info]'),
+    confirmBox:q('[data-fc-confirm]'),ticket:q('[data-fc-ticket]'),levelMsg:q('[data-fc-level-msg]'),terminal:q('[data-fc-terminal]'),
+    terminalAnnounce:q('[data-fc-terminal-announce]')};
+  el.stake.value=ticket.stake;el.confirmBox.checked=ticket.confirm;
 
   // polling: the chart read in flight ({at}); pass: the archive pass in flight ({my,user}); kept: the series
   // hidden last, reused when the same coin and timeframe are shown again.
@@ -289,7 +376,10 @@ export function mountForecast(root,deps={}){
   let picked=null,revealed=null;
   // done: the last closed candle evaluated for signals on reliable data; tried: the cutoff last tried for a forecast.
   let done=null,tried=null,backfill=false,forecastNote='',opened=null,choice=null,warnings=new Map(),failures={},shownPrice=null,flash=null;
-  let summaryEl=null,announced=null,closing=null,acting=false,saving=false,dirty=false,filled=null,evalRun=null,evalResult=null,evalToken=0,uiUser;
+  let summaryEl=null,announced=null,acting=false,saving=false,dirty=false,filled=null,evalRun=null,evalResult=null,evalToken=0,uiUser;
+  // ordering: the side of the order on its way; switching: auto-trading being switched; ended: the view was torn down.
+  // levelOf: the id of the open position the level message over the chart speaks of, or null.
+  let ordering=null,switching=false,levelTimer=null,levelOf=null,ended=false;
   // archive: where the store keeps records ({kind,note}), asked on every load until it has answered.
   let archive=null,asking=false;
   const evalCache=new Map();
@@ -304,8 +394,19 @@ export function mountForecast(root,deps={}){
   let parked=null;
   const chartRaf=raf?fn=>{if(visible)raf(fn);else parked=fn;}:null;
   let chart=null;
-  try{chart=createChart(el.canvas,{tooltip:el.tooltip,raf:chartRaf,reducedMotion});}
+  // The chart moves the shown position's SL and TP: it previews a level through the runner and commits it on a drop.
+  const editor={preview:({id,kind,price})=>previewLevel(id,kind,price),commit:({id,kind,price,pointer})=>commitLevel(id,kind,price,pointer),
+    cancel:({id,note})=>{if(note)levelMsg(note,true,id);}};
+  const handles={sl:q('[data-fc-handle="sl"]'),tp:q('[data-fc-handle="tp"]')};
+  try{chart=createChart(el.canvas,{tooltip:el.tooltip,raf:chartRaf,reducedMotion,editor,handles});}
   catch(e){el.chartNote.hidden=false;el.chartNote.textContent='Diagrammet kan inte ritas här: '+reasonOf(e);}
+  // The account terminal under the chart: mounted once, updated with every paint, destroyed with the view.
+  let terminal=null;
+  try{
+    const mount=typeof deps.mountTerminal==='function'?deps.mountTerminal:mountTerminal;
+    terminal=mount(el.terminal,{runner,now,confirm,prefs:prefStorage,announce:text=>{el.terminalAnnounce.textContent=bind(text);}});
+  }catch(e){terminal=null;el.terminal.textContent='Kontoterminalen kan inte visas här: '+reasonOf(e);}
+  const updateTerminal=()=>{try{terminal?.update?.();}catch{/* the terminal shows its own problems */}};
 
   // Re-renders a region only when its HTML changed, and keeps keyboard focus on the same control.
   function patch(node,html){
@@ -315,16 +416,17 @@ export function mountForecast(root,deps={}){
     node.innerHTML=html;node.__fcHtml=html;
     if(key)for(const x of node.querySelectorAll('[data-fc-key]'))if(x.getAttribute('data-fc-key')===key){x.focus?.({preventScroll:true});break;}
   }
-  // A control is disabled while its action runs, and a browser then drops keyboard focus to the page.
-  // When the action ends, focus returns to that control (or, when it is gone, to `fallback`) unless the
-  // user has moved on.
+  // A control that is disabled or removed when its action ends drops keyboard focus to the page. When the action ends,
+  // focus returns to that control (or, when it is gone or disabled, to `fallback`) unless the user has moved on. A
+  // browser can still report a control it has just disabled or removed as the focused one until its next frame (Chrome
+  // does), so such a control counts as having lost focus.
   function holdFocus(fallback=null){
     const doc=root.ownerDocument??globalThis.document,from=doc?.activeElement;
     if(!from||!root.contains?.(from))return ()=>{};
     const key=from.getAttribute?.('data-fc-key');
     return ()=>{
       const at=doc.activeElement;
-      if(!visible||at&&at!==doc.body)return;
+      if(!visible||at&&at!==doc.body&&!at.disabled&&at.isConnected!==false)return;
       const again=root.contains(from)?from:key?[...root.querySelectorAll('[data-fc-key]')].find(x=>x.getAttribute('data-fc-key')===key):null;
       (again&&!again.disabled?again:fallback)?.focus?.({preventScroll:true});
     };
@@ -569,6 +671,18 @@ export function mountForecast(root,deps={}){
   const pickedRecord=()=>picked?recentSignals().find(r=>r.id===picked)??null:null;
   const lastCandle=()=>{const st=series?.state();return st?st.forming??st.bars.at(-1)??null:null;};
   const decimals=()=>priceDecimals(lastCandle()?.c);
+  // The decimals of a coin's price tick on Bybit, from the limits the runner holds, kept once seen (a tick does not change)
+  // as the terminal keeps them; null until then. Executed and risk prices and the price now are written with them, as the
+  // terminal and the order's result line write them (85 283,7 on BTC, 0,000004305 on PEPE).
+  const ticks=new Map();
+  function tickOf(symbol){
+    const f=can('limits')?read(()=>runner.limits(symbol))?.filters:null;
+    if(finite(f?.tickSize)&&f.tickSize>0)ticks.set(symbol,stepDecimals(f.tickSize));
+    return ticks.get(symbol)??null;
+  }
+  // A stop or a target as the runner and the terminal write it once the tick is known (levelDecimals: the chart's decimals
+  // for a price of its size, more where it has them, never more than the tick: nine on PEPE, not the chart's ten).
+  const levelPlaces=(x,symbol)=>{const tick=tickOf(symbol);return tick===null?decimals():levelDecimals(x,tick);};
   // 'Data t.o.m.' is the cutoff candle's close; on 4h and daily candles it always carries its date.
   const dataEnd=(r,t)=>when(r.cutoffClose,t,{date:(TF[r.tf]?.ms??0)>=4*HOUR});
   // The data end first: it tells versions apart, while backfills made together share their creation time.
@@ -579,7 +693,8 @@ export function mountForecast(root,deps={}){
   const PAUSE=/ — nya demoaffärer pausade$/;
   function chartStatus(){
     const account=read(()=>runner.status()),text=String(status.text??'').replace(PAUSE,''),symbol=series?.symbol??view.symbol;
-    const paused=Array.isArray(account?.unreliable)&&account.unreliable.includes(symbol);
+    // Only auto-trading takes signal entries, so with it off nothing is paused.
+    const paused=account?.auto!==false&&Array.isArray(account?.unreliable)&&account.unreliable.includes(symbol);
     return {text:paused?text+' — nya demoaffärer i '+symbol+' pausade':text,paused,account};
   }
   function render(){
@@ -590,7 +705,8 @@ export function mountForecast(root,deps={}){
     // An open row whose signal has left the five newest (a newer one was stored) leaves no row to close: the pick is
     // dropped, and a chart moved to its candle returns to the latest data, as closing the row would.
     const back=picked&&!pickedRecord()?unpick():false;
-    paintHeader();paintToolbar();paintChart();paintSignal();paintForecast();paintAccount();paintEval();
+    paintHeader();paintTicket();paintToolbar();paintChart();paintSignal();paintForecast();paintAccount();paintEval();
+    updateTerminal();
     if(back)chart?.scrollToLatest();
   }
   // The runner's onChange (the account changed or a tick ended) and the end of every refreshLive.
@@ -607,11 +723,11 @@ export function mountForecast(root,deps={}){
     const first=uiUser===undefined;uiUser=user;
     if(first)return;
     dirty=false;filled=null;evalToken++;evalRun=null;evalResult=null;evalCache.clear();
-    accountMsg('',false);settingsMsg('',false);el.progress.textContent='';el.evalAnnounce.textContent='';
+    accountMsg('',false);settingsMsg('',false);ticketMsg('',false);levelMsg('',false);el.progress.textContent='';el.evalAnnounce.textContent='';
     patch(el.account,'');patch(el.result,'');fillSettings(ACCOUNT.defaults);
   }
   function paintHeader(){
-    const T=TF[view.tf],last=lastCandle(),p=last?.c,dec=decimals();
+    const T=TF[view.tf],last=lastCandle(),p=last?.c,dec=tickOf(series?.symbol??view.symbol)??decimals();
     el.pair.textContent=view.symbol+' · USDT-perp · '+T.label;
     el.last.textContent=finite(p)?fixed(p,dec):'–';
     if(finite(p)&&finite(shownPrice)&&p!==shownPrice&&!reducedMotion()){
@@ -648,6 +764,8 @@ export function mountForecast(root,deps={}){
     el.chips.hidden=!ready.length;
   }
   function paintChart(){
+    // A level change's result speaks of its position: once that has closed (its SL or TP, a liquidation or Stäng) it goes.
+    if(levelOf!==null&&!positionOf(levelOf))levelMsg('',false);
     // The chart's frame turns amber with the status pill while the data is not live.
     el.wrap?.classList.toggle('fc-stale',!status.reliable&&status.state!=='loading');
     if(!chart)return;
@@ -655,11 +773,21 @@ export function mountForecast(root,deps={}){
     if(!st){chart.setData(null);return;}
     const account=read(()=>runner.account()),latest=forecasts.at(-1)??null,pick=pickedRecord();
     // A picked signal's own levels replace the live lines of that same signal, never doubled; a position's stay.
-    const same=l=>!!pick&&l.from===pick.barTime&&l.kind!=='liq'&&l.price===pick[l.kind];
-    const levels=chartLevels({symbol:s.symbol,tf:s.tf,positions:account?.positions??[],signals,bars:st.bars}).filter(l=>!same(l));
+    const same=l=>!!pick&&l.from===pick.barTime&&l.kind!=='liq'&&l.price===pick[l.kind]&&l.edit===undefined;
+    const positions=Array.isArray(account?.positions)?account.positions:[];
+    // The signed-in user moves the shown coin's position's SL and TP on the chart.
+    const held=positions.find(p=>p.symbol===s.symbol),edit=held&&uid()&&can('setLevels')&&can('quoteLevels')?held.id:null;
+    // With Bybit's tick known, the position's entry and liquidation tags have its decimals, the figures the terminal shows,
+    // and its SL and TP read as the runner and the terminal write them (levelDecimals): finer than the chart's price
+    // precision where the tick is (69 090,4 on BTC), never finer than the tick (nine decimals on PEPE). The last price's
+    // tag has the tick's decimals too, as the header and Positioner's Pris.
+    const tick=tickOf(s.symbol);
+    const exact=l=>!held||tick===null||l.edit!==held.id?l:l.kind==='entry'||l.kind==='liq'?{...l,text:l.label+' '+fixed(l.price,tick)}:
+      l.kind==='sl'||l.kind==='tp'?{...l,text:l.label+' '+fixed(l.price,levelDecimals(l.price,tick))}:l;
+    const levels=chartLevels({symbol:s.symbol,tf:s.tf,positions,signals,bars:st.bars}).filter(l=>!same(l)).map(exact);
     // The version kept from when the chart opened is drawn only where its outcome is known; one the user picked also ahead.
-    chart.setData({symbol:s.symbol,tf:s.tf,dec:decimals(),bars:st.bars,forming:st.forming,latest,compare:compareRecord(),
-      compareAhead:!!byId(choice),horizon:view.horizon,signals,levels,picked:pick,
+    chart.setData({symbol:s.symbol,tf:s.tf,dec:decimals(),tick,bars:st.bars,forming:st.forming,latest,compare:compareRecord(),
+      compareAhead:!!byId(choice),horizon:view.horizon,signals,levels,picked:pick,edit,
       showBand:view.band,showSignals:view.signals,showLevels:view.levels,
       status:{reliable:status.reliable,text:status.reliable?status.text:chartStatus().text,state:status.state},
       // 'Data t.o.m.' as the version list and the Prognos card write it: with the date and year when not today's.
@@ -764,10 +892,11 @@ export function mountForecast(root,deps={}){
   }
   // Problems the runner's status line leaves out because another one takes precedence (a protection
   // check, a waiting entry or an error hides unreliable data for another coin), so none of them is hidden.
+  // With auto-trading off no signal is traded, so unreliable data pauses nothing and no pause is claimed.
   function hiddenProblems(st){
     if(!st||['signed-out','loading','inactive'].includes(st.state))return [];
-    const out=[];
-    if(st.state!=='unreliable')for(const x of st.unreliable??[])out.push('Data opålitlig för '+x+(st.data?.[x]?.text?': '+st.data[x].text:' — nya affärer pausade'));
+    const out=[],manual=st.auto===false,text=x=>manual?String(x).replace(PAUSE,''):x;
+    if(st.state!=='unreliable')for(const x of st.unreliable??[])out.push('Data opålitlig för '+x+(st.data?.[x]?.text?': '+text(st.data[x].text):manual?'':' — nya affärer pausade'));
     if(st.state!=='waiting'){
       if(st.protection)out.push('Väntar på '+st.protection);
       for(const [x,why] of Object.entries(st.waiting??{}))out.push('Väntar på ny affär i '+x+': '+why);
@@ -780,43 +909,22 @@ export function mountForecast(root,deps={}){
     return 'Senaste beslut '+when(last.at,t)+': '+last.symbol+' '+(T?T.label+' ':'')+'candle '+when(last.t+(T?.ms??0),t)+' · '+what+
       (last.closed?' · stängde '+SIDE[last.closed.side]+' '+last.closed.symbol:'')+(last.opened?' · öppnade '+SIDE[last.opened.side]+' '+last.opened.symbol:'')+(last.reason?' · '+last.reason:'');
   }
+  // The card keeps what belongs to the auto-trading of signals: the runner's status, its latest decision and the settings.
+  // The money, the positions and the history are in the terminal under the chart.
   function paintAccount(){
-    const st=read(()=>runner.status())??{state:'error',text:'AI Forecast-kontot kan inte läsas'},a=read(()=>runner.account()),live=a?read(()=>runner.live()):null,t=now(),user=uid();
+    const st=read(()=>runner.status())??{state:'error',text:'AI Forecast-kontot kan inte läsas'},a=read(()=>runner.account()),t=now(),user=uid();
     let html=`<p class="fc-status" data-state="${esc(st.state)}"><i aria-hidden="true"></i><span>${esc(bind(st.text))}</span></p>`+
       hiddenProblems(st).map(x=>`<p class="fc-warn">${esc(bind(x))}</p>`).join('');
     if(a){
-      const stats=read(()=>accountStats(a)),eq=live?.equity??null,net=eq===null?null:eq-a.start;
-      html+=`<div class="fc-tiles">${tile('Kapital · live',eq===null?'–':money(eq))}${tile('Sedan start ('+money(a.start)+')',net===null?'–':signedMoney(net)+' · '+signedPct(net/a.start,1),tone(net))}`+
-        `${tile('Kassa',money(a.cash))}${tile('Marginal i bruk',money(live?.marginUsed))}${tile('Öppet resultat',live?.openPnl==null?'–':signedMoney(live.openPnl),tone(live?.openPnl))}`+
-        `${tile('Realiserat',stats?signedMoney(stats.net)+' · '+stats.trades+' avslut':'–',tone(stats?.net))}</div>`;
-      if(eq===null&&live?.reason)html+=`<p class="fc-warn">${esc(bind(live.reason))}</p>`;
-      // Measured on this demo account's own closed trades; '–' where a measure is not defined (no trades, no loss).
-      if(stats)html+=`<h3>Kontots egen historik · avslutade affärer</h3><div class="fc-tiles fc-history">${tile('Affärer',String(stats.trades))}`+
-        `${tile('Vinstandel',pct(stats.winRate,1))}${tile('Netto',signedMoney(stats.net),tone(stats.net))}${tile('Max nedgång',pct(stats.maxDrawdown,1))}`+
-        `${tile('Vinstfaktor',num(stats.profitFactor,2))}</div><p class="fc-muted">Avgifter ${money(stats.fees)} · funding ${money(stats.funding)} · likvidationer ${stats.liquidations}. `+
-        `Uppmätt på kontots egna affärer sedan ${esc(dateText(a.createdAt))}, inte i forskningens test.</p>`;
-      const rows=live?.positions??a.positions;
-      html+='<h3>Öppna positioner · '+a.positions.length+' av '+a.settings.maxOpen+'</h3>'+(rows.length?'<ul class="fc-positions">'+rows.map(p=>{
-        const dec=priceDecimals(p.entry),cell=(k,v)=>`<div><dt>${k}</dt><dd>${v}</dd></div>`;
-        return `<li class="fc-pos"><div class="fc-pos-head"><b>${esc(p.symbol)}</b><span class="fc-dir ${esc(p.side)}">${p.side==='long'?'LÅNG':'KORT'}</span><span class="fc-num">${esc(leverageText(p.leverage))}</span>`+
-          `<span class="fc-pnl ${tone(p.pnl)}">${p.pnl==null?'–':signedMoney(p.pnl)+' · '+signedPct(p.pnlPct,1)}</span></div>`+
-          `<dl class="fc-pos-grid">${cell('Entry',price(p.entry,dec))}${cell('SL',price(p.sl,dec))}${cell('TP',price(p.tp,dec))}${cell('Likv.',p.liq>0?price(p.liq,dec):'–')}${cell('Pris',price(p.price,dec))}${cell('Till likv.',pct(p.toLiq,2))}</dl>`+
-          `<div class="fc-pos-foot"><small>${esc(TF[p.tf]?.label??p.tf)} · öppnad ${esc(when(p.openedAt,t))} · tidsstopp ${esc(when(p.deadline,t))}</small>`+
-          `<button type="button" class="fc-btn fc-close" data-fc-close="${esc(p.id)}" data-fc-key="close:${esc(p.id)}"${closing?' aria-disabled="true"':''}>${closing===p.id?'Stänger…':'Stäng'}</button></div></li>`;
-      }).join('')+'</ul>':'<p class="fc-muted">Inga öppna positioner.</p>');
-      const trades=a.trades.slice(-5).reverse();
-      html+='<h3>Senaste avslut</h3>'+(trades.length?'<ol class="fc-trades">'+trades.map(x=>`<li><time>${esc(when(x.closedAt,t))}</time><b>${esc(x.symbol)}</b><span>${esc(SIDE[x.side]??x.side)} · ${esc(tradeReasons[x.reason]??x.reason)}</span><b class="${tone(x.pnl)}">${signedMoney(x.pnl)}</b></li>`).join('')+'</ol>':
-        '<p class="fc-muted">Inga avslut ännu.</p>');
-      // The account's own log: openings, closes and the refusals (with their reason) that no status line keeps.
-      const events=(Array.isArray(a.log)?a.log:[]).slice(-5).reverse();
-      html+='<h3>Senaste händelser</h3>'+(events.length?'<ol class="fc-events">'+events.map(e=>`<li${e.kind==='avvisad'?' class="no"':''}><time>${esc(when(e.t,t))}</time><span>${esc(bind(logText(e)))}</span></li>`).join('')+'</ol>':
-        '<p class="fc-muted">Inga händelser ännu.</p>');
+      const s=a.settings,auto=s.auto===true;
       if(st.last)html+=`<p class="fc-muted">${esc(bind(decisionText(st.last,t)))}</p>`;
-      html+=`<p class="fc-muted">Handlar ${esc(TF[a.settings.tf].label)} · ${esc(a.settings.symbols.join(', '))} · ${esc(leverageText(a.settings.leverage))} · start ${esc(dateText(a.createdAt))}</p>`;
+      html+=`<p class="fc-muted">${auto?'Auto-handel på':'Auto-handel av'} · signaler på ${esc(TF[s.tf].label)} · ${esc(s.symbols.join(', '))} · ${esc(leverageText(s.leverage))} · `+
+        `högst ${esc(s.maxOpen)} signalpositioner · konto sedan ${esc(dateText(a.createdAt))}</p>`;
+      if(!auto)html+='<p class="fc-muted">Signalerna utvärderas och sparas, men inget handlas på dem. Slå på auto-handeln i orderrutan för att låta kontot handla dem med inställningarna nedan.</p>';
     }
     patch(el.account,html);
     // The label says what the button does; a changing label with aria-pressed would read backwards.
-    el.pause.textContent=a?.settings.paused?'▶ Återuppta nya affärer':'⏸ Pausa nya affärer';
+    el.pause.textContent=a?.settings.paused?'▶ Återuppta nya signalaffärer':'⏸ Pausa nya signalaffärer';
     el.pause.disabled=el.reset.disabled=!user;
     markBusy(el.pause,!!user&&acting);markBusy(el.reset,!!user&&acting);
     if(a&&!dirty){const key=JSON.stringify(a.settings);if(key!==filled){fillSettings(a.settings);filled=key;}}
@@ -829,8 +937,6 @@ export function mountForecast(root,deps={}){
       if(x.localName==='input')x.readOnly=keep;
     }
   }
-  // A refusal's text is only its reason ('Positionen blir för liten …'); the coin comes from the entry.
-  function logText(e){return e.kind==='avvisad'?'Avvisad'+(e.symbol?' '+e.symbol:'')+': '+e.text:e.text;}
   function fillSettings(s){
     const f=el.form,set=(name,v)=>{const x=f.querySelector(`[name="${name}"]`);if(x)x.value=String(v);};
     set('positionPct',+(s.positionPct*100).toFixed(4));set('riskPct',+(s.riskPct*100).toFixed(4));set('maxOpen',s.maxOpen);set('tf',s.tf);
@@ -845,12 +951,20 @@ export function mountForecast(root,deps={}){
     let html=`<div class="fc-sum"><div class="fc-sum-head"><h3>AI Forecast · demokonto</h3><span class="fc-sum-state" data-state="${esc(st.state)}">${esc(bind(st.text))}</span></div>`+
       hiddenProblems(st).map(x=>`<p class="fc-sum-note fc-sum-warn">${esc(bind(x))}</p>`).join('');
     if(a){
-      const stats=read(()=>accountStats(a)),eq=live?.equity??null,net=eq===null?null:eq-a.start,cell=(k,v,cls='')=>`<div><span>${k}</span><b class="${cls}">${v}</b></div>`;
-      html+=`<div class="fc-sum-grid">${cell('Kapital · live',eq===null?'–':money(eq))}${cell('Sedan start',net===null?'–':signedMoney(net)+' · '+signedPct(net/a.start,1),tone(net))}`+
-        `${cell('Öppna positioner',a.positions.length+' av '+a.settings.maxOpen)}${cell('Avslutade affärer',String(stats?.trades??0))}${cell('Vinstandel',stats?.winRate==null?'–':pct(stats.winRate,0))}</div>`;
+      const stats=read(()=>accountStats(a)),cell=(k,v,cls='')=>`<div><span>${k}</span><b class="${cls}">${v}</b></div>`;
+      // Kapital and the trading result as the terminal shows them (built from the same whole cents, so the two never
+      // differ by a cent): deposits and withdrawals are no gain or loss. Its share is of the money put in (the start plus
+      // deposits less withdrawals), shown while that is above zero.
+      const fig=terminalFigures(a,live),eq=fig.equity,net=fig.result,moved=finite(stats?.netTransfers)?stats.netTransfers:0,base=a.start+moved;
+      const auto=a.settings.auto===true,signal=a.positions.filter(p=>p.origin!=='manual').length,manual=a.positions.length-signal;
+      const open=auto?signal+' av '+a.settings.maxOpen+(manual?' · '+manual+(manual===1?' manuell':' manuella'):''):String(a.positions.length);
+      html+=`<div class="fc-sum-grid">${cell('Kapital · live',eq===null?'–':money(eq))}${cell('Sedan start',net===null?'–':signedMoney(net)+(base>0?' · '+signedPct(net/base,1):''),tone(net))}`+
+        `${cell('Öppna positioner',esc(open))}${cell('Avslutade affärer',String(stats?.trades??0))}${cell('Vinstandel',stats?.winRate==null?'–':pct(stats.winRate,0))}</div>`;
       if(eq===null&&live?.reason)html+=`<p class="fc-sum-note">${esc(bind(live.reason))}</p>`;
-      if(stats)html+=`<p class="fc-sum-note">Kontots egen historik: netto ${signedMoney(stats.net)} · max nedgång ${pct(stats.maxDrawdown,1)} · vinstfaktor ${num(stats.profitFactor,2)} · avgifter ${money(stats.fees)} · funding ${money(stats.funding)}</p>`;
-      html+=`<p class="fc-sum-note">Eget demokonto från ${money(a.start)} som handlar AI Forecast-signalerna på ${esc(TF[a.settings.tf].label)} med ${a.settings.leverage==='max'?'Bybits maxhävstång':esc(leverageText(a.settings.leverage))+' hävstång'}. Inga riktiga order.</p>`;
+      // Fees are a cost; funding is its effect on the result (− paid, + received), as the terminal's Historik writes them.
+      if(stats)html+=`<p class="fc-sum-note">Kontots egen historik: netto ${signedMoney(stats.net)} · max nedgång ${pct(stats.maxDrawdown,1)} · vinstfaktor ${num(stats.profitFactor,2)} · avgifter ${money(stats.fees)} · funding ${signedMoney(-stats.funding)}</p>`;
+      html+=auto?`<p class="fc-sum-note">Eget demokonto från ${money(a.start)} som handlar AI Forecast-signalerna på ${esc(TF[a.settings.tf].label)} med ${a.settings.leverage==='max'?'Bybits maxhävstång':esc(leverageText(a.settings.leverage))+' hävstång'}. Inga riktiga order.</p>`:
+        `<p class="fc-sum-note">Eget demokonto från ${money(a.start)} för manuell handel med Bybits priser, avgifter och gränser. Auto-handeln är av. Inga riktiga order.</p>`;
     }
     return html+'<a class="btn" href="#forecast">Öppna AI Forecast →</a></div>';
   }
@@ -951,17 +1065,6 @@ export function mountForecast(root,deps={}){
   const accountMsg=(text,bad)=>{el.accountMsg.textContent=bind(text);el.accountMsg.classList.toggle('bad',!!bad);};
   const settingsMsg=(text,bad)=>{el.settingsMsg.textContent=bind(text);el.settingsMsg.classList.toggle('bad',!!bad);};
   // An action's message is shown only to the user who started it.
-  async function closeOne(id){
-    if(closing)return;
-    const p=read(()=>runner.account())?.positions.find(x=>x.id===id);
-    if(!p){accountMsg('Positionen är redan stängd',false);return;}
-    if(!confirm('Stäng '+SIDE[p.side]+' '+p.symbol+' till marknadspris nu? Hela positionen stängs i demokontot.'))return;
-    const user=uid(),regain=holdFocus(el.accountTitle);
-    closing=id;accountMsg('Stänger '+SIDE[p.side]+' '+p.symbol+'…',false);paintAccount();
-    try{const r=await runner.closePosition(id);if(uid()===user)accountMsg(r.text,!r.ok);}
-    catch(e){if(uid()===user)accountMsg('Kunde inte stänga '+p.symbol+': '+reasonOf(e),true);}
-    finally{closing=null;paint();if(uid()===user)regain();}
-  }
   async function act(task,message){
     if(acting)return;
     const user=uid(),regain=holdFocus();
@@ -970,8 +1073,10 @@ export function mountForecast(root,deps={}){
     catch(e){if(uid()===user)accountMsg(reasonOf(e),true);}
     finally{acting=false;paint();if(uid()===user)regain();}
   }
+  // The pause holds back new signal entries only; the user's own orders and the protection of open positions go on.
   const togglePause=()=>{const paused=!!read(()=>runner.account())?.settings.paused;
-    return act(()=>runner.setPaused(!paused),a=>a.settings.paused?'Nya affärer är pausade. Öppna positioner skyddas och stängs som vanligt.':'Kontot tar nya signaler igen.');};
+    return act(()=>runner.setPaused(!paused),a=>a.settings.paused?'Nya signalaffärer är pausade. Öppna positioner skyddas och stängs som vanligt, och egna order går att lägga.':
+      a.settings.auto===false?'Pausen är av. Signaler handlas när auto-handeln slås på.':'Kontot tar nya signaler igen.');};
   function resetAccount(){
     if(acting||!confirm('Arkivera AI Forecast-kontot och börja om med '+ACCOUNT.start+' $? Inställningarna behålls. Öppna positioner följer med i arkivet utan att stängas.'))return;
     return act(()=>runner.reset(),()=>{dirty=false;filled=null;return 'Kontot är återställt till '+ACCOUNT.start+'\xa0$. Det gamla kontot är arkiverat.';});
@@ -999,10 +1104,225 @@ export function mountForecast(root,deps={}){
     finally{saving=false;paint();if(uid()===user)regain();}
   }
 
+  // ---- Order ticket: the user's own market orders, and auto-trading on or off --------------------------------------
+  // The result line speaks of the chart's coin as it stood when the line was written: heldAt is the id of the coin's
+  // open position then, or null. Once that has changed (the position closed on its SL or TP, a liquidation or Stäng, or
+  // another one opened) the line is out of date and goes, and the ticket shows what an order would open again; the
+  // terminal tells how the position closed.
+  let heldAt=null;
+  const heldNow=a=>a?.positions?.find?.(p=>p?.symbol===view.symbol)?.id??null;
+  const ticketMsg=(text,bad)=>{el.ticketMsg.textContent=bind(text);el.ticketMsg.classList.toggle('bad',!!bad);heldAt=heldNow(read(()=>runner.account()));};
+  // While the ticket is shown the runner reads the chart's coin on every tick, so its preview has a fresh price.
+  const watch=symbol=>{if(can('watch'))read(()=>runner.watch(symbol));};
+  const levFor=symbol=>ticket.lev[symbol]??LEVERAGE;
+  // The chart's coin's leverage into the ticket: its own last choice in this browser, else Bybit's default 10×.
+  function fillLeverage(){const v=levFor(view.symbol);el.lev.value=field(v,Number.isInteger(v)?0:2);}
+  function rememberLeverage(){
+    const v=amount(el.lev.value);
+    if(finite(v)&&v>=SETTING_LIMITS.leverage[0]&&v<=SETTING_LIMITS.leverage[1]){ticket.lev[view.symbol]=v;saveTicket();}
+  }
+  const orderParams=side=>({symbol:view.symbol,side,margin:amount(el.stake.value),leverage:amount(el.lev.value)});
+  // What the account would open on this side now: previewOrder on the runner's quote and Bybit's limits, the same code
+  // path the order takes.
+  const quoteSide=side=>can('quoteOrder')?read(()=>runner.quoteOrder(orderParams(side))):null;
+  // Max: the largest stake both sides can order, the smaller of the two sides' largest (a short reserves a larger fee to
+  // close, and a buy fills higher than a sell). A side's largest has its order cost within the free cash with the fees to
+  // open and close and its position within a risk tier that allows the leverage (the preview's maxMargin), and buys at
+  // most Bybit's largest market order at this leverage even after the price has fallen by MKT_ROOM. null without a preview.
+  function maxStake(long,short){
+    const one=p=>{
+      if(!finite(p?.maxMargin))return null;
+      const q=p.filters?.maxMktQty,L=p.leverage;
+      return finite(q)&&finite(p.fill)&&finite(L)&&L>0?Math.min(p.maxMargin,Math.floor(q*p.fill*(1-MKT_ROOM)/L*100)/100):p.maxMargin;
+    };
+    const v=[one(long),one(short)].filter(finite);
+    return v.length?Math.min(...v):null;
+  }
+  // A preview's prices with the decimals of Bybit's tick, as the result line, the terminal and the chart write an order's
+  // and a position's prices (the chart's decimals without the tick).
+  const tickDecimals=p=>finite(p.filters?.tickSize)&&p.filters.tickSize>0?stepDecimals(p.filters.tickSize):priceDecimals(p.price);
+  // A liquidation price, or – where there is none (a long at 1×: Bybit's level lies below zero), as the terminal and the
+  // chart show it.
+  const liqText=p=>finite(p.liq)&&p.liq>0?price(p.liq,tickDecimals(p)):'–';
+  // What each side would open: its value, Bybit's order cost (the margin, the fee to open and the fee to close Bybit
+  // reserves, all taken from the free cash: the figure a refusal for too little cash names) and its liquidation price.
+  // The shared line has the quantity, the margin and the opening fee, each one figure when the two sides agree and else
+  // their range (a buy fills a little higher than a sell, so near a quantity step their rounding can part). A phone has
+  // room for the liquidation price only under each button, so its own shared line has the value and the cost instead of
+  // the margin (CSS shows one of the two lines). Each part stays whole; a line breaks only before a ' · '.
+  function paintEstimates(long,short){
+    const sized=p=>!!p&&finite(p.qty)&&p.qty>0,both=[long,short].filter(sized);
+    const put=(x,text)=>{if(x.textContent!==text)x.textContent=text;};
+    for(const [side,p] of [['long',long],['short',short]]){
+      const box=el.est[side],ok=sized(p);
+      put(box.value,ok?'Värde '+money(p.value):'');put(box.cost,ok&&finite(p.cost)?'Kostnad '+money(p.cost):'');
+      put(box.liq,ok?'Likv. '+liqText(p):'');
+    }
+    // One figure when the sides agree as shown, else the range of the two.
+    const range=(f,num,unit)=>{
+      const v=both.map(f).filter(finite).sort((x,y)=>x-y);if(!v.length)return '';
+      const lo=num(v[0]),hi=num(v.at(-1));return (lo===hi?lo:lo+'–'+hi)+unit;
+    };
+    const step=both[0]?.filters?.qtyStep,cents=x=>fixed(x,2),label=(name,f)=>{const r=range(f,cents,'\xa0$');return r?name+'\xa0'+r:'';};
+    const qty=range(p=>p.qty,x=>quantity(x,step),'\xa0'+(both[0]?.symbol??'')),line=parts=>parts.filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join(' ·\xa0');
+    patch(el.sharedWide,line([qty,label('marginal',p=>p.margin),label('avgift',p=>p.fee)]));
+    patch(el.sharedNarrow,line([qty,label('värde',p=>p.value),label('kostnad',p=>p.cost),label('avgift',p=>p.fee)]));
+  }
+  function paintTicket(){
+    const user=uid(),a=read(()=>runner.account()),signed=!!user&&!!a;
+    if(!ordering&&el.ticketMsg.textContent&&heldNow(a)!==heldAt)ticketMsg('',false);
+    // Auto-trading: the switch reads the account's setting; its name stays "Auto-handel", its state says on or off.
+    const auto=a?.settings?.auto===true;
+    el.auto.setAttribute('aria-checked',String(auto));el.autoText.textContent=auto?'På':'Av';
+    el.auto.disabled=!signed||!can('setAuto');markBusy(el.auto,!el.auto.disabled&&switching);
+    const long=quoteSide('long'),short=quoteSide('short'),coin=can('limits')?read(()=>runner.limits(view.symbol)):null;
+    // Leverage: the slider reaches Bybit's maximum for this stake (lower once the size crosses a risk tier). That maximum is
+    // read before the quantity is rounded down, so a leverage both sides can be ordered at (right at a tier's cap the
+    // rounded position still fits) counts as within it. The hint names the coin's own maximum, or the lower one for this
+    // size in a few words that never widen the ticket; screen readers and the hint's title get both.
+    const sizes=[long?.maxLeverage,short?.maxLeverage].filter(x=>finite(x)&&x>0),taken=long?.ok&&short?.ok&&finite(long.leverage)?long.leverage:0;
+    const sizeMax=sizes.length?Math.max(Math.min(...sizes),taken):null;
+    const coinMax=finite(coin?.max)?coin.max:null,lo=Math.max(1,Math.ceil(finite(coin?.min)?coin.min:1));
+    const top=Math.max(lo,Math.floor(sizeMax??coinMax??(Number(el.range.getAttribute('max'))||100))),lev=amount(el.lev.value);
+    el.range.setAttribute('min',String(lo));el.range.setAttribute('max',String(top));
+    if(finite(lev))el.range.value=String(clamp(Math.round(lev),lo,top));
+    el.range.setAttribute('aria-valuetext',finite(lev)?leverageText(lev):'ingen hävstång');
+    el.range.disabled=!signed||sizeMax===null&&coinMax===null;
+    const sized=coinMax!==null&&sizeMax!==null&&sizeMax<coinMax;
+    const full=!signed||!can('quoteOrder')?'':coinMax===null?'Bybits gränser hämtas…':
+      'Bybit max '+leverageText(coinMax)+(sized?' · '+leverageText(sizeMax)+' vid den här storleken':'');
+    const shown=sized?'Max '+leverageText(sizeMax)+' (storlek)':full;
+    if(el.levHintText.textContent!==shown)el.levHintText.textContent=shown;
+    if(el.levHintFull.textContent!==full)el.levHintFull.textContent=full;
+    if(full)el.levHint.setAttribute('title',full);else el.levHint.removeAttribute('title');
+    // 10, 25 and 50 % of the free cash; Max: the largest stake both sides can order (maxStake).
+    const most=maxStake(long,short);
+    for(const b of el.stakeChips)b.disabled=!signed||b.getAttribute('data-fc-stake-pct')==='max'&&most===null;
+    paintEstimates(long,short);
+    // Why a side cannot be ordered: the preview's first reason, said once when both sides share it (their figures as ranges).
+    const r1=long?.reasons?.[0]??'',r2=short?.reasons?.[0]??'',both=r1&&r2?r1===r2?r1:mergedReason(r1,r2):null;
+    el.why.textContent=bind(!can('order')||!can('quoteOrder')?'Orderrutan är inte tillgänglig här':both??[r1&&'Köp: '+r1,r2&&'Sälj: '+r2].filter(Boolean).join(' · '));
+    // While an order is on its way the buttons are only marked busy, so the pressed one keeps keyboard focus.
+    for(const [b,p,side] of [[el.buy,long,'long'],[el.sell,short,'short']]){
+      b.disabled=ordering!==side&&!(p?.ok&&can('order'));markBusy(b,!!ordering&&!b.disabled);
+      const label=ordering===side?side==='long'?'Köper…':'Säljer…':side==='long'?'Köp / Lång':'Sälj / Kort';
+      if(b.textContent!==label)b.textContent=label;
+    }
+    // The block under the controls keeps its height (two lines): the last result until the stake, the leverage or the
+    // coin changes (or the coin's position does), else why an order cannot be placed, else what it would open. While
+    // neither side can be ordered, the reason stays under the result (after an order: the position now open in the coin).
+    const said=el.ticketMsg.textContent,why=el.why.textContent,blocked=!ordering&&el.buy.disabled&&el.sell.disabled;
+    el.why.hidden=!why||!!said&&!(blocked&&why!==said);el.shared.hidden=!!said||!!why;
+    // Then each has one of the two lines (the stylesheet cuts a longer text short with an ellipsis: 'Auto-handel av: du
+    // handlar manuellt. …' over the reason); alone, a text has both. A text cut short is whole in its title, and screen
+    // readers get all of it.
+    el.info.classList.toggle('fc-tk-two',!!said&&!el.why.hidden);
+    for(const x of [el.ticketMsg,el.why]){const t=x.textContent;if(!t)x.removeAttribute('title');else if(x.getAttribute('title')!==t)x.setAttribute('title',t);}
+  }
+  // The question before an order, with what the preview says it opens and what it takes from the free cash: Bybit's
+  // order cost, the margin, the fee to open and the fee to close that Bybit reserves with the position. Its prices have
+  // the decimals of Bybit's tick, as the result line and the terminal write the fill.
+  function orderQuestion(p){
+    const long=p.side==='long',dp=tickDecimals(p);
+    return (long?'Köpa ':'Sälja ')+quantity(p.qty,p.filters?.qtyStep)+' '+p.symbol+' ('+(long?'lång':'kort')+') till marknadspris?\n'+
+      'Pris nu '+price(p.price,dp)+' · beräknat fyllnadspris '+price(p.fill,dp)+'\n'+
+      'Värde '+money(p.value)+' · '+leverageText(p.leverage)+' · '+(p.liq>0?'likvidation vid '+liqText(p):'ingen likvidationsnivå')+'\n'+
+      'Kostnad '+money(p.cost)+' från tillgängligt saldo: marginal '+money(p.margin)+' + avgift '+money(p.fee)+' + reserverad avgift för stängning '+money(p.reserve)+'\n'+
+      'Demokonto: ingen riktig order läggs hos Bybit.';
+  }
+  // A market order through the runner, which reads Bybit's limits and a fresh price and opens what the preview shows.
+  // Once the position is open both buttons are disabled; keyboard focus then goes to the ticket itself.
+  async function placeOrder(side){
+    if(ordering||!can('order'))return;
+    const params=orderParams(side),p=quoteSide(side);
+    if(!p?.ok){ticketMsg(p?.reasons?.[0]??'Ordern kan inte läggas just nu',true);return;}
+    if(ticket.confirm&&!confirm(orderQuestion(p)))return;
+    const user=uid(),regain=holdFocus(el.ticket);
+    ordering=side;ticketMsg((side==='long'?'Köper ':'Säljer ')+params.symbol+'…',false);paintTicket();
+    try{const r=await runner.order(params);if(uid()===user)ticketMsg(r?.text||'Ordern gav inget svar',!r?.ok);}
+    catch(e){if(uid()===user)ticketMsg('Kunde inte lägga ordern: '+reasonOf(e),true);}
+    finally{ordering=null;paint();if(uid()===user)regain();}
+  }
+  function chipStake(kind){
+    const a=read(()=>runner.account());
+    if(!a||!uid())return;
+    let v;
+    if(kind==='max'){v=maxStake(quoteSide('long'),quoteSide('short'));if(v===null)return;}
+    else{const k=Number(kind);if(!CHIPS.includes(k)||!finite(a.cash))return;v=Math.floor(a.cash*k+1e-6)/100;}
+    el.stake.value=field(v,2);ticket.stake=el.stake.value;saveTicket();
+    if(!ordering)ticketMsg('',false);
+    paintTicket();
+  }
+  async function toggleAuto(){
+    if(switching||!can('setAuto'))return;
+    const a=read(()=>runner.account());
+    if(!a||!uid())return;
+    const user=uid(),regain=holdFocus();
+    switching=true;paintTicket();
+    try{const r=await runner.setAuto(a.settings.auto!==true);if(uid()===user)ticketMsg(r?.text||'',!r?.ok);}
+    catch(e){if(uid()===user)ticketMsg(reasonOf(e),true);}
+    finally{switching=false;paint();if(uid()===user)regain();}
+  }
+
+  // ---- SL and TP on the chart: previewed and set through the runner ------------------------------------------------
+  // The result of a level change, shown over the chart for a while. id: the position it speaks of; while that is open the
+  // message goes once it closes (paintChart), as the ticket's result does. One written after it closed says how it closed.
+  function levelMsg(text,bad,id=null){
+    el.levelMsg.textContent=bind(text);el.levelMsg.classList.toggle('bad',!!bad);
+    levelOf=text&&id!==null&&positionOf(id)?id:null;
+    clearTimeout(levelTimer);levelTimer=null;
+    if(text){levelTimer=setTimeout(()=>{el.levelMsg.textContent='';levelOf=null;},LEVEL_MSG_MS);levelTimer?.unref?.();}
+  }
+  const positionOf=id=>read(()=>runner.account())?.positions?.find(p=>p.id===id)??null;
+  // The chart asks while a level is dragged: the level on Bybit's tick, its tag ('SL 84 900 · −8,40 $': the result if the
+  // position closed there now, after fees and the funding so far) and why it cannot go there.
+  function previewLevel(id,kind,raw){
+    const name=kind==='sl'?'SL':'TP',p=positionOf(id);
+    if(!p)return {ok:false,price:raw,text:name,note:'Positionen är redan stängd'};
+    const f=can('limits')?read(()=>runner.limits(p.symbol))?.filters:null,value=raw===null?null:f?read(()=>roundPrice(f,raw))??raw:raw;
+    const r=can('quoteLevels')?read(()=>runner.quoteLevels(id,{[kind]:value})):null;
+    if(!r)return {ok:false,price:value,text:name,note:'SL och TP kan inte ändras just nu'};
+    const why=r.reasons?.[0]??'';
+    // Past the chart's edge a level is removed; one that is not set (a ghost tag dragged out) has nothing to remove.
+    if(value===null)return p[kind]===null?{ok:false,price:null,text:name,note:''}:{ok:!!r.ok,price:null,text:'Ta bort '+name,note:r.ok?'Släpp för att ta bort '+name:why};
+    const pnl=kind==='sl'?r.slPnl:r.tpPnl;
+    return {ok:!!r.ok,price:value,text:name+' '+fixed(value,levelPlaces(value,p.symbol))+(r.ok&&finite(pnl)?' · '+signedMoney(pnl):''),note:r.ok?'':why};
+  }
+  // The question before a level change made by a finger: the level and the result if the position closed there now.
+  function levelQuestion(p,kind,value){
+    const name=kind==='sl'?'SL':'TP',what=' för '+SIDE[p.side]+' '+p.symbol;
+    if(value===null)return 'Ta bort '+name+what+'?';
+    const r=can('quoteLevels')?read(()=>runner.quoteLevels(p.id,{[kind]:value})):null,pnl=kind==='sl'?r?.slPnl:r?.tpPnl;
+    return (p[kind]===null?'Sätta ':'Flytta ')+name+what+' till '+fixed(value,levelPlaces(value,p.symbol))+'?'+
+      (r?.ok&&finite(pnl)?'\nResultat om positionen stängs där nu, efter avgifter: '+signedMoney(pnl)+'.':'');
+  }
+  // A drop: the runner settles the position with its old levels up to now, then sets the new one from now on. pointer:
+  // what dragged it ('mouse', 'pen' or 'touch').
+  async function commitLevel(id,kind,value,pointer){
+    const name=kind==='sl'?'SL':'TP',p=positionOf(id);
+    if(!p||!can('setLevels')){levelMsg('Positionen är redan stängd',true);return {ok:false};}
+    // A signal position whose levels change by hand becomes manual and loses its time stop: asked first.
+    if(p.origin!=='manual'){
+      if(!confirm((value===null?'Ta bort '+name:'Flytta '+name+' till '+fixed(value,levelPlaces(value,p.symbol)))+' för signalpositionen '+SIDE[p.side]+' '+p.symbol+'?\n'+
+        'Positionen hanteras då manuellt: inget tidsstopp och ingen stängning på en motsatt signal.'))return {ok:false};
+    }
+    // A finger that lands on a level's handle may have meant to scroll the page: with Bekräfta order on, a level moved
+    // by touch is asked about first, as an order is.
+    else if(pointer==='touch'&&ticket.confirm&&!confirm(levelQuestion(p,kind,value)))return {ok:false};
+    const user=uid();
+    levelMsg((value===null?'Tar bort ':'Sparar ')+name+'…',false,id);
+    try{const r=await runner.setLevels(id,{[kind]:value});if(uid()===user)levelMsg(r?.text||'',!r?.ok,id);return r;}
+    catch(e){if(uid()===user)levelMsg('Kunde inte ändra '+name+': '+reasonOf(e),true,id);return {ok:false};}
+    finally{paint();}
+  }
+
   // ---- Toolbar -------------------------------------------------------------------------
   function switchSeries(symbol,tf){
     if(!SYMBOLS.includes(symbol)||!CHART_TFS.includes(tf)||symbol===view.symbol&&tf===view.tf)return;
+    const coin=symbol!==view.symbol;
     view.symbol=symbol;view.tf=tf;savePrefs();
+    // A level change's result belongs to the coin it was made on, so it does not stay over another coin's chart.
+    if(coin){fillLeverage();if(!ordering)ticketMsg('',false);levelMsg('',false);if(visible)watch(symbol);}
     if(visible)void load();
   }
   function zoom(mode){
@@ -1011,51 +1331,78 @@ export function mountForecast(root,deps={}){
     const v=chart.view(),x=v.follow?v.plot.right:(v.plot.left+v.plot.right)/2;
     chart.zoomAt(x,mode==='in'?1.25:.8);
   }
-  if(typeof root.addEventListener==='function'){
-    root.addEventListener('click',e=>{
-      const hit=s=>e.target?.closest?.(s),attr=(b,name)=>b.getAttribute(name);
-      let b;
-      if((b=hit('[data-fc-tf]'))){switchSeries(view.symbol,attr(b,'data-fc-tf'));render();}
-      else if((b=hit('[data-fc-horizon]'))){const h=+attr(b,'data-fc-horizon');if(HORIZONS.includes(h)){view.horizon=h;savePrefs();render();}}
-      else if((b=hit('[data-fc-toggle]'))){const k=attr(b,'data-fc-toggle');if(['band','signals','levels'].includes(k)){view[k]=!view[k];savePrefs();render();}}
-      else if((b=hit('[data-fc-zoom]')))zoom(attr(b,'data-fc-zoom'));
-      else if((b=hit('[data-fc-chip]'))){choice=attr(b,'data-fc-chip');render();}
-      else if((b=hit('[data-fc-sig]')))togglePick(attr(b,'data-fc-sig'));
-      else if((b=hit('[data-fc-close]')))void closeOne(attr(b,'data-fc-close'));
-      else if(hit('[data-fc-pause]'))void togglePause();
-      else if(hit('[data-fc-reset]'))void resetAccount();
-      else if((b=hit('[data-fc-eval]')))void runEvaluation(attr(b,'data-fc-eval'));
-    });
-    root.addEventListener('change',e=>{
-      const t=e.target;
-      if(t?.matches?.('[data-fc-symbol]')){switchSeries(t.value,view.tf);render();}
-      else if(t?.matches?.('[data-fc-compare]')){if(t.value===OLDER)void more();else choice=t.value||null;render();}
-    });
-  }
-  if(typeof el.form?.addEventListener==='function'){
-    el.form.addEventListener('submit',e=>{e.preventDefault?.();void saveSettings();});
-    el.form.addEventListener('input',()=>{dirty=true;});
-  }
+  // Every listener the view adds, so destroy() can take them away again.
+  const listeners=[];
+  const listen=(target,type,fn)=>{if(typeof target?.addEventListener!=='function')return;target.addEventListener(type,fn);listeners.push([target,type,fn]);};
+  listen(root,'click',e=>{
+    const hit=s=>e.target?.closest?.(s),attr=(b,name)=>b.getAttribute(name);
+    let b;
+    if((b=hit('[data-fc-tf]'))){switchSeries(view.symbol,attr(b,'data-fc-tf'));render();}
+    else if((b=hit('[data-fc-horizon]'))){const h=+attr(b,'data-fc-horizon');if(HORIZONS.includes(h)){view.horizon=h;savePrefs();render();}}
+    else if((b=hit('[data-fc-toggle]'))){const k=attr(b,'data-fc-toggle');if(['band','signals','levels'].includes(k)){view[k]=!view[k];savePrefs();render();}}
+    else if((b=hit('[data-fc-zoom]')))zoom(attr(b,'data-fc-zoom'));
+    else if((b=hit('[data-fc-chip]'))){choice=attr(b,'data-fc-chip');render();}
+    else if((b=hit('[data-fc-sig]')))togglePick(attr(b,'data-fc-sig'));
+    else if((b=hit('[data-fc-order]')))void placeOrder(attr(b,'data-fc-order'));
+    else if((b=hit('[data-fc-stake-pct]')))chipStake(attr(b,'data-fc-stake-pct'));
+    else if(hit('[data-fc-auto]'))void toggleAuto();
+    else if(hit('[data-fc-pause]'))void togglePause();
+    else if(hit('[data-fc-reset]'))void resetAccount();
+    else if((b=hit('[data-fc-eval]')))void runEvaluation(attr(b,'data-fc-eval'));
+  });
+  listen(root,'change',e=>{
+    const t=e.target;
+    if(t?.matches?.('[data-fc-symbol]')){switchSeries(t.value,view.tf);render();}
+    else if(t?.matches?.('[data-fc-compare]')){if(t.value===OLDER)void more();else choice=t.value||null;render();}
+    else if(t===el.confirmBox){ticket.confirm=!!t.checked;saveTicket();}
+  });
+  // The ticket previews as the stake and the leverage are typed or slid; the last result gives way to the new preview.
+  listen(root,'input',e=>{
+    const t=e.target;
+    if(t!==el.stake&&t!==el.lev&&t!==el.range)return;
+    if(t===el.stake){ticket.stake=String(t.value??'').slice(0,24);saveTicket();}
+    else{if(t===el.range)el.lev.value=String(t.value);rememberLeverage();}
+    if(!ordering)ticketMsg('',false);
+    paintTicket();
+  });
+  listen(el.form,'submit',e=>{e.preventDefault?.();void saveSettings();});
+  listen(el.form,'input',()=>{dirty=true;});
+  fillLeverage();
 
   function show(){
+    if(ended)return Promise.resolve();
     if(visible)return current??Promise.resolve();
     visible=true;
+    watch(view.symbol);
     if(parked&&raf){const f=parked;parked=null;raf(f);}
     return load();
   }
-  // Leaving the view stops chart polling, drawing and a walk-forward run; the runner keeps trading through
-  // refreshLive. The series stays for the next show; the records are read again then, so none stay in memory.
+  // Leaving the view stops chart polling, drawing, a walk-forward run and the ticket's price reads; the runner keeps
+  // protecting the account (and trading, with auto-trading on) through refreshLive. The series stays for the next show;
+  // the records are read again then, so none stay in memory.
   function hide(){
     if(!visible)return;
     visible=false;token++;kept=series;series=null;current=null;loading=false;polling=null;pass=null;
     signals=[];forecasts=[];older=0;evalToken++;evalRun=null;
+    watch(null);
     clearTimeout(flash);el.last.classList.remove('up','down');
   }
   async function refreshLive(){
+    if(ended)return;
     let ticked=null;
     try{ticked=Promise.resolve(runner.tick()).catch(()=>{});}catch{/* the runner reports its own problems */}
     await Promise.all([ticked,shownNow()?poll():null]);
     paint();
   }
-  return {show,hide,refreshLive,renderSummary};
+  // Tears the view down: the terminal, the chart and the view's listeners go, and nothing is read or drawn after it.
+  function destroy(){
+    if(ended)return;
+    hide();ended=true;
+    try{terminal?.destroy?.();}catch{/* the terminal cleans up after itself */}
+    terminal=null;chart?.destroy();chart=null;
+    for(const [target,type,fn] of listeners)target.removeEventListener?.(type,fn);
+    listeners.length=0;summaryEl=null;
+    clearTimeout(levelTimer);clearTimeout(flash);
+  }
+  return {show,hide,refreshLive,renderSummary,destroy};
 }

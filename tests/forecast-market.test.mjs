@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {POLL_MS,STALE,MAX_SKEW,parseKlines,fetchKlines,fetchHistory,splitForming,findGaps,mergeBars,createLiveSeries,dataStatus,fetchFunding,fetchPositionRisk} from '../forecast-market.js';
+import {POLL_MS,STALE,MAX_SKEW,RISK_WINDOW,parseKlines,fetchKlines,fetchHistory,splitForming,findGaps,mergeBars,createLiveSeries,dataStatus,fetchFunding,fetchPositionRisk} from '../forecast-market.js';
 import {createForecastStore,localStorageBackend,forecastRecord,hashOf,verifyRecord} from '../forecast-store.js';
-import {CONTRACTS,CONTRACT_UNITS} from '../bybit-contracts.js';
+import {CONTRACTS,CONTRACT_UNITS,parseContract,fetchContract,orderFilters,floorQty,ceilQty,roundPrice} from '../bybit-contracts.js';
+import {fakeBybit,LOT,lotFilters} from './forecast-fixtures.mjs';
 import {fetchDerivatives} from '../crypto-momentum-market.js';
 import {TF,CHART_TFS,MODEL} from '../forecast-config.js';
 
@@ -586,6 +587,87 @@ test('fetchPositionRisk waits for a funding time missing from a steady 1-, 2- or
   const toggle=bybit([[-24,10,1],[16,16,8],[17,48,1]]);
   await assert.rejects(read(toggle,17.5),refused);
   assert.deepEqual(hours(await read(toggle,24.01)),[10,16,17,18,19,20,21,22,23,24]);
+});
+
+test('fetchPositionRisk replays the last prices after the latest change of the stop and target, and the mark over that whole step',async()=>{
+  const clock={now:NOW},ex=exchange(clock),step=Math.floor(NOW/STEP)*STEP;
+  // Opened at 11:41:20, levels changed at 11:57:10 and settled then: the step 11:55–12:00 is replayed, its last prices from
+  // 11:58 (the new levels), its mark from 11:55 (the liquidation does not depend on the levels).
+  const changed=step-STEP+2*MIN+10000,position={nextBar:step,fundingThrough:changed,openedAt:step-4*STEP+80000,levelsAt:changed};
+  const risk=await fetchPositionRisk(ex.grab,'BTC',position,()=>clock.now);
+  assert.deepEqual(risk.minuteLasts.map(b=>b.t),[step-2*MIN,step-MIN]);assert.deepEqual(risk.minuteMarks.map(b=>b.t),[5,4,3,2,1].map(k=>step-k*MIN));
+  assert.deepEqual(ex.calls.filter(c=>c.q.interval==='1').map(c=>[c.path,c.q.limit,c.q.end]).sort(),[['kline','2',String(step-1)],['mark-price-kline','5',String(step-1)]]);
+  // Settled past that step: no minutes. Without levelsAt the opening decides, as before.
+  ex.calls.length=0;
+  assert.deepEqual((await fetchPositionRisk(ex.grab,'BTC',{...position,nextBar:step+STEP,fundingThrough:NOW-MIN},()=>clock.now)).minuteLasts,[]);
+  const {levelsAt,...opened}=position;
+  assert.deepEqual((await fetchPositionRisk(ex.grab,'BTC',{...opened,nextBar:step-3*STEP,fundingThrough:opened.openedAt},()=>clock.now)).minuteLasts.map(b=>b.t),
+    [2,3,4].map(k=>step-4*STEP+k*MIN));
+});
+
+test('fetchPositionRisk reads a long absence in windows of RISK_WINDOW candles that end 8 hours or more before now, then the rest up to now',async()=>{
+  const clock={now:NOW},ex=exchange(clock),settled=Date.parse('2026-07-01T00:02:00Z'),from=Date.parse('2026-07-01T00:00:00Z');
+  // Opened on 1 July at 00:02 and never settled since: 95 days.
+  const position={nextBar:from+STEP,fundingThrough:settled,openedAt:settled,levelsAt:settled},through=from+RISK_WINDOW*STEP;
+  const risk=await fetchPositionRisk(ex.grab,'ETH',position,()=>clock.now);
+  assert.equal(RISK_WINDOW,20000);assert.ok(through<=NOW-8*HOUR);
+  assert.deepEqual([risk.historyFrom,risk.through,risk.fundingThrough],[from,through,through-STEP]);
+  assert.deepEqual([risk.markBars[0].t,risk.markBars.at(-1).t,risk.markBars.length],[from,through-STEP,RISK_WINDOW]);
+  assert.deepEqual([risk.lastBars[0].t,risk.lastBars.at(-1).t],[position.nextBar,through-STEP]);
+  assert.ok(continuous(risk.markBars,STEP)&&continuous(risk.lastBars,STEP));
+  const funding=[];for(let t=Math.ceil(settled/FUND)*FUND;t<through;t+=FUND)funding.push({t,rate:rate(t)});
+  assert.deepEqual(risk.funding,funding);
+  // The opening step's minutes come with the first window.
+  assert.deepEqual([risk.minuteMarks.map(b=>b.t),risk.minuteLasts.map(b=>b.t)],[[2,3,4].map(k=>from+k*MIN),[2,3,4].map(k=>from+k*MIN)]);
+  near(risk.price,price('ETH',NOW));near(risk.mark,price('ETH',NOW)*.9998);
+  // Bounded: about 20 pages of each history and the funding before the window's end; the interval Bybit funds at now does not matter.
+  assert.ok(ex.calls.filter(c=>c.path==='mark-price-kline'&&c.q.interval==='5').length<=21&&ex.klines().filter(c=>c.q.interval==='5').length<=21);
+  assert.equal(ex.calls.filter(c=>c.path==='instruments-info').length,0);
+  assert.ok(ex.calls.filter(c=>c.path==='funding/history').every(c=>+c.q.endTime<=through-STEP));
+  // The next read goes on from the window's end; the 25 days left are read up to now.
+  ex.calls.length=0;
+  const rest=await fetchPositionRisk(ex.grab,'ETH',{nextBar:through,fundingThrough:through-STEP,openedAt:settled,levelsAt:settled},()=>clock.now);
+  assert.deepEqual([rest.through,rest.historyFrom,rest.fundingThrough,rest.lastBars[0].t,rest.lastBars.at(-1).t],
+    [undefined,through-STEP,NOW,through,Math.floor(NOW/STEP)*STEP]);
+  assert.equal(ex.calls.filter(c=>c.path==='instruments-info').length,1);
+  // A window would end within 8 hours of now: an absence a little longer than RISK_WINDOW candles is read in one go.
+  const late=Math.floor((NOW-RISK_WINDOW*STEP-4*HOUR)/STEP)*STEP;
+  const once=await fetchPositionRisk(ex.grab,'ETH',{nextBar:late,fundingThrough:late},()=>clock.now);
+  assert.deepEqual([once.through,once.markBars.length,once.fundingThrough],[undefined,(Math.floor(NOW/STEP)*STEP-late)/STEP+1,NOW]);
+  assert.ok(once.markBars.length>RISK_WINDOW);
+});
+
+test('Bybit\'s order filters are read from instruments-info as an addition, per token for SHIB and PEPE; without them a contract is what it was',async()=>{
+  const at=Date.parse('2026-10-06T12:00:00Z'),risk=s=>[{symbol:CONTRACTS[s],id:1,riskLimitValue:'2000000',maxLeverage:'150',maintenanceMargin:'.005',mmDeduction:''}];
+  const row=(s,lot=LOT[s])=>({symbol:CONTRACTS[s],status:'Trading',contractType:'LinearPerpetual',quoteCoin:'USDT',settleCoin:'USDT',
+    leverageFilter:{minLeverage:'1',maxLeverage:'150',leverageStep:'0.01'},...lotFilters(lot)});
+  const btc=parseContract('BTC',[row('BTC')],risk('BTC'),at);
+  assert.deepEqual(btc.filters,{unit:1,qtyStep:.001,minQty:.001,maxMktQty:150,minNotional:5,tickSize:.1,
+    bybit:{qtyStep:.001,minOrderQty:.001,maxMktOrderQty:150,tickSize:.1,minNotionalValue:5,qtyDecimals:3,tickDecimals:2}});
+  assert.ok(Object.isFrozen(btc.filters)&&Object.isFrozen(btc.filters.bybit));
+  // SHIB1000USDT and 1000PEPEUSDT count 1000 tokens per unit and quote the price of 1000 tokens.
+  const shib=parseContract('SHIB',[row('SHIB')],risk('SHIB'),at).filters,pepe=parseContract('PEPE',[row('PEPE')],risk('PEPE'),at).filters;
+  assert.deepEqual([shib.unit,shib.qtyStep,shib.minQty,shib.maxMktQty,shib.bybit.qtyStep,shib.bybit.tickSize],[1000,10000,10000,15555000000,10,.000001]);
+  near(shib.tickSize,1e-9);near(pepe.tickSize,1e-9);
+  assert.deepEqual([pepe.qtyStep,pepe.minQty,pepe.maxMktQty,pepe.bybit.tickDecimals],[100000,100000,42000000000,7]);
+  // Without the filters, or with malformed ones, the contract has exactly the fields it had before, and nothing throws.
+  const plain=parseContract('BTC',[row('BTC',null)],risk('BTC'),at);
+  assert.deepEqual(Object.keys(plain),['symbol','contract','max','min','step','tiers','at']);
+  const {filters,...rest}=btc;assert.deepEqual(plain,rest);
+  for(const lot of [{...LOT.BTC,qtyStep:''},{...LOT.BTC,qtyStep:'0'},{...LOT.BTC,minOrderQty:'-1'},{...LOT.BTC,tickSize:'abc'},{...LOT.BTC,maxMktOrderQty:'0.0001'},
+    {...LOT.BTC,minNotionalValue:'x'},{...LOT.BTC,qtyStep:1}])
+    assert.equal(parseContract('BTC',[row('BTC',lot)],risk('BTC'),at).filters,undefined,JSON.stringify(lot));
+  assert.equal(orderFilters('BTC',{lotSizeFilter:{...lotFilters(LOT.BTC).lotSizeFilter,minNotionalValue:undefined},priceFilter:lotFilters(LOT.BTC).priceFilter}).minNotional,0);
+  assert.equal(orderFilters('LUNA',row('BTC')),null);assert.equal(orderFilters('BTC',null),null);
+  // fetchContract carries them, as the page's cache does.
+  const live=await fetchContract(fakeBybit({at,urls:[]}),'ETH',()=>at);
+  assert.deepEqual([live.filters.qtyStep,live.filters.minQty,live.filters.tickSize,live.filters.maxMktQty],[.01,.01,.01,2000]);
+  // Rounding in Bybit's own units, so the steps stay exact.
+  assert.deepEqual([floorQty(btc.filters,.0175),floorQty(btc.filters,.003),floorQty(btc.filters,.0009),floorQty(btc.filters,150.0004)],[.017,.003,0,150]);
+  assert.deepEqual([floorQty(shib,8329168.7),ceilQty(shib,416458.4),ceilQty(pepe,500000),ceilQty(pepe,499999.9),floorQty(pepe,9995002.5)],[8320000,420000,500000,500000,9900000]);
+  assert.deepEqual([roundPrice(btc.filters,84950.04),roundPrice(btc.filters,84950.05),roundPrice(btc.filters,.04)],[84950,84950.1,0]);
+  near(roundPrice(shib,.0000115004),.0000115);near(roundPrice(pepe,.00001234567),.000012346);
+  for(let k=1;k<=200;k++){const q=floorQty(btc.filters,k*.001);assert.equal(q,Number((k*.001).toFixed(3)),String(k));}
 });
 
 // A stand-in with forecastAt's shape (the model is built elsewhere): it reads only the 20 candles up to the cutoff.

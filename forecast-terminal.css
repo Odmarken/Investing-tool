@@ -1,0 +1,218 @@
+/* AI Forecast account terminal (forecast-terminal.js): the panel under the chart, like Bybit's bottom panel. Dense,
+   tabular numbers in the view's own tokens (#aiForecast). Over 900 px the message line and the open panel share one box
+   of one height that scrolls inside, so neither a tab switch nor an action's message resizes the chart; Positioner
+   without a position is one line, and its box (is-fit) leaves the rest to the chart. Narrower, the view scrolls, the
+   tables scroll sideways inside the panel (Positioner's result, levels and Stäng stay at its right edge), and on phones
+   each position and trade is a card. */
+#aiForecast .fct{position:relative;display:flex;flex-direction:column;min-width:0;border:1px solid var(--fc-line);border-radius:10px;background:var(--fc-panel);
+  font-size:12px;line-height:1.4}
+/* The rules below set display on some of these; hidden must still hide them. */
+#aiForecast .fct [hidden]{display:none!important}
+#aiForecast .fct-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+
+/* Header: the money, always shown */
+#aiForecast .fct-head{display:flex;align-items:center;gap:6px 16px;min-width:0;padding:6px 6px 6px 12px}
+#aiForecast .fct-title{flex:none;margin:0;font-size:10.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--fc-text-2);white-space:nowrap}
+#aiForecast .fct-figs{flex:1 1 auto;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 22px;min-width:0;margin:0}
+#aiForecast .fct-fig{display:flex;flex-direction:column;min-width:0}
+#aiForecast .fct-fig dt{font-size:10px;font-weight:600;color:var(--fc-text-2);white-space:nowrap}
+#aiForecast .fct-fig dd{margin:0;font:650 13px/1.3 var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text);white-space:nowrap}
+#aiForecast .fct-fig dd.pos{color:var(--fc-up-text)}
+#aiForecast .fct-fig dd.neg{color:var(--fc-down-text)}
+#aiForecast .fct-toggle{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:7px;
+  border:1px solid var(--fc-line-2);background:var(--fc-panel-2);color:var(--fc-text);font:600 17px/1 var(--sans,system-ui,sans-serif);cursor:pointer;
+  transition:border-color .15s,color .15s}
+#aiForecast .fct-toggle:hover{border-color:var(--fc-accent);color:#d7fbe6}
+#aiForecast .fct-wait{margin:-2px 12px 6px;font-size:11.5px;font-weight:600;color:var(--fc-warn-text)}
+/* Folded: one thin bar that keeps Kapital. */
+#aiForecast .fct.is-collapsed .fct-head{padding-block:3px}
+#aiForecast .fct.is-collapsed .fct-fig:not([data-fct-fig=equity]),#aiForecast .fct.is-collapsed .fct-wait{display:none}
+#aiForecast .fct.is-collapsed .fct-fig{flex-direction:row;align-items:baseline;gap:8px}
+
+/* Tabs */
+#aiForecast .fct-body{display:flex;flex-direction:column;min-width:0;border-top:1px solid var(--fc-line)}
+#aiForecast .fct-tabs{display:flex;gap:2px;padding:0 6px;border-bottom:1px solid var(--fc-line);overflow-x:auto;scrollbar-width:none}
+#aiForecast .fct-tabs::-webkit-scrollbar{display:none}
+#aiForecast .fct-tab{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:6px 12px;border:0;border-radius:0;background:none;
+  color:var(--fc-text-2);font:600 12px/1.2 var(--sans,system-ui,sans-serif);white-space:nowrap;cursor:pointer;transition:color .15s}
+#aiForecast .fct-tab:hover{color:var(--fc-text)}
+#aiForecast .fct-tab[aria-selected=true]{color:var(--fc-text);box-shadow:inset 0 -2px 0 var(--fc-accent)}
+/* Inside the tab row, which clips: the ring sits within the tab. */
+#aiForecast .fct-tab:focus-visible{outline-offset:-2px}
+#aiForecast .fct-count{min-width:18px;padding:0 5px;border:1px solid var(--fc-line-2);border-radius:999px;background:var(--fc-panel-2);color:var(--fc-text);
+  font:600 10.5px/1.45 var(--mono,monospace);font-variant-numeric:tabular-nums;text-align:center}
+#aiForecast .fct-count:empty{display:none}
+/* The message line and the open panel: one box (see the wide-screen rule below). */
+#aiForecast .fct-view{display:flex;flex-direction:column;min-width:0}
+#aiForecast .fct-msg{flex:none;margin:0;padding:6px 12px 0;font-size:12px;font-weight:600;color:var(--fc-up-text);overflow-wrap:anywhere}
+#aiForecast .fct-msg:empty{display:none}
+#aiForecast .fct-msg.bad{color:#ffa79f}
+/* News about the account (a position closed on its SL or TP): plain text, neither a success nor an error. */
+#aiForecast .fct-msg.note{color:var(--fc-text)}
+
+/* Panels: the panel is the scroll container, so the table head stays on top and the coin or time column on the left. */
+/* A sideways swipe at a table's end stays in the panel instead of becoming the browser's back gesture. */
+#aiForecast .fct-panel{position:relative;min-width:0;overflow:auto;overscroll-behavior-x:contain;border-radius:0 0 9px 9px}
+#aiForecast .fct-panel:focus-visible{outline:2px solid var(--fc-accent);outline-offset:-2px}
+/* Wide screens: the box keeps one height and the panel takes what the message leaves of it. On a short screen
+   (under about 930 px) the box gives the chart its room first, down to its floor (--fct-floor): a message line (23 px),
+   the table head (28 px) and one whole position, whose SL and TP editors stand one above the other (two 26 px controls
+   and 9 px of padding, margin and border: 61 px), with room for the panel's sideways scrollbar (17 px) where the table is
+   wider than the panel. Touch's 40 px controls make the position 89 px (the touch rules below). Where that does not fit
+   under the chart's 280 px the column scrolls, as it already does on such a screen. */
+#aiForecast .fct{--fct-floor:130px}
+@media (min-width:901px){#aiForecast .fct-view{height:clamp(var(--fct-floor),min(22vh,calc(100vh - 710px)),280px)}#aiForecast .fct-view>.fct-panel{flex:1 1 auto;min-height:0;overscroll-behavior:contain}}
+/* There the head and the tab row are a little denser too (touch keeps its 40 px targets, below). */
+@media (min-width:901px) and (max-height:860px){#aiForecast .fct-head{padding-block:3px}#aiForecast .fct-tab{min-height:28px;padding-block:4px}}
+/* Positioner without a position: the box is as tall as its one line (and a message), and the chart takes the rest. */
+@media (min-width:901px){#aiForecast .fct-view.is-fit{height:auto}}
+#aiForecast .fct-empty{margin:0;padding:12px;color:var(--fc-text-2)}
+/* Words for one layout: the order ticket is up to the right over 900 px, under the header below that. */
+#aiForecast .fct-narrow{display:none}
+@media (max-width:900px){#aiForecast .fct-wide{display:none}#aiForecast .fct-narrow{display:inline}}
+#aiForecast :is(.fct-hint,.fct-summary,.fct-more){position:sticky;left:0;max-width:100%;margin:0;padding:6px 12px;font-size:11px;color:var(--fc-text-2)}
+#aiForecast .fct-hint+.fct-hint{padding-top:0}
+#aiForecast .fct-summary{padding-top:8px;font-size:11.5px;color:var(--fc-text)}
+#aiForecast .fct-summary b{margin-right:4px;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--fc-text-2)}
+#aiForecast .fct-summary+.fct-hint{padding-top:0}
+#aiForecast .fct-more{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding-block:8px}
+/* Så räknas siffrorna under the positions: closed at first, and like the line above it it stays at the panel's left. */
+#aiForecast .fct-explain{position:sticky;left:0;max-width:100%;margin:0;padding:0 12px 8px;font-size:11px;color:var(--fc-text-2)}
+#aiForecast .fct-explain summary{width:max-content;max-width:100%;padding:2px 0;font-weight:600;color:var(--fc-text);cursor:pointer}
+#aiForecast .fct-explain summary:focus-visible{outline:2px solid var(--fc-accent);outline-offset:2px;border-radius:3px}
+#aiForecast .fct-explain p{max-width:90ch;margin:4px 0 0}
+
+/* Tables */
+#aiForecast .fct-table{width:100%;min-width:max-content;border-collapse:separate;border-spacing:0;font-size:12px}
+#aiForecast .fct-table :is(th,td){padding:5px 8px;border-bottom:1px solid var(--fc-line);text-align:left;white-space:nowrap;vertical-align:middle}
+#aiForecast .fct-table thead th{position:sticky;top:0;z-index:2;padding-block:6px;background:var(--fc-panel);font-size:10.5px;font-weight:600;color:var(--fc-text-2)}
+#aiForecast .fct-table thead th:first-child{left:0;z-index:3}
+#aiForecast .fct-table tbody th{position:sticky;left:0;z-index:1;background:var(--fc-panel);font-weight:650;color:var(--fc-text)}
+#aiForecast .fct-table tbody tr:hover>*{background:var(--fc-panel-2)}
+#aiForecast .fct-table .num{text-align:right;font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}
+#aiForecast .fct-table td.pos{color:var(--fc-up-text)}
+#aiForecast .fct-table td.neg{color:var(--fc-down-text)}
+#aiForecast .fct-table small{display:block;font:500 10.5px/1.3 var(--sans,system-ui,sans-serif);color:var(--fc-text-2)}
+#aiForecast .fct-table small:empty{display:none}
+/* A result's percentage under its amount, in the same colour. */
+#aiForecast .fct-table td.fct-pnl small{font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}
+#aiForecast .fct-table td:is(.pos,.neg) small{color:inherit}
+#aiForecast .fct-side{font-weight:700}
+#aiForecast .fct-side.long{color:var(--fc-up-text)}
+#aiForecast .fct-side.short{color:var(--fc-down-text)}
+#aiForecast .fct-positions :is(thead th,tbody td).fct-act{border-left:1px solid var(--fc-line)}
+/* Over a phone's width the result, the levels and Stäng keep to the panel's right edge: where the table is wider than the
+   panel (a long price, a time stop, 1024–1366 px) the columns before them scroll under them, so Stäng is always in view
+   and nothing lies over the SL and TP editors. Each of the three is as wide as its content (width:1px), and the terminal
+   holds each off the edge by the widths of those after it, as drawn (--fct-act, --fct-lv). */
+@media (min-width:561px){
+  #aiForecast .fct-positions :is(th,td):is(.fct-pnl,.fct-levels,.fct-act){position:sticky;z-index:1;width:1px;background:var(--fc-panel)}
+  #aiForecast .fct-positions thead th:is(.fct-pnl,.fct-levels,.fct-act){z-index:3}
+  #aiForecast .fct-positions :is(th,td).fct-act{right:0}
+  #aiForecast .fct-positions :is(th,td).fct-levels{right:var(--fct-act,0px)}
+  #aiForecast .fct-positions :is(th,td).fct-pnl{right:calc(var(--fct-act,0px) + var(--fct-lv,0px));border-left:1px solid var(--fc-line)}
+}
+#aiForecast .fct-history tbody th{font-weight:500}
+#aiForecast .fct-history time{font:500 11px var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text-2)}
+#aiForecast .fct-transfer td{color:var(--fc-text-2)}
+#aiForecast .fct-transfer b{margin-right:4px;font-weight:700;color:var(--fc-text)}
+/* Arrows for the eye only (empty alternative text): the words say in or out. */
+#aiForecast .fct-transfer.in b::before{content:'↓ '/'';color:var(--fc-up-text)}
+#aiForecast .fct-transfer.out b::before{content:'↑ '/'';color:var(--fc-warn-text)}
+
+/* SL and TP: the level, Spara, Ta bort, and what saving it would do. */
+#aiForecast .fct-positions td.fct-levels{padding-block:3px}
+#aiForecast .fct-level{display:grid;grid-template-columns:18px 92px auto auto;justify-content:start;align-items:center;gap:2px 4px}
+#aiForecast .fct-level+.fct-level{margin-top:2px}
+#aiForecast .fct-level .fct-btn{padding-inline:7px}
+#aiForecast .fct-level-name{font-size:10px;font-weight:700;letter-spacing:.3px;color:var(--fc-text-2)}
+/* The note wraps within the editor's own width (it adds nothing to the column's), so typing never moves the columns. */
+#aiForecast .fct-table small.fct-level-note{grid-column:2/-1;width:0;min-width:100%;white-space:normal}
+#aiForecast .fct-table small.fct-level-note.bad{color:var(--fc-warn-text)}
+/* A level typed and not saved: a dashed frame, and its note starts 'Inte sparad'. */
+#aiForecast .fct-input.fct-draft{border-style:dashed;border-color:var(--fc-warn)}
+
+/* Fields and buttons, denser than the cards' */
+#aiForecast .fct-input{width:100%;min-width:0;min-height:26px;padding:3px 7px;border-radius:6px;border:1px solid var(--fc-line-2);background:var(--fc-bg);color:var(--fc-text);
+  font:500 12px/1.2 var(--mono,monospace);font-variant-numeric:tabular-nums}
+#aiForecast .fct-input::placeholder{color:var(--fc-text-2);opacity:.75}
+#aiForecast .fct-input:disabled{opacity:.55}
+#aiForecast .fct-input:focus-visible{outline:2px solid var(--fc-accent);outline-offset:1px}
+#aiForecast .fct-btn{display:inline-flex;align-items:center;justify-content:center;min-height:26px;padding:3px 9px;border-radius:6px;border:1px solid var(--fc-line-2);
+  background:var(--fc-panel-2);color:var(--fc-text);font:600 11.5px/1.2 var(--sans,system-ui,sans-serif);white-space:nowrap;cursor:pointer;transition:border-color .15s,color .15s}
+#aiForecast .fct-btn:hover:not(:disabled):not([aria-disabled=true]){border-color:var(--fc-accent);color:#d7fbe6}
+/* aria-disabled: busy while its action runs, but still focusable, so keyboard focus stays put. */
+#aiForecast .fct-btn:is(:disabled,[aria-disabled=true]){opacity:.5;cursor:default}
+#aiForecast .fct-primary{border-color:#2a8f5c;background:#123a27;color:#d7fbe6}
+#aiForecast .fct-close{border-color:rgba(226,72,60,.65);background:rgba(226,72,60,.14);color:#ffe0dc}
+
+/* Händelser: time and text in two aligned columns (one grid; rows as subgrids where the browser has them). */
+#aiForecast .fct-log{display:grid;grid-template-columns:auto minmax(0,1fr);margin:0;padding:2px 12px 4px;list-style:none}
+#aiForecast .fct-log li{grid-column:1/-1;display:grid;grid-template-columns:8.5em minmax(0,1fr);grid-template-columns:subgrid;column-gap:14px;align-items:baseline;
+  padding:4px 0;border-bottom:1px solid var(--fc-line)}
+#aiForecast .fct-log li:last-child{border-bottom:0}
+#aiForecast .fct-log time{font:500 11px var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text-2);white-space:nowrap}
+#aiForecast .fct-log span{overflow-wrap:anywhere}
+#aiForecast .fct-log li.no span{color:var(--fc-warn-text)}
+
+/* Saldo: the two forms side by side where the panel has room for both (one under the other on a phone), so on a common
+   wide screen the whole tab fits the panel's height even under an action's message; the line about the money and the
+   note span the panel. */
+#aiForecast .fct-balance{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));align-items:start;gap:12px 28px;max-width:720px;padding:10px 12px 12px}
+#aiForecast .fct-balance>p{grid-column:1/-1;margin:0}
+#aiForecast .fct-muted{font-size:11.5px;color:var(--fc-text-2)}
+#aiForecast .fct-form{display:grid;gap:5px;min-width:0}
+#aiForecast .fct-label{font-size:11px;font-weight:600;color:var(--fc-text-2)}
+#aiForecast .fct-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+#aiForecast .fct-money{position:relative;display:inline-flex;align-items:center;flex:0 1 180px;min-width:120px}
+#aiForecast .fct-money .fct-input{min-height:30px;padding-right:22px}
+#aiForecast .fct-unit{position:absolute;right:8px;font:500 12px var(--mono,monospace);color:var(--fc-text-2);pointer-events:none}
+#aiForecast .fct-balance .fct-btn{min-height:30px;padding:4px 12px}
+#aiForecast .fct-preview{margin:0;padding:0;list-style:none;font-size:11.5px;color:var(--fc-text-2)}
+#aiForecast .fct-preview li.bad{color:var(--fc-warn-text)}
+#aiForecast .fct-note{margin:0;padding-left:8px;border-left:2px solid var(--fc-line-2);font-size:11px;color:var(--fc-text-2)}
+
+/* Phones: the figures in a grid under the title and the fold button; the tabs keep one row. Positioner and Historik
+   become one card per row: the table head goes to screen readers only and each figure carries its name (data-label,
+   for the eye only where the browser can say so, since the column head still names it). */
+@media (max-width:560px){
+  #aiForecast .fct-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 8px;padding:6px 6px 8px 10px}
+  #aiForecast .fct-figs{grid-column:1/-1;grid-row:2;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 10px}
+  #aiForecast .fct-fig dt{white-space:normal}
+  #aiForecast .fct-fig dd{font-size:12.5px;white-space:normal;overflow-wrap:anywhere}
+  #aiForecast .fct.is-collapsed .fct-head{grid-template-columns:auto minmax(0,1fr) auto;padding-bottom:3px}
+  #aiForecast .fct.is-collapsed .fct-figs{grid-column:2;grid-row:1;display:flex;justify-content:flex-end}
+  #aiForecast .fct-tabs{padding:0 2px}
+  #aiForecast .fct-tab{padding:6px 9px}
+  #aiForecast .fct-msg{padding-inline:10px}
+  #aiForecast .fct-balance{padding-inline:10px}
+  #aiForecast .fct-money{flex:1 1 140px}
+  #aiForecast :is(.fct-positions,.fct-history){display:block;width:auto;min-width:0}
+  #aiForecast :is(.fct-positions,.fct-history) thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  #aiForecast :is(.fct-positions,.fct-history) tbody{display:block}
+  #aiForecast :is(.fct-positions,.fct-history) tbody tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 10px;padding:10px;border-bottom:1px solid var(--fc-line)}
+  #aiForecast :is(.fct-positions,.fct-history) tbody :is(th,td){position:static;display:block;min-width:0;padding:0;border:0;background:none;white-space:normal;overflow-wrap:anywhere}
+  #aiForecast :is(.fct-positions,.fct-history) tbody tr:hover>*{background:none}
+  #aiForecast :is(.fct-positions,.fct-history) td.num{text-align:left}
+  #aiForecast :is(.fct-positions,.fct-history) td[data-label]::before{content:attr(data-label);content:attr(data-label)/'';display:block;margin-bottom:1px;
+    font:600 10px/1.3 var(--sans,system-ui,sans-serif);color:var(--fc-text-2)}
+  #aiForecast .fct-positions tbody th{font-size:13px}
+  #aiForecast .fct-positions td:is(.fct-pnl,.fct-levels,.fct-act){grid-column:1/-1}
+  #aiForecast .fct-positions td.fct-pnl{font-size:13px;font-weight:650}
+  #aiForecast .fct-positions td.fct-pnl small{display:inline;margin-left:8px;font-size:11.5px}
+  #aiForecast .fct-positions tbody td.fct-act{position:static;justify-self:end;border:0;background:none}
+  #aiForecast .fct-level{grid-template-columns:22px minmax(0,1fr) auto auto}
+  #aiForecast .fct-history tbody tr{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px 8px;padding:8px 10px}
+  #aiForecast .fct-history tr.fct-transfer td{grid-column:2/-1}
+}
+@media (pointer:coarse){
+  /* The box's floor for 40 px controls: 23 + 28 + (2 × 40 + 9) + 17 px. */
+  #aiForecast .fct{--fct-floor:158px}
+  #aiForecast :is(.fct-btn,.fct-input,.fct-tab){min-height:40px}
+  #aiForecast :is(.fct-money .fct-input,.fct-balance .fct-btn){min-height:40px}
+  #aiForecast .fct-toggle{width:40px;height:40px}
+  #aiForecast .fct-level{grid-template-columns:18px 112px auto auto;gap:4px}
+  #aiForecast .fct-explain summary{padding-block:12px}
+}
+@media (pointer:coarse) and (max-width:560px){#aiForecast .fct-level{grid-template-columns:22px minmax(0,1fr) auto auto}}
+@media (prefers-reduced-motion:reduce){#aiForecast .fct *{transition:none!important;animation:none!important}}

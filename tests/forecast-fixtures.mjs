@@ -5,7 +5,7 @@
 // public endpoint the runner and the page read, all from that one price path.
 import {TF,SYMBOLS} from '../forecast-config.js';
 import {requiredLookback,computeIndicators,aggregateClosed,evaluateBar,signalsInRange} from '../forecast-model.js';
-import {CONTRACTS,CONTRACT_UNITS} from '../bybit-contracts.js';
+import {CONTRACTS,CONTRACT_UNITS,orderFilters} from '../bybit-contracts.js';
 
 export const MIN=60000,STEP=300000,HOUR=3600000,DAY=86400000,WEEK=7*DAY,FUND=8*HOUR;
 // A Monday 00:00 UTC, so every bucket from 5 minutes to the week starts with the data.
@@ -13,6 +13,24 @@ export const START=Date.UTC(2026,5,1);
 // Token prices of the unit path (SHIB and PEPE per token; the API quotes them per 1000).
 export const SCALE=Object.freeze({BTC:60000,ETH:3000,SOL:150,XRP:.6,DOGE:.2,SHIB:.000012,PEPE:.00001});
 export const MAX_LEVERAGE=Object.freeze({BTC:100,ETH:100,SOL:50,XRP:75,DOGE:75,SHIB:50,PEPE:50});
+// Bybit's order filters as its instruments-info listed them on 6 October 2026, in Bybit's units: SHIB1000USDT and
+// 1000PEPEUSDT count 1000 tokens per unit of quantity and quote the price of 1000 tokens.
+export const LOT=Object.freeze({
+  BTC:Object.freeze({qtyStep:'0.001',minOrderQty:'0.001',maxOrderQty:'1500.000',maxMktOrderQty:'150.000',minNotionalValue:'5',tickSize:'0.10'}),
+  ETH:Object.freeze({qtyStep:'0.01',minOrderQty:'0.01',maxOrderQty:'10000.00',maxMktOrderQty:'2000.00',minNotionalValue:'5',tickSize:'0.01'}),
+  SOL:Object.freeze({qtyStep:'0.1',minOrderQty:'0.1',maxOrderQty:'96000.0',maxMktOrderQty:'12000.0',minNotionalValue:'5',tickSize:'0.010'}),
+  XRP:Object.freeze({qtyStep:'0.1',minOrderQty:'0.1',maxOrderQty:'7500000.0',maxMktOrderQty:'1500000.0',minNotionalValue:'5',tickSize:'0.0001'}),
+  DOGE:Object.freeze({qtyStep:'1',minOrderQty:'1',maxOrderQty:'43678900',maxMktOrderQty:'5991100',minNotionalValue:'5',tickSize:'0.00001'}),
+  SHIB:Object.freeze({qtyStep:'10',minOrderQty:'10',maxOrderQty:'134076000',maxMktOrderQty:'15555000',minNotionalValue:'5',tickSize:'0.000001'}),
+  PEPE:Object.freeze({qtyStep:'100',minOrderQty:'100',maxOrderQty:'110000000',maxMktOrderQty:'42000000',minNotionalValue:'5',tickSize:'0.0000010'})});
+// instruments-info's lotSizeFilter and priceFilter for these values (null: Bybit sends none).
+export function lotFilters(lot){
+  if(!lot)return {};
+  return {lotSizeFilter:{maxOrderQty:lot.maxOrderQty,minOrderQty:lot.minOrderQty,qtyStep:lot.qtyStep,postOnlyMaxOrderQty:lot.maxOrderQty,
+    maxMktOrderQty:lot.maxMktOrderQty,minNotionalValue:lot.minNotionalValue},priceFilter:{minPrice:lot.tickSize,maxPrice:'1999999.80',tickSize:lot.tickSize}};
+}
+// The filters as parseContract returns them, per token.
+export const filtersFor=(symbol,lot=LOT[symbol])=>orderFilters(symbol,lotFilters(lot));
 export const FUNDING_RATE=.0001;
 const INTERVAL=Object.freeze({'1':MIN,'5':STEP,'15':15*MIN,'60':HOUR,'240':4*HOUR,'D':DAY,'W':WEEK});
 const bucket=(t,ms)=>ms===WEEK?Math.floor((t-4*DAY)/WEEK)*WEEK+4*DAY:Math.floor(t/ms)*ms;
@@ -120,10 +138,12 @@ export function scriptMarket({tf='1h',start=START,quiet=null,up=200,down=200,lon
   return market;
 }
 
-// Bybit's limits as parseContract returns them for fakeBybit's instruments-info and risk-limit.
-export function limitsFor(symbol,at,max=MAX_LEVERAGE[symbol]){
-  return {symbol,contract:CONTRACTS[symbol],max,min:1,step:.01,
+// Bybit's limits as parseContract returns them for fakeBybit's instruments-info and risk-limit, with the order filters.
+export function limitsFor(symbol,at,max=MAX_LEVERAGE[symbol],lot=LOT[symbol]){
+  const c={symbol,contract:CONTRACTS[symbol],max,min:1,step:.01,
     tiers:[{id:1,cap:2e6,max,maintenance:.005,deduction:0},{id:2,cap:1e7,max:max/2,maintenance:.01,deduction:1e4}],at};
+  const filters=filtersFor(symbol,lot);
+  return filters?{...c,filters}:c;
 }
 
 // localStorage with key()/length, as the account and the record archive use it.
@@ -214,7 +234,8 @@ const nextFunding=(rt,at)=>{const sw=rt.fundingSwitch;return sw&&at>=sw.at?sw.at
  * wicks?:[{symbol,at,kind?:'last'|'mark',h?,l?}] (token prices; a wick only the 1-minute candle starting at `at` shows),
  * fail?:message|fn(url)→message, lag?:ms|{[symbol]:ms} (kline data behind Bybit's clock),
  * holes?:Set('SYMBOL:interval:t'), server?: Bybit's clock when it differs from the page's `at`,
- * leverage?:{[symbol]:max}, delay?: event-loop turns per request}. Everything is served as of Bybit's clock.
+ * leverage?:{[symbol]:max}, lots?:{[symbol]:LOT-shaped filters, or null for none} (default LOT),
+ * delay?: event-loop turns per request}. Everything is served as of Bybit's clock.
  */
 export const fakeBybit=runtime=>async url=>{
   const rt=runtime,u=new URL(url);
@@ -249,7 +270,8 @@ export const fakeBybit=runtime=>async url=>{
       fundingRate:String(typeof rt.funding==='function'?rt.funding(symbol,at):rt.funding??FUNDING_RATE),nextFundingTime:String(nextFunding(rt,at))}]});
   }
   if(path==='instruments-info')return ok({category:'linear',list:[{symbol:q.symbol,status:'Trading',contractType:'LinearPerpetual',quoteCoin:'USDT',settleCoin:'USDT',
-    fundingInterval:String((rt.fundingSwitch&&at>=rt.fundingSwitch.at?rt.fundingSwitch.every:FUND)/MIN),leverageFilter:{minLeverage:'1',maxLeverage:String(max),leverageStep:'0.01'}}]});
+    fundingInterval:String((rt.fundingSwitch&&at>=rt.fundingSwitch.at?rt.fundingSwitch.every:FUND)/MIN),leverageFilter:{minLeverage:'1',maxLeverage:String(max),leverageStep:'0.01'},
+    ...lotFilters(rt.lots&&Object.hasOwn(rt.lots,symbol)?rt.lots[symbol]:LOT[symbol])}]});
   if(path==='risk-limit')return ok({category:'linear',list:limitsFor(symbol,at,max).tiers.map(t=>({id:t.id,symbol:q.symbol,riskLimitValue:String(t.cap),
     maxLeverage:String(t.max),maintenanceMargin:String(t.maintenance),mmDeduction:t.deduction?String(t.deduction):''}))});
   if(path==='funding/history'){

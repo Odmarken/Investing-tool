@@ -59,6 +59,99 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 .fc-pill[data-state=bad]{color:#ffa79f;border-color:rgba(226,72,60,.65)}
 .fc-pill[data-state=bad] i{background:var(--fc-down)}
 .fc-back{margin-left:auto}
+/* The header and the order ticket share the top row; the ticket sits at the right, and goes under the header when the
+   row has no room for both. */
+.fc-top{display:flex;align-items:flex-start;flex-wrap:wrap}
+.fc-top>.fc-head{flex:1 1 380px;min-width:0}
+/* Beside the ticket the header gives way step by step: the back link keeps only its arrow (its words stay for screen
+   readers and in its title), then the breadcrumb goes, then the instrument line, whose pair and timeframe the toolbar
+   shows too. */
+@media (min-width:901px) and (max-width:1699px){
+  .fc-back-text{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  #aiForecast .fc-back{padding:6px 12px;font-size:15px}
+}
+@media (min-width:901px) and (max-width:1599px){.fc-eyebrow{display:none}}
+@media (min-width:901px) and (max-width:1365px){.fc-pair{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}}
+
+/* Order ticket: auto-trading, the stake and the leverage, a market buy and sell with what each opens, and the result. */
+.fc-ticket{flex:0 0 auto;display:grid;grid-template-columns:auto auto auto minmax(112px,auto) minmax(112px,auto);
+  grid-template-areas:"auto stake lev long short" "conf info info long short";align-items:start;gap:4px 12px;
+  margin:7px 18px 5px auto;padding:6px 10px 5px;border:1px solid var(--fc-line);border-radius:10px;background:var(--fc-panel)}
+.fc-tk-auto{grid-area:auto}
+.fc-tk-stake{grid-area:stake}
+.fc-tk-lev{grid-area:lev;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"cap hint" "row row";column-gap:8px}
+.fc-tk-lev>.fc-tk-cap{grid-area:cap}
+.fc-tk-lev>.fc-tk-hint{grid-area:hint}
+.fc-tk-lev>.fc-tk-row{grid-area:row}
+.fc-tk-long{grid-area:long}
+.fc-tk-short{grid-area:short}
+/* Two lines under the controls, never fewer or more, so the ticket keeps its height whatever the text: the shared line,
+   the reason or the result alone takes up to two; the result with the reason under it one each (fc-tk-two, set by the
+   view). A longer text is cut short with an ellipsis; it is whole in its title and to screen readers. */
+.fc-tk-info{grid-area:info;min-width:0;max-width:440px;height:2.8em;overflow:hidden;font-size:11px;line-height:1.4}
+.fc-tk-info>:is(.fc-tk-msg,.fc-tk-why):not([hidden]):not(:empty){display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.fc-tk-info.fc-tk-two>:is(.fc-tk-msg,.fc-tk-why):not([hidden]):not(:empty){-webkit-line-clamp:1}
+.fc-tk-confirm{grid-area:conf}
+/* After an order its buttons are disabled and the ticket itself holds keyboard focus: a ring for keyboard users only. */
+#aiForecast .fc-ticket:focus{outline:none}
+#aiForecast .fc-ticket:focus-visible{outline:2px solid var(--fc-accent);outline-offset:2px}
+.fc-tk-cap{display:block;margin:0 0 3px;font-size:9.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--fc-text-2);white-space:nowrap}
+/* The hint takes the room beside its caption and never widens the ticket (contain): a longer text is cut, whole in its title. */
+.fc-tk-hint{min-width:0;margin-bottom:3px;overflow:hidden;font-size:10.5px;font-weight:600;color:var(--fc-text-2);white-space:nowrap;text-overflow:ellipsis;contain:inline-size}
+.fc-tk-row{display:flex;align-items:center;gap:6px}
+/* A number field with its unit inside the same box; the box shows the focus ring. */
+.fc-tk-box{display:inline-flex;align-items:center;gap:4px;height:30px;padding:0 8px;border:1px solid var(--fc-line-2);border-radius:8px;background:var(--fc-panel-2);
+  font:600 12.5px var(--mono,monospace);color:var(--fc-text-2)}
+.fc-tk-box:focus-within{border-color:var(--fc-accent);outline:2px solid var(--fc-accent);outline-offset:1px}
+#aiForecast .fc-tk-box input{width:66px;min-width:0;height:100%;padding:0;border:0;background:none;color:var(--fc-text);font:inherit;font-variant-numeric:tabular-nums;text-align:right;outline:none}
+#aiForecast .fc-tk-x input{width:42px}
+.fc-tk-chips{display:inline-flex;border:1px solid var(--fc-line-2);border-radius:8px;overflow:hidden;background:var(--fc-panel)}
+.fc-tk-chips button{min-height:30px;padding:4px 7px;border:0;border-right:1px solid var(--fc-line-2);background:none;color:var(--fc-text-2);
+  font:600 11px var(--sans,system-ui,sans-serif);white-space:nowrap;cursor:pointer}
+.fc-tk-chips button:last-child{border-right:0}
+.fc-tk-chips button:hover:not(:disabled){background:var(--fc-panel-2);color:var(--fc-text)}
+.fc-tk-chips button:disabled{opacity:.45;cursor:default}
+/* Inside the chips' clipping box the ring goes inside the button. */
+#aiForecast .fc-tk-chips button:focus-visible{outline-offset:-2px}
+.fc-tk-range{width:104px;height:30px;margin:0;accent-color:var(--fc-accent);cursor:pointer}
+.fc-tk-range:disabled{opacity:.45;cursor:default}
+/* Buy in the up colour, sell in the down colour: darker fills of the chart's own, so white text keeps a 4.5:1 contrast. */
+.fc-tk-side{display:flex;flex-direction:column;gap:3px;min-width:0}
+.fc-tk-btn{min-height:36px;padding:6px 12px;border:1px solid transparent;border-radius:8px;color:#fff;font:700 13px/1.15 var(--sans,system-ui,sans-serif);
+  letter-spacing:.2px;white-space:nowrap;cursor:pointer;transition:box-shadow .15s}
+.fc-tk-long .fc-tk-btn{background:#0f7f7a;border-color:#14a7a0}
+.fc-tk-short .fc-tk-btn{background:#c23a2f;border-color:#e2483c}
+.fc-tk-long .fc-tk-btn:hover:not(:disabled):not([aria-disabled=true]){box-shadow:0 0 0 1px #3cc9c1,0 0 12px rgba(20,167,160,.35)}
+.fc-tk-short .fc-tk-btn:hover:not(:disabled):not([aria-disabled=true]){box-shadow:0 0 0 1px #f47d72,0 0 12px rgba(226,72,60,.35)}
+.fc-tk-btn:is(:disabled,[aria-disabled=true]){opacity:.42;cursor:default}
+/* What each side would open: its value, its order cost and its liquidation price, one per line, three lines kept. */
+.fc-tk-est{margin:0;min-height:4.05em;font:500 10.5px/1.35 var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text-2)}
+.fc-tk-est span{display:block;white-space:nowrap}
+.fc-tk-est span:empty{display:none}
+.fc-tk-info p{margin:0;font-size:11px;line-height:1.4;overflow-wrap:anywhere}
+.fc-tk-shared{color:var(--fc-text-2)}
+/* The shared line in two versions, one shown: a part (a figure with its label and unit) never breaks, a line only
+   before a ' · '. Wider screens show the quantity, the margin and the fee (the value and the cost stand under each
+   button); a phone, with room for only the liquidation price under each button, the quantity, the value, the cost and
+   the fee. */
+.fc-tk-shared span span{white-space:nowrap}
+.fc-tk-narrow{display:none}
+.fc-tk-why{font-weight:600;color:var(--fc-warn-text)}
+/* The result line is a live region: it stays in the page when empty, taking no room. */
+.fc-tk-msg{font-weight:600;color:var(--fc-up-text)}
+.fc-tk-msg.bad{color:#ffa79f}
+.fc-tk-shared:empty,.fc-tk-why:empty{display:none}
+.fc-tk-confirm{display:inline-flex;align-items:center;gap:6px;min-height:18px;font-size:11px;font-weight:600;color:var(--fc-text-2);white-space:nowrap;cursor:pointer}
+.fc-tk-confirm input{width:14px;height:14px;margin:0;accent-color:var(--fc-accent)}
+/* A switch: its name stays, aria-checked says on or off, and the knob and the word follow it. */
+.fc-switch{display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:0 10px 0 5px;border:1px solid var(--fc-line-2);border-radius:999px;
+  background:var(--fc-panel-2);color:var(--fc-text);font:700 11.5px var(--sans,system-ui,sans-serif);cursor:pointer}
+.fc-switch i{position:relative;flex:none;width:30px;height:16px;border-radius:999px;background:var(--fc-line-2);transition:background-color .15s}
+.fc-switch i::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--fc-text-2);transition:transform .15s,background-color .15s}
+.fc-switch[aria-checked=true]{border-color:rgba(61,220,132,.55);color:#d7fbe6}
+.fc-switch[aria-checked=true] i{background:rgba(61,220,132,.6)}
+.fc-switch[aria-checked=true] i::after{transform:translateX(14px);background:#fff}
+.fc-switch:is(:disabled,[aria-disabled=true]){opacity:.5;cursor:default}
 .fc-banner{margin:0 18px 8px;padding:8px 12px;border-radius:8px;border:1px solid rgba(240,160,32,.55);background:rgba(240,160,32,.1);
   color:var(--fc-warn-text);font-size:12.5px;font-weight:650}
 .fc-banner::before{content:'⚠ '}
@@ -105,8 +198,10 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 
 /* Chart and side column */
 .fc-grid{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 360px}
-.fc-chart{min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px 12px 10px 18px}
-.fc-canvas-wrap{position:relative;flex:1 1 auto;min-height:420px;border:1px solid var(--fc-line);border-radius:10px;overflow:hidden;background:var(--fc-bg);
+/* The chart takes the height the terminal under it leaves (all of it when the terminal is folded); on a short screen the
+   column scrolls rather than squeezing the chart below 280 px. */
+.fc-chart{min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px 12px 10px 18px;overflow-y:auto;overscroll-behavior:contain}
+.fc-canvas-wrap{position:relative;flex:1 1 auto;min-height:280px;border:1px solid var(--fc-line);border-radius:10px;overflow:hidden;background:var(--fc-bg);
   transition:border-color .2s,box-shadow .2s}
 /* Data that is not live: the frame takes the warning colour of the badge drawn in the chart. */
 .fc-canvas-wrap.fc-stale{border-color:rgba(240,160,32,.7);box-shadow:0 0 0 1px rgba(240,160,32,.22)}
@@ -118,8 +213,22 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 .fc-tooltip{z-index:2;max-width:min(360px,calc(100% - 16px));padding:7px 9px;border-radius:8px;border:1px solid var(--fc-line-2);background:rgba(21,28,37,.96);color:var(--fc-text);
   font:500 11.5px/1.5 var(--mono,monospace);font-variant-numeric:tabular-nums;box-shadow:0 10px 26px rgba(0,0,0,.45)}
 .fc-tooltip[hidden]{display:none}
+/* While an SL or TP is dragged the tooltip is its note: why the level cannot go there (red), or what a drop does. */
+.fc-tooltip[data-state]{font-family:var(--sans,system-ui,sans-serif);font-weight:600}
+.fc-tooltip[data-state=bad]{border-color:rgba(226,72,60,.8);color:#ffd2cc}
+.fc-tooltip[data-state=note]{border-color:var(--fc-gray)}
 .fc-chart-note{position:absolute;inset:14px 14px auto;margin:0;color:var(--fc-warn-text);font-weight:600}
 .fc-chart-note[hidden]{display:none}
+/* Over an SL or TP tag (or a "+ SL" / "+ TP" ghost tag): a finger's vertical drag moves the level instead of scrolling. */
+.fc-handle{position:absolute;z-index:1;touch-action:none;cursor:ns-resize;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;background:transparent}
+.fc-handle[hidden]{display:none}
+/* The result of an SL or TP change, over the chart's lower left for a while; a live region, so it stays in the page. */
+.fc-level-msg{position:absolute;left:10px;bottom:34px;z-index:2;max-width:min(520px,calc(100% - 100px));margin:0;padding:6px 10px;border:1px solid var(--fc-line-2);
+  border-radius:8px;background:rgba(21,28,37,.95);color:var(--fc-up-text);font-size:12px;font-weight:600;box-shadow:0 8px 20px rgba(0,0,0,.4);pointer-events:none}
+.fc-level-msg.bad{border-color:rgba(226,72,60,.7);color:#ffa79f}
+.fc-level-msg:empty{padding:0;border:0;box-shadow:none}
+/* The account terminal (forecast-terminal.css) under the chart and its legend; folded, it frees its height for the chart. */
+.fc-terminal{flex:none;min-width:0}
 .fc-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0;padding:0 2px;list-style:none;font-size:11px;color:var(--fc-text-2)}
 .fc-legend li{display:inline-flex;align-items:center;gap:6px}
 .fc-sw{display:inline-block;flex:none;width:8px;height:12px;border-radius:2px}
@@ -167,22 +276,22 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 .fc-checks b{font:500 11.5px var(--mono,monospace);font-variant-numeric:tabular-nums;color:var(--fc-text);text-align:right}
 .fc-lines{margin:10px 0 0;padding-left:16px;font-size:12px;color:var(--fc-text-2)}
 .fc-lines li+li{margin-top:2px}
-.fc-levels,.fc-pos-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 10px;margin:10px 0 0}
-.fc-levels dt,.fc-pos-grid dt{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--fc-text-2)}
-.fc-levels dd,.fc-pos-grid dd{margin:2px 0 0;font:600 12.5px var(--mono,monospace);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.fc-levels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 10px;margin:10px 0 0}
+.fc-levels dt{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--fc-text-2)}
+.fc-levels dd{margin:2px 0 0;font:600 12.5px var(--mono,monospace);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 /* One column grid for all rows (subgrid), so times, sides and prices line up from row to row. A signal's price is
    right-aligned, so the decimals stay in line when the whole part changes length (124,15 / 77,17), and its column is
    never narrower than the price: a PEPE price in the 300 px side column ran under "efterhand"; there "▲ KÖP" now
    wraps onto two lines instead. */
-.fc-recent,.fc-trades{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;column-gap:10px}
+.fc-recent{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;column-gap:10px}
 .fc-recent{grid-template-columns:auto auto minmax(min-content,1fr) auto}
 /* Rows only (>): an open signal row holds a list of its own explanation lines. */
-.fc-recent>li,.fc-trades li{display:grid;grid-column:1/-1;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-columns:subgrid;
+.fc-recent>li{display:grid;grid-column:1/-1;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-columns:subgrid;
   align-items:baseline;padding:4px 0;border-bottom:1px solid var(--fc-line);font-size:12px}
 .fc-recent>li{grid-template-columns:auto auto minmax(min-content,1fr) auto;grid-template-columns:subgrid}
 .fc-recent .fc-num{text-align:right}
-.fc-recent>li:last-child,.fc-trades li:last-child{border-bottom:0}
-.fc-recent time,.fc-trades time{font:500 11px var(--mono,monospace);color:var(--fc-text-2);white-space:nowrap}
+.fc-recent>li:last-child{border-bottom:0}
+.fc-recent time{font:500 11px var(--mono,monospace);color:var(--fc-text-2);white-space:nowrap}
 .fc-recent small{justify-self:end;font-size:10.5px;color:var(--fc-text-2);white-space:nowrap}
 /* A stored signal's row is a button that opens its record: it spans the list's columns as a subgrid of its own, so
    its cells stay in line with the other rows. The chevron turns when the row is open. */
@@ -198,14 +307,6 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 .fc-card p.fc-sig-meta{margin:4px 0 0}
 .fc-sig-detail .fc-levels{margin-top:8px}
 .fc-sig-detail .fc-lines{margin-top:8px}
-.fc-trades li>b:last-child{justify-self:end;font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}
-/* The account's log: time and text; a refusal's reason in the warning colour. */
-.fc-events{list-style:none;margin:0;padding:0}
-.fc-events li{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--fc-line);font-size:12px}
-.fc-events li:last-child{border-bottom:0}
-.fc-events time{font:500 11px var(--mono,monospace);color:var(--fc-text-2);white-space:nowrap}
-.fc-events span{overflow-wrap:anywhere}
-.fc-events li.no span{color:var(--fc-warn-text)}
 /* Research verdicts: measured history, set apart quietly from the live values. */
 .fc-research{margin-top:10px;padding-left:8px;border-left:2px solid var(--fc-line-2);font-size:11.5px;color:var(--fc-text-2)}
 .fc-card p.fc-research{margin-top:10px}
@@ -236,20 +337,12 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 .fc-status[data-state=error]{color:#ffa79f}
 .fc-status[data-state=error] i{background:var(--fc-down)}
 .fc-status[data-state=paused] i{background:var(--fc-gray)}
+/* Manual trading (auto-trading off) is a working state of its own: the up colour, without the auto-trader's glow. */
+.fc-status[data-state=manual] i{background:var(--fc-up)}
 .fc-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
-/* The account's own history: five measures in two rows. */
-.fc-tiles.fc-history{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:0}
 .fc-tile{min-width:0;padding:8px 10px;border:1px solid var(--fc-line);border-radius:9px;background:var(--fc-panel-2)}
 .fc-tile span{display:block;font-size:10.5px;color:var(--fc-text-2)}
 .fc-tile b{display:block;margin-top:3px;font:650 14px/1.3 var(--sans,system-ui,sans-serif);overflow-wrap:anywhere}
-.fc-positions{list-style:none;margin:0;padding:0;display:grid;gap:8px}
-.fc-pos{padding:9px 10px;border:1px solid var(--fc-line-2);border-radius:9px;background:var(--fc-panel-2)}
-.fc-pos-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px}
-.fc-pos-head>b{font-size:13px}
-.fc-pos-head .fc-dir{font-size:11px;font-weight:800;letter-spacing:.6px}
-.fc-pnl{margin-left:auto;font:650 12.5px var(--mono,monospace);font-variant-numeric:tabular-nums}
-.fc-pos-foot{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:8px}
-.fc-pos-foot small{font-size:11px;color:var(--fc-text-2)}
 .fc-msg{font-size:12px;font-weight:600;color:var(--fc-up-text)}
 /* Empty messages stay in the page (they are live regions) but take no room. */
 .fc-card p.fc-msg:empty{margin:0}
@@ -287,10 +380,17 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
   /* Vertical swipes on the chart scroll the view; at its ends they stop here instead of reaching the page (a pull to refresh). */
   #aiForecast{overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain}
   .fc-shell,.fc-grid{display:block}
+  .fc-top{display:block}
   .fc-head{padding:10px 12px 6px}
+  /* The ticket under the header, the whole width: the two switches, stake and leverage, then the two sides, then the
+     result, in the order a keyboard and a screen reader meet them. */
+  .fc-ticket{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"auto conf" "stake lev" "long short" "info info";margin:0 12px 8px}
+  .fc-tk-info{max-width:none}
+  .fc-tk-btn{width:100%}
+  .fc-tk-confirm{justify-self:end;align-self:center}
   .fc-banner{margin:0 12px 8px}
   .fc-toolbar{padding:4px 12px 10px}
-  .fc-chart{padding:10px 12px 8px}
+  .fc-chart{padding:10px 12px 8px;overflow:visible}
   .fc-canvas-wrap{flex:none;height:max(320px,58vh);min-height:0}
   .fc-side{overflow:visible;padding:4px 12px 28px}
 }
@@ -332,7 +432,33 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
   .fc-toggles button,.fc-zoom button{flex:1 1 0}
   .fc-seg button{min-width:28px;padding:5px 7px}
   .fc-chart{padding:8px 12px}
-  .fc-canvas-wrap{order:1;height:max(300px,min(58vh,calc(100dvh - 355px)))}
+  /* The chart fills what the page's top bar, the header, the ticket and the toolbar leave of the first screen. */
+  .fc-canvas-wrap{order:1;height:max(250px,min(58vh,calc(100dvh - 590px)))}
+  /* A compact ticket: the switches first, each label beside its field (the leverage's hint under its label), the sides
+     below them. */
+  .fc-ticket{grid-template-areas:"auto conf" "stake stake" "lev lev" "long short" "info info";gap:5px 8px;padding:6px 8px}
+  .fc-tk-stake,.fc-tk-lev{display:grid;grid-template-columns:72px minmax(0,1fr);grid-template-areas:"cap row";align-items:center;column-gap:8px}
+  .fc-tk-lev{grid-template-areas:"cap row" "hint row"}
+  .fc-tk-stake>.fc-tk-cap{grid-area:cap}
+  .fc-tk-stake>.fc-tk-row{grid-area:row}
+  .fc-tk-cap,.fc-tk-hint{margin:0;white-space:normal}
+  .fc-tk-lev>.fc-tk-cap{align-self:end;line-height:1.2}
+  /* At most two lines, so the caption and the hint never make the row taller than its field. */
+  .fc-tk-lev>.fc-tk-hint{align-self:start;max-height:2.2em;font-size:9.5px;line-height:1.1}
+  .fc-tk-row{min-width:0}
+  .fc-tk-chips{flex:1 1 auto;min-width:0}
+  .fc-tk-chips button{flex:1 1 0;padding:4px 3px}
+  .fc-tk-range{flex:1 1 auto;width:auto;min-width:0}
+  /* Under each button only its liquidation price, on one line; the shared line has the value and the cost. The
+     switch beside its caption. */
+  .fc-tk-est{min-height:0;font-size:10px}
+  .fc-tk-est .fc-tk-wide,.fc-tk-shared .fc-tk-wide{display:none}
+  .fc-tk-shared .fc-tk-narrow{display:inline}
+  .fc-tk-auto{display:flex;align-items:center;gap:8px}
+  .fc-tk-auto>.fc-tk-cap{min-width:72px;white-space:nowrap}
+  .fc-terminal{order:4}
+  /* A level change's result sits on the time axis, where it covers no level line; a long reason wraps upwards. */
+  .fc-level-msg{left:6px;bottom:3px;max-width:calc(100% - 12px);padding:4px 8px;font-size:11px}
   /* The vertical padding keeps the focus rings of the select and the chips inside the scrolling row. */
   .fc-comparebar{order:2;flex-wrap:nowrap;overflow-x:auto;margin:-4px -12px 0;padding:4px 12px;scrollbar-width:none}
   .fc-comparebar::-webkit-scrollbar{display:none}
@@ -346,6 +472,14 @@ body.forecast>.wrap,body.forecast>footer,body.forecast>.banner,body.forecast .ta
 @media (pointer:coarse){
   .fc-seg button,.fc-chip,#aiForecast .fc-btn,#aiForecast select,#aiForecast input[type=number]{min-height:40px}
   .fc-pairs label{min-height:36px}
+}
+/* On a tablet or a phone the ticket's targets grow for a finger, kept compact so the chart stays on the first screen.
+   Beside the header on a wide screen they keep their size, so the ticket does not push the chart down. */
+@media (pointer:coarse) and (max-width:900px){
+  .fc-tk-box,.fc-tk-range{height:34px}
+  .fc-tk-chips button,.fc-switch{min-height:34px}
+  .fc-tk-btn{min-height:40px}
+  .fc-tk-confirm{min-height:30px}
 }
 @media (prefers-reduced-motion:reduce){#aiForecast *,#aiForecast *::before,#aiForecast *::after{transition:none!important;animation:none!important}}
 

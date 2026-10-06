@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ACCOUNT,SETTING_LIMITS,accountKey,newForecastAccount,validateForecastAccount,readForecastAccount,updateSettings,setPaused,markProcessed,
-  sizePosition,openPosition,settlePosition,checkQuote,closePosition,accountLive,accountStats,tradeReasons} from '../forecast-account.js';
+import {ACCOUNT,SETTING_LIMITS,accountKey,newForecastAccount,validateForecastAccount,readForecastAccount,migrateForecastAccount,updateSettings,setPaused,setAuto,
+  markProcessed,sizePosition,openPosition,settlePosition,checkQuote,closePosition,accountLive,accountStats,tradeReasons,previewOrder,openManual,
+  previewLevels,setLevels,deposit,withdraw,setFree,stepDecimals} from '../forecast-account.js';
+// levelDecimals through the namespace, so this file also loads against an account module without it.
+import * as accountModule from '../forecast-account.js';
 import {TF,SYMBOLS,SIGNAL_PARAMS,MODEL} from '../forecast-config.js';
-import {CONTRACTS,LIMIT_TTL,isolatedLevel,maxLeverageFor} from '../bybit-contracts.js';
+import {CONTRACTS,CONTRACT_UNITS,LIMIT_TTL,isolatedLevel,bybitIsolatedLevel,maxLeverageFor} from '../bybit-contracts.js';
+import {filtersFor,LOT} from './forecast-fixtures.mjs';
 
 const MIN=60000,HOUR=3600000,STEP=ACCOUNT.step,FEE=ACCOUNT.fee,SLIP=ACCOUNT.slip;
 // An hour boundary: the 1h candle that opened an hour earlier has just closed.
@@ -13,8 +17,9 @@ const deepFreeze=x=>{if(x&&typeof x==='object'&&!Object.isFrozen(x)){Object.free
 const SINGLE=[{id:1,cap:1e7,max:150,maintenance:.005,deduction:0}];
 // Tier 2's deduction keeps the maintenance margin continuous at tier 1's cap, as on Bybit.
 const TIERED=[{id:1,cap:1000,max:150,maintenance:.005,deduction:0},{id:2,cap:100000,max:50,maintenance:.01,deduction:5}];
-// Bybit's limits as parseContract returns them.
+// Bybit's limits as parseContract returns them; bybitLimits adds today's order filters, which manual orders need.
 const limits=(symbol='BTC',at=T,tiers=SINGLE,max=150)=>({symbol,contract:CONTRACTS[symbol],at,min:1,max,step:.01,tiers:tiers.map(t=>({...t}))});
+const bybitLimits=(symbol='BTC',at=T,tiers=SINGLE,max=150)=>({...limits(symbol,at,tiers,max),filters:filtersFor(symbol)});
 // A stored signal record as forecast-store's signalRecord builds it: the candle closed at T.
 function signal({symbol='BTC',tf='1h',side='long',barTime,sl,tp,entry=100}={}){
   const ms=TF[tf].ms;barTime??=T-ms;sl??=side==='long'?98:102;tp??=side==='long'?104:96;
@@ -28,25 +33,31 @@ function open(a,{sig=signal(),symbol=sig.symbol,price=100,mark=price,now=T+1000,
 const tenX=(over={})=>newForecastAccount(T-HOUR,{leverage:10,positionPct:.2,riskPct:1,...over});
 // fetchPositionRisk's result: flat 5-minute mark and last-price candles from the
 // position's history start through `now`, and flat 1-minute candles of the step it
-// opened in from the minute after the open, with per-candle overrides.
+// opened in, or its levels last changed in: mark prices from the minute after the
+// open, last prices from the minute after the later of the two; with per-candle overrides.
 function riskFor(p,now,{price=100,marks={},lasts={},minuteMarks={},minuteLasts={},funding=[],quote=price}={}){
   const from=Math.min(p.nextBar,Math.floor(p.fundingThrough/STEP)*STEP),markBars=[],lastBars=[],mm=[],ml=[];
   for(let t=from;t<=Math.floor(now/STEP)*STEP;t+=STEP){
     const flat={t,o:price,h:price,l:price,c:price};
     markBars.push({...flat,...marks[t]});lastBars.push({...flat,...lasts[t]});
   }
-  for(let t=Math.ceil(p.openedAt/MIN)*MIN;t<(Math.floor(p.openedAt/STEP)+1)*STEP&&t<=now;t+=MIN){
+  const since=Math.max(p.openedAt,p.levelsAt??p.openedAt),first=(Math.floor(since/STEP)+1)*STEP;
+  for(let t=Math.max(first-STEP,Math.ceil(p.openedAt/MIN)*MIN);t<first&&t<=now;t+=MIN){
     const flat={t,o:price,h:price,l:price,c:price};
-    mm.push({...flat,...minuteMarks[t]});ml.push({...flat,...minuteLasts[t]});
+    mm.push({...flat,...minuteMarks[t]});
+    if(t>=Math.ceil(since/MIN)*MIN)ml.push({...flat,...minuteLasts[t]});
   }
   return {price:quote,mark:quote,at:now,markBars,lastBars,minuteMarks:mm,minuteLasts:ml,funding,fundingThrough:now,historyFrom:from};
 }
 const memoryStorage=()=>{const m=new Map();return {getItem:k=>m.has(k)?m.get(k):null,setItem:(k,v)=>m.set(k,String(v))};};
 
-test('a new account holds 100 $ of its own under its own key, and storage refuses unknown versions',()=>{
+test('a new account holds 100 $ of its own under its own key, trades manually until auto-trading is switched on, and storage refuses unknown versions',()=>{
   const a=newForecastAccount(T);
-  assert.deepEqual({...a,settings:null},{version:'ai-forecast-account-v1',createdAt:T,start:100,cash:100,settings:null,positions:[],trades:[],log:[],processed:{},fees:0,funding:0});
-  assert.deepEqual(a.settings,{tf:'1h',symbols:[...SYMBOLS],positionPct:.25,riskPct:.1,maxOpen:3,leverage:'max',paused:false});
+  assert.deepEqual({...a,settings:null},{version:'ai-forecast-account-v2',createdAt:T,start:100,cash:100,settings:null,positions:[],trades:[],transfers:[],log:[],processed:{},fees:0,funding:0});
+  assert.deepEqual(a.settings,{tf:'1h',symbols:[...SYMBOLS],positionPct:.25,riskPct:.1,maxOpen:3,leverage:'max',paused:false,auto:false});
+  assert.equal(setAuto(a,true).settings.auto,true);assert.equal(setAuto(setAuto(a,true),false).settings.auto,false);
+  assert.equal(newForecastAccount(T,{auto:true}).settings.auto,true);
+  assert.throws(()=>setAuto(a,'ja'),/Ogiltigt läge för auto-handel/);assert.throws(()=>newForecastAccount(T,{auto:1}),/Ogiltigt läge för auto-handel/);
   assert.deepEqual(SETTING_LIMITS,{positionPct:[.01,1],riskPct:[.001,1],maxOpen:[1,7],leverage:[1,200]});
   assert.equal(accountKey('anna b@x.se'),'riptide.forecast.v1:anna%20b%40x.se');
   assert.equal(newForecastAccount(T,{leverage:20,symbols:['ETH','BTC']}).settings.leverage,20);
@@ -57,7 +68,7 @@ test('a new account holds 100 $ of its own under its own key, and storage refuse
   assert.deepEqual(readForecastAccount(storage,key,T),a);
   const held=open(newForecastAccount(T-HOUR)).account;storage.setItem(key,JSON.stringify(held));
   assert.deepEqual(readForecastAccount(storage,key,T+5000),held);
-  storage.setItem(key,JSON.stringify({...held,version:'ai-forecast-account-v2'}));
+  storage.setItem(key,JSON.stringify({...held,version:'ai-forecast-account-v3'}));
   assert.throws(()=>readForecastAccount(storage,key,T),/Ladda om sidan/);
   storage.setItem(key,'{trasig');assert.throws(()=>readForecastAccount(storage,key,T),/kan inte läsas/);
 });
@@ -668,18 +679,40 @@ test('validation rejects corrupted or inconsistent accounts',()=>{
     [x=>{x.processed=[];},/Ogiltigt AI Forecast-konto/],
     [x=>{x.log[0].kind='hack';},/logg/],
     [x=>{x.log[0].symbol='LUNA';},/logg/],
-    [x=>{x.version='ai-forecast-account-v2';},/annan version \(ai-forecast-account-v2\)\. Ladda om sidan/],
+    [x=>{x.version='ai-forecast-account-v3';},/annan version \(ai-forecast-account-v3\)\. Ladda om sidan/],
     [x=>{x.version='trading-floor-v3';},/Ogiltigt AI Forecast-konto/],
     [x=>{delete x.positions;},/Ogiltigt AI Forecast-konto/],
-    [x=>{x.createdAt=0;},/Ogiltigt AI Forecast-konto/]
+    [x=>{x.createdAt=0;},/Ogiltigt AI Forecast-konto/],
+    // Version 2: origins, the moment the levels took effect, the auto-trading switch and the transfers.
+    [x=>{delete x.settings.auto;},/inställningar/],
+    [x=>{x.settings.auto='ja';},/auto-handel/],
+    [x=>{x.positions[0].origin='robot';},/Ogiltig AI Forecast-position/],
+    [x=>{delete x.positions[0].levelsAt;},/Ogiltig AI Forecast-position/],
+    [x=>{x.positions[0].levelsAt=x.positions[0].openedAt-1;},/Ogiltig AI Forecast-position/],
+    [x=>{x.positions[0].levelsAt=x.positions[0].nextBar;},/Ogiltig AI Forecast-position/],
+    // A signal position keeps its signal's stop, target and time stop; only a manual one may lack them.
+    [x=>{x.positions[0].sl=null;},/Ogiltig AI Forecast-position/],
+    [x=>{x.positions[0].deadline=null;},/Ogiltig AI Forecast-position/],
+    [x=>{x.positions[0].signalId=null;},/Ogiltig AI Forecast-position/],
+    [x=>{x.positions[0].origin='manual';x.positions[0].tp=x.positions[0].sl;},/Ogiltig AI Forecast-position/],
+    [x=>{x.trades[0].origin='robot';},/Ogiltig AI Forecast-affär/],
+    [x=>{x.trades[0].signalId=null;},/Ogiltig AI Forecast-affär/],
+    [x=>{x.transfers=[{id:'t|1',t:T,kind:'in',amount:5,cashAfter:105,tradeCount:0}];},/kassa stämmer inte/],
+    [x=>{x.transfers={};},/Ogiltigt AI Forecast-konto/]
   ];
   for(const [corrupt,reason] of cases)assert.throws(()=>validateForecastAccount(broken(corrupt)),reason);
   for(const value of [null,undefined,42,'konto',[]])assert.throws(()=>validateForecastAccount(value),/Ogiltigt AI Forecast-konto/);
   assert.equal(validateForecastAccount(JSON.parse(JSON.stringify(both))).positions[0].symbol,'ETH');
+  // A converted signal position (manual, without a time stop, its signal's id and timeframe kept) is valid.
+  const manual=broken(x=>{Object.assign(x.positions[0],{origin:'manual',deadline:null,sl:null});});
+  assert.equal(validateForecastAccount(manual),manual);
   // Every function checks the account it is given.
-  const bad=broken(x=>{x.cash+=1;});
+  const bad=broken(x=>{x.cash+=1;}),q={price:100,mark:100,at:T},id=bad.positions[0].id;
   for(const run of [()=>open(bad),()=>settlePosition(bad,'x',null,T),()=>checkQuote(bad,'x',null,T),()=>closePosition(bad,'x',{price:1,now:T,reason:'manuell'}),
-    ()=>accountLive(bad,{},T),()=>accountStats(bad),()=>updateSettings(bad,{}),()=>markProcessed(bad,'BTC',T)])assert.throws(run,/kassa stämmer inte/);
+    ()=>accountLive(bad,{},T),()=>accountStats(bad),()=>updateSettings(bad,{}),()=>markProcessed(bad,'BTC',T),()=>setAuto(bad,true),()=>migrateForecastAccount(bad),
+    ()=>previewOrder(bad,{symbol:'BTC',side:'long',margin:10,leverage:10,quote:q,contract:null,now:T}),()=>openManual(bad,{now:T}),
+    ()=>previewLevels(bad,id,{sl:99},{quote:q,now:T}),()=>setLevels(bad,id,{sl:99},{quote:q,now:T}),()=>deposit(bad,5,T),()=>withdraw(bad,5,T),()=>setFree(bad,5,T)])
+    assert.throws(run,/kassa stämmer inte/);
 });
 
 test('no function mutates its inputs and every result is a new object',()=>{
@@ -694,12 +727,18 @@ test('no function mutates its inputs and every result is a new object',()=>{
     settlePosition(a,p.id,risk,now),settlePosition(a,p.id,deepFreeze(riskFor(p,ft)),ft),
     checkQuote(a,p.id,deepFreeze({price:97,mark:97,at:T+2000}),T+3000),checkQuote(a,p.id,q,T+3000),
     closePosition(a,p.id,deepFreeze({price:101,now:T+3000,reason:'manuell'})),
-    updateSettings(a,deepFreeze({maxOpen:4,symbols:['BTC']})),setPaused(a,true),markProcessed(a,'BTC',T)
+    updateSettings(a,deepFreeze({maxOpen:4,symbols:['BTC']})),setPaused(a,true),markProcessed(a,'BTC',T),setAuto(a,true),
+    openManual(a,deepFreeze({symbol:'ETH',side:'short',margin:5,leverage:5,tp:95,quote:q,contract:deepFreeze(bybitLimits('ETH',T+1000)),now:T+1000})).account,
+    setLevels(a,p.id,deepFreeze({sl:99,tp:null}),deepFreeze({quote:{price:100,mark:100,at:T+2000},contract:bybitLimits('BTC',T+1000),now:T+2000})).account,
+    deposit(a,5,T+3000),withdraw(a,5,T+3000),setFree(a,50,T+3000)
   ];
   for(const r of results){assert.notEqual(r,a);assert.equal(validateForecastAccount(r),r);}
   assert.equal(results[2].trades[0].reason,'stopp');near(results[2].funding,p.units*100*.001);
+  assert.equal(results[11].positions[1].origin,'manual');assert.equal(results[12].positions[0].sl,99);
   sizePosition(deepFreeze({equity:100,cash:100,settings:a.settings,contract:c,side:'long',price:100,mark:100,sl:98,now:T+1000}));
   accountLive(a,deepFreeze({BTC:q}),T+3000);accountStats(a);
+  previewOrder(a,deepFreeze({symbol:'ETH',side:'long',margin:5,leverage:5,quote:q,contract:deepFreeze(bybitLimits('ETH',T+1000)),now:T+1000}));
+  previewLevels(a,p.id,deepFreeze({sl:99}),deepFreeze({quote:q,contract:c,now:T+1000}));
   assert.deepEqual(a,copy);assert.deepEqual(a0,tenX());
 });
 
@@ -771,6 +810,48 @@ test('settling every 100 s or once after a long absence books the same trade',()
   assert.deepEqual([...reasons].sort(),['likvidation','mål','stopp','tid']);
 });
 
+test('a manual position without a time stop or a target: settling every 100 s or once after a long absence books the same trade, also after a change of its stop',()=>{
+  let seed=11;const rnd=()=>(seed=seed*16807%2147483647)/2147483647,reasons=new Set();
+  for(const [side,leverage,stop] of [['long',10,1.6],['short',10,1.6],['long',3,2.5],['short',3,2.5],['long',100,null],['short',100,null],['long',5,1],['short',5,1]]){
+    const dir=side==='long'?1:-1,c=bybitLimits('BTC',T+1000),sl=stop===null?null:100-dir*stop;
+    const {account:a,position:p}=order(newForecastAccount(T-HOUR),{side,leverage,margin:20,sl,quote:btcQuote(T+1000,100)});
+    assert.deepEqual([p.deadline,p.tp],[null,null]);
+    // 60 five-minute candles (beyond 20 hourly candles' worth of steps would be 240; the time stop is absent either way), funding every 40 minutes.
+    const bars=[];let px=100;
+    for(let t=T;t<T+60*STEP;t+=STEP){const o=px,cl=o*(1+(rnd()-.5)*.008);bars.push({t,o,h:Math.max(o,cl)*(1+rnd()*.002),l:Math.min(o,cl)*(1-rnd()*.002),c:cl});px=cl;}
+    const funding=bars.filter((b,i)=>i%8===3).map(b=>({t:b.t,rate:(rnd()-.3)*.002}));
+    const riskAt=(q,now,lag=0)=>{
+      const cur=Math.floor(now/STEP)*STEP,from=Math.min(q.nextBar,Math.floor(q.fundingThrough/STEP)*STEP),through=Math.max(q.fundingThrough,now-lag);
+      const seen=bars.filter(b=>b.t>=from&&b.t<=cur).map(b=>b.t<cur?b:{t:b.t,o:b.o,h:b.o,l:b.o,c:b.o}),marks=[],lasts=[];
+      // Mark minutes from the minute after the open, last-price minutes from the minute after the open or the change.
+      const since=Math.max(q.openedAt,q.levelsAt),first=(Math.floor(since/STEP)+1)*STEP;
+      for(let t=Math.max(first-STEP,Math.ceil(q.openedAt/MIN)*MIN);t<first&&t<=now;t+=MIN){
+        const b=bars.find(x=>x.t===Math.floor(t/STEP)*STEP),m={t,o:b.o,h:b.o,l:b.o,c:b.o};
+        marks.push(m);if(t>=Math.ceil(since/MIN)*MIN)lasts.push(m);
+      }
+      return {price:seen.at(-1).o,mark:seen.at(-1).o,at:now,markBars:seen,lastBars:seen,minuteMarks:marks,minuteLasts:lasts,funding:funding.filter(f=>f.t<=through),fundingThrough:through,historyFrom:from};
+    };
+    const end=T+55*STEP+1000,once=settlePosition(a,p.id,riskAt(p,end),end);
+    let often=a;
+    for(let now=T+2000;now<end&&often.positions.length;now+=STEP/3)often=settlePosition(often,p.id,riskAt(often.positions[0],now,90000),now);
+    if(often.positions.length)often=settlePosition(often,p.id,riskAt(often.positions[0],end),end);
+    assert.deepEqual(often,once,side+' '+leverage);
+    for(const t of once.trades)reasons.add(t.reason);
+    // The same after a change of the stop at 10:30:30: settled then, changed, then often or once to the end.
+    const mid=T+6*STEP+30000,held=settlePosition(a,p.id,riskAt(p,mid),mid);
+    if(!held.positions.length)continue;
+    const price=bars.find(b=>b.t===Math.floor(mid/STEP)*STEP).o,moved=setLevels(held,p.id,{sl:price*(1-dir*.004)},{quote:{price,mark:price,at:mid},contract:{...c,at:mid},now:mid});
+    assert.equal(moved.ok,true,moved.reason);
+    const later=settlePosition(moved.account,p.id,riskAt(moved.account.positions[0],end),end);
+    let step=moved.account;
+    for(let now=mid+2000;now<end&&step.positions.length;now+=STEP/3)step=settlePosition(step,p.id,riskAt(step.positions[0],now,90000),now);
+    if(step.positions.length)step=settlePosition(step,p.id,riskAt(step.positions[0],end),end);
+    assert.deepEqual(step,later,'after the change '+side+' '+leverage);
+    for(const t of later.trades)reasons.add(t.reason);
+  }
+  assert.ok(reasons.has('stopp')&&reasons.has('likvidation'),[...reasons].join());
+});
+
 test('per-token SHIB and PEPE prices size, settle and close like any other coin',()=>{
   const px=.000011873,sig=signal({symbol:'PEPE',entry:px,sl:px*.98,tp:px*1.04});
   const {account:a,position:p,opened}=open(newForecastAccount(T-HOUR),{sig,price:px});
@@ -826,4 +907,804 @@ test('settlement refuses a risk snapshot that is more than two minutes old or fr
   const {account:a,position:p}=open(tenX()),now=T+HOUR,good=riskFor(p,now);
   assert.equal(settlePosition(a,p.id,{...good,at:now-110000},now).positions.length,1);
   for(const at of [now-200000,now+6000])assert.throws(()=>settlePosition(a,p.id,{...good,at},now),/fundinghistorik saknas för BTC/);
+});
+
+// ---- Version 2: the migration, manual orders, their stop and target, and deposits and withdrawals ------------------
+
+// A version 1 account exactly as the released module (commit 4073766) stored it: a closed BTC trade, an open ETH short
+// that has received one funding, a refusal in the log, and the decided candles.
+const V1_ACCOUNT='{"version":"ai-forecast-account-v1","createdAt":1791190800000,"start":100,"cash":81.149954772009,"settings":{"tf":"1h","symbols":["BTC","ETH"],"positionPct":0.2,"riskPct":1,"maxOpen":3,"leverage":10,"paused":false},"positions":[{"id":"p|s|u1|ETH|1h|1791194400000|af-signal-v1","symbol":"ETH","side":"short","signalId":"s|u1|ETH|1h|1791194400000|af-signal-v1","tf":"1h","entry":49.975,"units":4.0651170382792605,"margin":20.335747983992,"leverage":10,"maintenance":0.005,"deduction":0,"riskId":1,"sl":51,"tp":48,"liq":54.67405897270151,"openedAt":1791198002000,"deadline":1791270000000,"fees":0.11173482319340333,"funding":-0.020325585191396305,"nextBar":1791201900000,"fundingThrough":1791201901000,"equityAtOpen":101.577111994003}],"trades":[{"id":"p|s|u1|BTC|1h|1791190800000|af-signal-v1","symbol":"BTC","side":"long","signalId":"s|u1|BTC|1h|1791190800000|af-signal-v1","tf":"1h","entry":100.05,"exit":100.9495,"units":1.999000499750125,"margin":20,"leverage":10,"openedAt":1791194401000,"closedAt":1791195600000,"reason":"manuell","pnl":1.577111994003004,"fees":0.2209889555222389,"funding":0,"equityAfter":101.577111994003}],"log":[{"t":1791194401000,"kind":"öppnad","symbol":"BTC","signalId":"s|u1|BTC|1h|1791190800000|af-signal-v1","text":"Öppnade lång BTC till 100,05 · 10× · marginal 20,00 $"},{"t":1791195600000,"kind":"stängd","symbol":"BTC","signalId":"s|u1|BTC|1h|1791190800000|af-signal-v1","text":"Stängd manuellt: lång BTC +1,58 $"},{"t":1791198002000,"kind":"öppnad","symbol":"ETH","signalId":"s|u1|ETH|1h|1791194400000|af-signal-v1","text":"Öppnade kort ETH till 49,975 · 10× · marginal 20,32 $"},{"t":1791198003000,"kind":"avvisad","symbol":"BTC","signalId":"s|u1|BTC|1h|1791194400000|af-signal-v1","text":"Marknadsdatan är inte tillförlitlig just nu — ingen ny affär"}],"processed":{"BTC":1791194400000,"ETH":1791194400000},"fees":0.33272377871564224,"funding":-0.020325585191396305}';
+const money2=x=>x.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:2});
+const sv=(x,d)=>x.toLocaleString('sv-SE',{maximumFractionDigits:d});
+const svPrice=x=>x.toLocaleString('sv-SE',{maximumSignificantDigits:6});
+// A fill, a price or a liquidation in a manual order's texts: all of the tick's decimals.
+const fx=(x,d)=>x.toLocaleString('sv-SE',{minimumFractionDigits:d,maximumFractionDigits:d});
+const PRICES=Object.freeze({BTC:60000,ETH:3000,SOL:150,XRP:.6,DOGE:.2,SHIB:.000012,PEPE:.00001});
+
+test('a version 1 account is read as version 2 under the same key without losing a position, a trade or its history, and the migration is pure',()=>{
+  const v1=deepFreeze(JSON.parse(V1_ACCOUNT)),storage=memoryStorage(),key=accountKey('u1');
+  // The released format still validates as what it is.
+  assert.equal(validateForecastAccount(v1),v1);
+  storage.setItem(key,V1_ACCOUNT);
+  const a=readForecastAccount(storage,key,T+3*HOUR);
+  assert.equal(storage.getItem(key),V1_ACCOUNT,'reading writes nothing');
+  assert.equal(a.version,'ai-forecast-account-v2');
+  // Auto-trading off, every position and trade from a signal, the levels in effect since the opening, no transfers.
+  assert.deepEqual(a.settings,{...v1.settings,auto:false});
+  assert.deepEqual(a.positions,v1.positions.map(p=>({...p,origin:'signal',levelsAt:p.openedAt})));
+  assert.deepEqual(a.trades,v1.trades.map(t=>({...t,origin:'signal'})));
+  assert.deepEqual(a.transfers,[]);
+  // Nothing else changes: cash, fees, funding, the log and the decided candles.
+  const rest=({version,settings,positions,trades,transfers,...x})=>x;
+  assert.deepEqual(rest(a),rest(v1));
+  assert.deepEqual(migrateForecastAccount(v1),a);assert.deepEqual(JSON.parse(V1_ACCOUNT),v1,'the input is untouched');
+  // Every function takes the old format and returns the new one; the migrated position settles and closes as before.
+  const p=a.positions[0],now=p.fundingThrough+STEP;
+  const settled=settlePosition(v1,p.id,riskFor(p,now,{price:50}),now);
+  assert.deepEqual([settled.version,settled.positions[0].fundingThrough,settled.positions[0].nextBar],['ai-forecast-account-v2',now,Math.floor(now/STEP)*STEP]);
+  const closed=closePosition(v1,p.id,{price:49,now,reason:'manuell'}),t=closed.trades.at(-1),exit=49*(1+SLIP);
+  near(t.pnl,p.margin+(p.entry-exit)*p.units-p.units*exit*FEE-(p.margin+p.funding)-p.fees);near(closed.cash,v1.cash+p.margin+(p.entry-exit)*p.units-p.units*exit*FEE);
+  assert.deepEqual([t.origin,t.reason],['signal','manuell']);assert.match(closed.log.at(-1).text,/^Stängd manuellt: kort ETH \+\d+,\d\d \$$/);
+  assert.equal(accountStats(v1).trades,1);assert.equal(accountLive(v1,{},now).netTransfers,0);
+  // A version 1 account cannot hold what only version 2 knows.
+  assert.throws(()=>validateForecastAccount({...v1,settings:{...v1.settings,auto:false}}),/inställningar/);
+  const manual=structuredClone(v1);Object.assign(manual.positions[0],{origin:'manual',deadline:null});
+  assert.throws(()=>validateForecastAccount(manual),/Ogiltig AI Forecast-position/);
+  const moved=structuredClone(v1);moved.log.push({t:T,kind:'insättning',symbol:null,signalId:null,text:'Insättning 5,00 $'});
+  assert.throws(()=>validateForecastAccount(moved),/logg/);
+});
+
+test('the backtest\'s ledger, version 2 without transfers or trade origins, validates; migrating it fills them in',()=>{
+  const trades=JSON.parse(V1_ACCOUNT).trades,t=trades[0];
+  const ledger={version:ACCOUNT.version,createdAt:T,start:100,cash:100+t.pnl,settings:newForecastAccount(T).settings,positions:[],trades,
+    log:[],processed:{},fees:t.fees,funding:0};
+  assert.equal(validateForecastAccount(ledger),ledger);
+  const m=migrateForecastAccount(ledger);
+  assert.deepEqual([m.transfers,m.trades.map(x=>x.origin),ledger.transfers,ledger.trades[0].origin],[[],['signal'],undefined,undefined]);
+  // A complete version 2 account is returned as it is.
+  assert.equal(migrateForecastAccount(m),m);
+  assert.deepEqual(accountStats(ledger),accountStats(m));
+});
+
+// A manual BTC order at 60 000 $ with Bybit's real filters: 0,001 BTC steps and minimum, a 5 $ minimum value, a 0,1 $ tick.
+const btcQuote=(at=T+1000,price=60000,mark=price)=>({price,mark,at});
+const orderArgs=over=>({symbol:'BTC',side:'long',margin:10,leverage:10,quote:btcQuote(),contract:bybitLimits('BTC',T+1000),now:T+1000,...over});
+const order=(a,over={})=>openManual(a,orderArgs(over));
+const preview=(a,over={})=>previewOrder(a,orderArgs(over));
+
+test('a market order fills as Bybit fills it: slippage, the quantity rounded down to Bybit\'s step, the margin from that quantity, Bybit\'s order cost and its isolated liquidation',()=>{
+  const a=newForecastAccount(T-HOUR);
+  for(const side of ['long','short']){
+    const dir=side==='long'?1:-1,f=60000*(1+dir*SLIP),r=preview(a,{side});
+    // 10 $ at 10× is 100 $ of value: 0,00166… BTC, rounded down to Bybit's step: 0,001 BTC.
+    assert.deepEqual([r.ok,r.reasons,r.symbol,r.side,r.leverage,r.qty,r.price,r.mark],[true,[],'BTC',side,10,.001,60000,60000]);
+    near(r.fill,f);near(r.value,.001*f);near(r.margin,.001*f/10);near(r.fee,.001*f*FEE);
+    // Bybit's order cost: the margin, the fee to open and the fee to close, estimated at the bankruptcy price (1 ∓ 1/L).
+    near(r.reserve,.001*f*(1-dir/10)*FEE);near(r.cost,r.margin+r.fee+r.reserve);
+    near(r.liq,bybitIsolatedLevel(side,f,.001,10,{maintenance:.005,deduction:0}));
+    assert.deepEqual([r.riskId,r.maintenance,r.deduction,r.maxLeverage,r.sl,r.tp],[1,.005,0,150,null,null]);
+    assert.deepEqual(r.filters,filtersFor('BTC'));
+    // The smallest stake that buys Bybit's minimum (0,001 BTC) at 10×, up to whole cents; the largest whose order cost fits 100 $.
+    assert.equal(r.minMargin,Math.ceil(.001*f/10*100)/100);assert.equal(r.maxMargin,Math.floor(100/(1+10*FEE+(10-dir)*FEE)*100)/100);
+    const o=order(a,{side});
+    assert.deepEqual([o.ok,o.reason],[true,'']);
+    assert.deepEqual(o.position,{id:'m|BTC|'+(T+1000),symbol:'BTC',side,signalId:null,tf:null,entry:r.fill,units:r.qty,margin:r.margin,leverage:10,maintenance:.005,
+      deduction:0,riskId:1,sl:null,tp:null,liq:r.liq,openedAt:T+1000,deadline:null,fees:r.fee,reserve:r.reserve,funding:0,nextBar:T+STEP,fundingThrough:T+1000,
+      equityAtOpen:100,origin:'manual',levelsAt:T+1000});
+    assert.deepEqual(o.account.positions,[o.position]);
+    near(o.account.cash,100-r.cost);near(o.account.fees,r.fee);
+    assert.deepEqual(o.account.log,[{t:T+1000,kind:'öppnad',symbol:'BTC',signalId:null,
+      text:'Öppnade '+(dir>0?'lång':'kort')+' 0,001 BTC till '+fx(f,1)+' · 10× · marginal '+money2(r.margin)+' $ (manuell)'}]);
+    // At that price the margin balance, the fee to close aside, is Bybit's maintenance margin: Bybit holds the fee to close
+    // in both, so it cancels.
+    const p=o.position;near(p.margin+dir*(p.liq-p.entry)*p.units,p.liq*p.units*.005);
+    // Closing it at once at the same price costs both fees and both slippages, nothing more: the fee to close comes back.
+    const c=closePosition(o.account,p.id,{price:60000,now:T+2000,reason:'manuell'}),t=c.trades[0],exit=60000*(1-dir*SLIP);
+    near(t.pnl,dir*(exit-p.entry)*p.units-p.units*exit*FEE-p.fees);near(c.cash,100+t.pnl);
+    assert.deepEqual([t.origin,t.margin,t.reserve],['manual',p.margin,p.reserve]);
+  }
+  // A new order in the same coin and millisecond after a close gets its own id.
+  const once=order(a),closed=closePosition(once.account,once.position.id,{price:60000,now:T+1000,reason:'manuell'});
+  assert.equal(order(closed).position.id,'m|BTC|'+(T+1000)+'|2');
+});
+
+test('SHIB and PEPE quantities are counted in Bybit\'s units of 1000 tokens: whole steps of 10 000 SHIB or 100 000 PEPE, and prices round to the tick per token',()=>{
+  const a=newForecastAccount(T-HOUR);
+  const coin=(symbol,price,over={})=>({symbol,side:'long',margin:10,leverage:10,quote:{price,mark:price,at:T+1000},contract:bybitLimits(symbol,T+1000),now:T+1000,...over});
+  const shib=previewOrder(a,coin('SHIB',.000012)),fill=.000012*(1+SLIP);
+  // 100 $ of value is 8 329 169 SHIB, 832,9 of Bybit's steps of 10 × 1000 SHIB: rounded down to 8 320 000 SHIB.
+  assert.equal(shib.qty,8320000);near(shib.value,8320000*fill);near(shib.margin,8320000*fill/10);
+  assert.deepEqual([shib.filters.unit,shib.filters.qtyStep,shib.filters.minQty,shib.filters.maxMktQty,shib.filters.minNotional],[1000,10000,10000,15555000000,5]);
+  near(shib.filters.tickSize,1e-9);
+  // Bybit's 5 $ minimum value needs 416 459 SHIB, so 420 000 SHIB: 0,51 $ of stake at 10×.
+  assert.equal(shib.minMargin,Math.ceil(420000*fill/10*100)/100);assert.equal(shib.minMargin,.51);
+  const small=previewOrder(a,coin('SHIB',.000012,{margin:.4}));
+  assert.deepEqual([small.qty,small.reasons],[330000,['Under Bybits minsta ordervärde (5,00 $)']]);
+  // PEPE: 9 995 002 tokens of value, 99,95 steps of 100 × 1000 PEPE: 9 900 000 PEPE.
+  const pepe=previewOrder(a,coin('PEPE',.00001));
+  assert.equal(pepe.qty,9900000);assert.deepEqual([pepe.filters.qtyStep,pepe.filters.minQty],[100000,100000]);
+  // 5 $ of PEPE is 499 750 tokens, 4,9975 steps: 400 000 PEPE is under Bybit's minimum value; 0,51 $ buys 500 000.
+  const pepeSmall=previewOrder(a,coin('PEPE',.00001,{margin:.5}));
+  assert.deepEqual([pepeSmall.qty,pepeSmall.reasons,pepeSmall.minMargin],[400000,['Under Bybits minsta ordervärde (5,00 $)'],.51]);
+  assert.deepEqual([previewOrder(a,coin('PEPE',.00001,{margin:.51})).qty,previewOrder(a,coin('PEPE',.00001,{margin:.51})).ok],[500000,true]);
+  // BTC's minimum is 0,001 BTC.
+  assert.deepEqual(preview(a,{margin:5}).reasons,['Under Bybits minsta order (0,001 BTC)']);
+  // A stop and a target round to the tick per token: 0,000000001 $ for SHIB.
+  const lv=previewOrder(a,coin('SHIB',.000012,{sl:.0000115004,tp:.0000125006}));
+  assert.equal(lv.ok,true);near(lv.sl,.0000115,1e-12);near(lv.tp,.000012501,1e-12);
+  const opened=openManual(a,coin('SHIB',.000012));
+  assert.equal(opened.account.log[0].text,'Öppnade lång '+sv(8320000,0)+' SHIB till '+svPrice(fill)+' · 10× · marginal '+money2(8320000*fill/10)+' $ (manuell)');
+  assert.deepEqual([stepDecimals(.1),stepDecimals(10000),stepDecimals(1e-9),stepDecimals(.25),stepDecimals(.001)],[1,0,9,2,3]);
+});
+
+test('leverage: Bybit\'s step and minimum, and its maximum for the stake, which drops as the position value crosses a tier\'s cap',()=>{
+  const a=deposit(newForecastAccount(T-HOUR),900,T),c=bybitLimits('BTC',T+1000,TIERED),fill=100*(1+SLIP);
+  const at=(margin,leverage,over={})=>previewOrder(a,{symbol:'BTC',side:'long',margin,leverage,quote:{price:100,mark:100,at:T+1000},contract:c,now:T+1000,...over});
+  // Tier 1 allows 150× up to 1 000 $ of value, tier 2 50× up to 100 000 $.
+  assert.deepEqual([5,10,15,30,500].map(m=>at(m,1).maxLeverage),[150,100,66.66,50,50]);
+  const over=at(10,150);
+  assert.deepEqual([over.ok,over.maxLeverage,over.reasons],[false,100,['Bybits högsta hävstång för den här storleken är 100×']]);
+  const top=at(10,100);
+  assert.deepEqual([top.ok,top.leverage,top.riskId,top.maintenance],[true,100,1,.005]);assert.ok(top.value<=1000);
+  assert.equal(at(10,25.555).leverage,25.55);
+  assert.deepEqual(at(10,.5).reasons,['Bybits lägsta hävstång är 1×']);
+  // Beyond tier 1's cap at 50×: tier 2, whose maintenance margin and deduction set the liquidation.
+  const big=at(30,50);
+  assert.deepEqual([big.ok,big.riskId,big.maintenance,big.deduction],[true,2,.01,5]);
+  near(big.liq,bybitIsolatedLevel('long',fill,big.qty,50,TIERED[1]));
+  // A mark above the fill counts toward the cap, as in maxLeverageFor.
+  const marked=at(10,1,{quote:{price:100,mark:101,at:T+1000}});
+  assert.equal(marked.maxLeverage,maxLeverageFor(c,10,{price:fill,mark:101},T+1000).leverage);assert.ok(marked.maxLeverage<100);
+  // 3 000 $ fits tier 2 only up to 33,33×, and 1 499 BTC is beyond Bybit's largest market order: every reason is given.
+  const huge=deposit(a,1e6,T),q={price:100,mark:100,at:T+1000};
+  assert.deepEqual(previewOrder(huge,{symbol:'BTC',side:'long',margin:3000,leverage:50,quote:q,contract:c,now:T+1000}).reasons,
+    ['Bybits högsta hävstång för den här storleken är 33,33×','Över Bybits största marknadsorder (150 BTC)']);
+  // More than the largest tier holds even at 1×.
+  const beyond=previewOrder(huge,{symbol:'BTC',side:'long',margin:2e5,leverage:1,quote:q,contract:c,now:T+1000});
+  assert.deepEqual([beyond.maxLeverage,beyond.reasons],[null,['Positionen ryms inte inom Bybits risknivåer']]);
+  // Without a stake: what can be worked out still is (the slider's maximum, the smallest and the largest stake).
+  const blank=at(undefined,10);
+  assert.deepEqual([blank.ok,blank.reasons,blank.maxLeverage,blank.minMargin,blank.maxMargin,blank.qty],[false,['Ange insatsen i $'],150,.51,989.65,null]);
+});
+
+test('Bybit\'s order cost must fit the free cash: the margin, the fee to open and the fee to close, which a short reserves more of; the largest stake offered fits it on its own side',()=>{
+  const a=newForecastAccount(T-HOUR),c=bybitLimits('DOGE',T+1000,[{id:1,cap:1e7,max:75,maintenance:.01,deduction:0}],75),q={price:.2,mark:.2,at:T+1000};
+  const doge=(margin,side='long',acc=a)=>previewOrder(acc,{symbol:'DOGE',side,margin,leverage:10,quote:q,contract:c,now:T+1000});
+  // Per dollar of stake at 10×: 1 + 10 × 0,055 % to open + 9 × 0,055 % to close for a long, 11 × for a short.
+  const max=doge(10).maxMargin,smax=doge(10,'short').maxMargin,fits=doge(max),sfits=doge(smax,'short'),over=doge(99.5);
+  assert.deepEqual([max,smax],[Math.floor(100/(1+19*FEE)*100)/100,Math.floor(100/(1+21*FEE)*100)/100]);assert.deepEqual([max,smax],[98.96,98.85]);
+  assert.deepEqual([fits.ok,fits.qty,sfits.ok],[true,4945,true]);assert.ok(fits.cost<=100&&sfits.cost<=100);
+  near(fits.cost,fits.margin+fits.fee+fits.reserve);near(fits.reserve,fits.value*.9*FEE);near(sfits.reserve,sfits.value*1.1*FEE);
+  // The long's largest stake is too much for a short: its fill is lower, so more DOGE, and its fee to close is larger.
+  assert.equal(doge(max,'short').ok,false);
+  assert.deepEqual([over.ok,over.qty,over.reasons],[false,4972,['Otillräckligt tillgängligt saldo: 100,53 $ behövs, 100,00 $ finns']]);
+  // An open position's margin and reserved fee to close are not free cash.
+  const held=openManual(a,{symbol:'DOGE',side:'long',margin:50,leverage:10,quote:q,contract:c,now:T+1000});
+  near(held.account.cash,100-held.preview.cost);
+  const eth=previewOrder(held.account,{symbol:'ETH',side:'short',margin:60,leverage:10,quote:{price:3000,mark:3000,at:T+1000},contract:bybitLimits('ETH',T+1000),now:T+1000});
+  assert.deepEqual(eth.reasons,['Otillräckligt tillgängligt saldo: '+money2(Math.ceil(eth.cost*100)/100)+' $ behövs, '+money2(Math.floor(held.account.cash*100)/100)+' $ finns']);
+  assert.equal(eth.maxMargin,Math.floor(held.account.cash/(1+21*FEE)*100)/100);
+  // BTC at Bybit's maximum, 150×, on today's first tier (up to 300 000 $, 0,33 %): with 100 $ free a long can stake
+  // 85,87 $ and a short 85,79 $. 92,37 $ (the stake whose margin and fee alone would fit) buys 0,161 BTC, and Bybit's
+  // order cost for it, 107,29 $, is refused with that figure.
+  const tiers=BYBIT_TIERS.BTC.map(([cap,max,maintenance,deduction],k)=>({id:k+1,cap,max,maintenance,deduction}));
+  const btc=(side,margin)=>previewOrder(a,{symbol:'BTC',side,margin,leverage:150,quote:{price:85800,mark:85800,at:T+1000},contract:bybitLimits('BTC',T+1000,tiers),now:T+1000});
+  assert.deepEqual([btc('long',10).maxMargin,btc('short',10).maxMargin],[85.87,85.79]);
+  const most=btc('long',92.37);
+  assert.deepEqual([most.ok,most.qty,most.reasons],[false,.161,['Otillräckligt tillgängligt saldo: 107,30 $ behövs, 100,00 $ finns']]);
+  near(most.cost,107.29014766469999,1e-12);assert.ok(most.margin+most.fee<=100);
+});
+
+test('the refusal for too little free cash never names the same amount twice: what is needed rounds up to the cent, what is free down',()=>{
+  // Property: PEPE's 100 000-token steps make the cost of a stake near the most that fits land within a cent of the free
+  // cash (100,37 $) at many prices; whatever it is, a refusal names a need above what is free.
+  const a=deposit(newForecastAccount(T-HOUR),.37,T),pepe=bybitLimits('PEPE',T+1000,[{id:1,cap:2e5,max:50,maintenance:.01,deduction:0}],50);
+  const cents=x=>Number(x.replace(/ /g,'').replace(',','.'));let refused=0;
+  for(let k=0;k<1500;k++){
+    const price=.0000105*(1+k*1e-5);
+    for(const margin of [99.4,99.45,99.46,99.47,99.5,99.82,99.83,99.84]){
+      const p=previewOrder(a,{symbol:'PEPE',side:'long',margin,leverage:10,quote:{price,mark:price,at:T+1000},contract:pepe,now:T+1000});
+      const m=p.reasons.find(x=>x.startsWith('Otillräckligt'));
+      if(!m)continue;
+      refused++;
+      const [,need,have]=/^Otillräckligt tillgängligt saldo: ([\d ,]+) \$ behövs, ([\d ,]+) \$ finns$/.exec(m).map((x,i)=>i?cents(x):x);
+      assert.ok(need>have&&need>=p.cost-1e-9&&have<=a.cash+1e-9,JSON.stringify({price,margin,cost:p.cost,m}));
+    }
+  }
+  assert.ok(refused>1000,String(refused));
+  // 98,97 $ of DOGE at 10× costs 100,0037 $ with Bybit's fee to close, 0,0037 $ more than the 100 $ free.
+  const c=bybitLimits('DOGE',T+1000,[{id:1,cap:1e7,max:75,maintenance:.01,deduction:0}],75),q={price:.2,mark:.2,at:T+1000};
+  const r=previewOrder(newForecastAccount(T-HOUR),{symbol:'DOGE',side:'long',margin:98.97,leverage:10,quote:q,contract:c,now:T+1000});
+  assert.ok(r.cost>100&&r.cost<100.005,String(r.cost));
+  assert.deepEqual(r.reasons,['Otillräckligt tillgängligt saldo: 100,01 $ behövs, 100,00 $ finns']);
+});
+
+test('an order needs a fresh price and fresh limits with Bybit\'s order filters, one position per coin, and a mark away from the liquidation; a refusal changes nothing',()=>{
+  const a=newForecastAccount(T-HOUR),held=open(a).account;
+  const cases=[
+    ['gammalt pris',a,{quote:btcQuote(T+1000-ACCOUNT.quoteTtl-1)},'Färskt pris saknas för BTC'],
+    ['framtida pris',a,{quote:btcQuote(T+7000)},'Färskt pris saknas för BTC'],
+    ['inget pris',a,{quote:null},'Färskt pris saknas för BTC'],
+    ['inga gränser',a,{contract:null},'Bybits gränser för BTC saknas eller är för gamla'],
+    ['gamla gränser',a,{contract:bybitLimits('BTC',T+1000-LIMIT_TTL-1)},'Bybits gränser för BTC saknas eller är för gamla'],
+    ['ett annat kontrakt',a,{contract:bybitLimits('ETH',T+1000)},'Bybits gränser för BTC saknas eller är för gamla'],
+    ['inga orderfilter',a,{contract:limits('BTC',T+1000)},'Bybits ordergränser för BTC saknas'],
+    ['redan en position',held,{},'Det finns redan en position i BTC — stäng den först'],
+    ['okänt par',a,{symbol:'LUNA'},'Okänt par'],
+    ['ingen riktning',a,{side:'upp'},'Välj köp (lång) eller sälj (kort)'],
+    ['__proto__',a,{side:'__proto__'},'Välj köp (lång) eller sälj (kort)'],
+    ['ingen insats',a,{margin:0},'Ange insatsen i $'],
+    ['ingen hävstång',a,{leverage:NaN},'Ange hävstången'],
+    ['markpriset vid likvidationen',a,{leverage:150,margin:1,quote:btcQuote(T+1000,60000,59920)},'Markpriset ligger redan vid likvidationsnivån']
+  ];
+  for(const [name,acc,over,reason] of cases){
+    const r=order(acc,over);
+    assert.deepEqual([r.ok,r.reason,r.preview.reasons[0]],[false,reason,reason],name);
+    assert.deepEqual(r.account,acc,name);
+  }
+  assert.throws(()=>openManual(a,{...orderArgs({}),now:NaN}),/Ogiltig tid/);
+  // No limit on the number of manual positions: one in every coin with maxOpen 1.
+  let all=deposit(newForecastAccount(T-HOUR,{maxOpen:1}),1000,T);
+  for(const symbol of SYMBOLS){
+    const r=openManual(all,{symbol,side:'long',margin:20,leverage:10,quote:{price:PRICES[symbol],mark:PRICES[symbol],at:T+1000},contract:bybitLimits(symbol,T+1000),now:T+1000});
+    assert.equal(r.ok,true,symbol+': '+r.reason);all=r.account;
+  }
+  assert.equal(all.positions.length,7);
+  // A manual position takes no slot from the signals, and a signal is refused in a coin held manually.
+  const one=order(newForecastAccount(T-HOUR,{maxOpen:1})).account;
+  assert.equal(open(one,{sig:signal({symbol:'ETH'}),symbol:'ETH'}).opened,true);
+  assert.equal(open(one).reason,'Det finns redan en position i BTC');
+});
+
+test('a stop and a target sent with the order are rounded to Bybit\'s tick and checked against the last price and the liquidation price',()=>{
+  const a=newForecastAccount(T-HOUR),long=preview(a),short=preview(a,{side:'short'}),price=fx(60000,1),tpLong='TP för en lång position måste ligga över priset ('+price+')';
+  const ok=order(a,{sl:59000.04,tp:61000.06});
+  assert.deepEqual([ok.ok,ok.position.sl,ok.position.tp],[true,59000,61000.1]);
+  assert.equal(ok.account.log[0].text,'Öppnade lång 0,001 BTC till '+fx(60030,1)+' · 10× · marginal '+money2(long.margin)+' $ · SL '+sv(59000,1)+' · TP '+sv(61000.1,1)+' (manuell)');
+  const slLong='SL för en lång position måste ligga under priset ('+price+') och över likvidationen ('+fx(long.liq,1)+')';
+  const slShort='SL för en kort position måste ligga över priset ('+price+') och under likvidationen ('+fx(short.liq,1)+')';
+  for(const [over,reasons] of [
+    [{sl:60000},[slLong]],[{sl:long.liq-1},[slLong]],[{tp:59999.9},[tpLong]],
+    [{side:'short',sl:59999.9},[slShort]],[{side:'short',sl:short.liq+1},[slShort]],[{side:'short',tp:60000},['TP för en kort position måste ligga under priset ('+price+')']],
+    [{sl:-5},['Ange SL som ett pris över 0']],[{tp:'61000'},['Ange TP som ett pris över 0']],[{sl:60001,tp:59000},[slLong,tpLong]]])
+    assert.deepEqual(preview(a,over).reasons,reasons,JSON.stringify(over));
+  const s=order(a,{side:'short',sl:61000,tp:59000});
+  assert.deepEqual([s.ok,s.position.sl,s.position.tp],[true,61000,59000]);
+});
+
+test('property: what previewOrder shows is exactly what openManual opens, within Bybit\'s steps, minimums, maximums, tiers and the free cash',()=>{
+  let seed=20261006;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
+  const base=deposit(newForecastAccount(T-HOUR),900,T);
+  let opened=0,refused=0;
+  for(let n=0;n<1400;n++){
+    const symbol=SYMBOLS[n%SYMBOLS.length],side=rnd()<.5?'long':'short',price=PRICES[symbol]*(.5+rnd()),mark=price*(1+(rnd()-.5)*.004);
+    const c={...bybit(symbol,T+1000),filters:filtersFor(symbol)},f=c.filters,margin=10**(-1.5+4*rnd()),leverage=.5+rnd()*(c.max+30);
+    const params={symbol,side,margin,leverage,quote:{price,mark,at:T+1000},contract:c,now:T+1000},label=JSON.stringify({symbol,side,price,mark,margin,leverage});
+    const r=previewOrder(base,params),o=openManual(base,params);
+    assert.equal(o.ok,r.ok,label);
+    if(!r.ok){assert.ok(r.reasons.length>0,label);assert.equal(o.reason,r.reasons[0],label);assert.deepEqual(o.account,base,label);refused++;continue;}
+    const p=o.position;
+    assert.deepEqual([p.entry,p.units,p.margin,p.fees,p.reserve,p.liq,p.leverage,p.riskId],[r.fill,r.qty,r.margin,r.fee,r.reserve,r.liq,r.leverage,r.riskId],label);
+    // A whole number of Bybit's quantity steps, in Bybit's own units, and leverage on its 0,01 grid, never above the request.
+    const steps=p.units/f.unit/f.bybit.qtyStep;
+    assert.ok(Math.abs(steps-Math.round(steps))<1e-6&&Math.abs(p.leverage*100-Math.round(p.leverage*100))<1e-6&&p.leverage<=leverage,label);
+    assert.ok(p.units>=f.minQty*(1-1e-12)&&p.units*p.entry>=f.minNotional-1e-9&&p.units<=f.maxMktQty*(1+1e-12),label);
+    // The largest whole step within the stake: one step more would exceed it.
+    assert.ok(p.units*p.entry<=margin*p.leverage*(1+1e-9)&&(p.units+f.qtyStep)*p.entry>margin*p.leverage*(1-1e-9),label);
+    // Within the maximum of the tier the position's value at the mark falls in, and within that tier's cap (Bybit's maximum
+    // for the stake before rounding, maxLeverage, can be a hair lower right at a cap).
+    const tier=c.tiers.find(t=>t.id===p.riskId);
+    assert.ok(p.leverage<=tier.max+1e-9&&p.units*p.entry*Math.max(1,mark/p.entry)<=tier.cap*(1+1e-9),label);
+    assert.equal(tier,[...c.tiers].sort((x,y)=>x.cap-y.cap).find(t=>p.units*p.entry*Math.max(1,mark/p.entry)<=t.cap*(1+1e-12)),label);
+    // Bybit's order cost (the margin, the fee to open and the fee to close it reserves) within the free cash.
+    const dir=side==='long'?1:-1;
+    near(p.reserve,p.units*p.entry*(1-dir/p.leverage)*FEE);
+    assert.ok(p.margin+p.fees+p.reserve<=base.cash+1e-9,label);near(o.account.cash,base.cash-p.margin-p.fees-p.reserve);
+    // Bybit's isolated liquidation: there the margin balance, the fee to close aside, is the tier's maintenance margin.
+    near(p.liq,bybitIsolatedLevel(side,p.entry,p.units,p.leverage,tier));
+    if(p.liq>0)near(p.margin+dir*(p.liq-p.entry)*p.units,p.liq*p.units*tier.maintenance-tier.deduction,1e-7);
+    opened++;
+  }
+  assert.ok(opened>500&&refused>200,JSON.stringify({opened,refused}));
+  // Bybit's maximum never rises with the stake.
+  for(const symbol of SYMBOLS){
+    const c={...bybit(symbol,T+1000),filters:filtersFor(symbol)},q={price:PRICES[symbol],mark:PRICES[symbol],at:T+1000};
+    const maxes=[1,10,100,1e3,1e4,1e5].map(margin=>previewOrder(base,{symbol,side:'long',margin,leverage:1,quote:q,contract:c,now:T+1000}).maxLeverage);
+    assert.ok(maxes.every((x,i)=>!i||x<=maxes[i-1]),symbol+' '+maxes);
+  }
+});
+
+// Today's BTCUSDT risk tiers (the first: up to 300 000 $ at 150×, 0,33 %), with Bybit's order filters.
+const btcTiers=()=>bybitLimits('BTC',T+1000,BYBIT_TIERS.BTC.map(([cap,max,maintenance,deduction],k)=>({id:k+1,cap,max,maintenance,deduction})));
+
+test('a manual order\'s liquidation is Bybit\'s for an isolated position, where the fee to close cancels out: as in Bybit\'s own examples and on today\'s BTC tier at 150×',()=>{
+  // Bybit's help centre: a long of 1 BTC at 40 000 USDT, 50×, 0,5 % maintenance margin and 3 000 USDT of margin added: 36 380,25.
+  near(bybitIsolatedLevel('long',40000,1,50,{maintenance:.005,deduction:0},{extra:3000,fee:FEE}),36380.2503,1e-8);
+  // Its short examples (USDC, the same formula): 1 BTC at 10 000, 10×, 0,4 %: 10 956,1753; at 9 900 with 100 added: 10 946,16.
+  near(bybitIsolatedLevel('short',10000,1,10,{maintenance:.004,deduction:0},{fee:FEE}),10956.1753,1e-8);
+  near(bybitIsolatedLevel('short',9900,1,10,{maintenance:.004,deduction:0},{extra:100,fee:FEE}),10946.1604,1e-8);
+  // A long at 1× cannot be liquidated, and a tier's deduction moves the level away.
+  assert.equal(bybitIsolatedLevel('long',100,1,1,{maintenance:.005,deduction:0}),0);
+  assert.ok(bybitIsolatedLevel('long',100,1,10,{maintenance:.01,deduction:.5})<bybitIsolatedLevel('long',100,1,10,{maintenance:.01,deduction:0}));
+  // 85 $ at 150× buys 0,148 BTC at a fill of 85 842,9: Bybit liquidates it at 85 552,94, not 85 600,17.
+  const c=btcTiers(),a=newForecastAccount(T-HOUR),q={price:85800,mark:85800,at:T+1000};
+  const long=openManual(a,{symbol:'BTC',side:'long',margin:85,leverage:150,quote:q,contract:c,now:T+1000}),p=long.position;
+  assert.deepEqual([long.ok,p.units,p.entry,p.riskId],[true,.148,85842.9,1]);
+  near(p.liq,85552.9387,1e-9);near(long.preview.cost,98.6270,1e-5);
+  // A stop at 85 576,6 lies above it: Bybit takes it, and a mark there does not liquidate; a mark through 85 552,94 does.
+  const at=T+2000,now={price:85700,mark:85700,at};
+  assert.deepEqual(previewLevels(long.account,p.id,{sl:85576.6},{quote:now,contract:c,now:at}).reasons,[]);
+  assert.equal(checkQuote(long.account,p.id,{price:85580,mark:85576.6,at},at).positions.length,1);
+  assert.equal(checkQuote(long.account,p.id,{price:85540,mark:85552.9,at},at).trades[0].reason,'likvidation');
+  // The short mirrors it: 0,148 BTC at 85 757,1, liquidated at 86 044,87.
+  const short=openManual(a,{symbol:'BTC',side:'short',margin:85,leverage:150,quote:q,contract:c,now:T+1000}),s=short.position;
+  near(s.liq,86044.8659,1e-9);
+  assert.deepEqual(previewLevels(short.account,s.id,{sl:86020},{quote:now,contract:c,now:at}).reasons,[]);
+  assert.equal(checkQuote(short.account,s.id,{price:86000,mark:86020,at},at).positions.length,1);
+  assert.equal(checkQuote(short.account,s.id,{price:86050,mark:86044.9,at},at).trades[0].reason,'likvidation');
+  // A signal position keeps the level it was sized with, the backtest's, and reserves no fee to close.
+  const sig=open(newForecastAccount(T-HOUR)).position;
+  near(sig.liq,isolatedLevel('long',sig.entry,sig.margin+sig.fees,sig.units,FEE,sig));assert.equal(sig.reserve,undefined);
+});
+
+test('the largest stake offered also fits a risk tier that allows the leverage, so with a large balance it can be ordered at Bybit\'s maximum',()=>{
+  // Today's BTC tiers: up to 300 000 $ of value at 150×, 2 000 000 $ at 100×, 3 800 000 $ at 75×. The free cash alone would
+  // allow 8 587,74 $ at 150× with 10 000 $ free, far past the first tier, which Bybit then refuses at 100×.
+  const c=btcTiers(),q={price:85800,mark:85800,at:T+1000};
+  const at=(a,side,margin,leverage)=>previewOrder(a,{symbol:'BTC',side,margin,leverage,quote:q,contract:c,now:T+1000});
+  for(const [free,leverage,long,short] of [[10000,150,2000,1999],[2400,150,2000,1999],[50000,150,2000,1999],[10000,100,9013.47,9004.54],[50000,75,46212.85,46165.92]]){
+    const a=deposit(newForecastAccount(T-HOUR),free-100,T);
+    for(const [side,max] of [['long',long],['short',short]]){
+      const r=at(a,side,10,leverage),label=free+' $ at '+leverage+'× '+side;
+      assert.equal(r.maxMargin,max,label);
+      // A short fills below the mark, so its value at the mark counts against the cap: 300 000 / (150 × 1,0005).
+      if(leverage===150)assert.equal(max,Math.floor(3e5/(150*Math.max(1,85800/r.fill))*100)/100,label);
+      const m=at(a,side,max,leverage);
+      assert.deepEqual([m.ok,m.reasons],[true,[]],label);assert.ok(m.value*Math.max(1,85800/m.fill)<=3e5||leverage<150,label);
+    }
+  }
+  // With 100 $ free the cash still decides.
+  assert.deepEqual(['long','short'].map(side=>at(newForecastAccount(T-HOUR),side,10,150).maxMargin),[85.87,85.79]);
+});
+
+test('Bybit\'s maximum leverage is checked against the position the order opens: its value after the quantity is rounded down, at the mark',()=>{
+  // 2 000,01 $ at 150× is 300 001,50 $ before rounding, just past the first tier's 300 000 $ (Bybit's maximum for that stake
+  // is 149,99×). The order buys 3,494 BTC, 299 935,09 $ at the fill, inside the tier: Bybit takes it at 150×.
+  const a=deposit(newForecastAccount(T-HOUR),9900,T),c=btcTiers(),q={price:85800,mark:85800,at:T+1000};
+  const at=(side,margin)=>previewOrder(a,{symbol:'BTC',side,margin,leverage:150,quote:q,contract:c,now:T+1000});
+  const edge=at('long',2000.01);
+  assert.deepEqual([edge.ok,edge.reasons,edge.qty,edge.riskId,edge.maxLeverage],[true,[],3.494,1,149.99]);
+  near(edge.value,299935.0926,1e-9);
+  const opened=openManual(a,{symbol:'BTC',side:'long',margin:2000.01,leverage:150,quote:q,contract:c,now:T+1000});
+  assert.deepEqual([opened.ok,opened.position.leverage,opened.position.units],[true,150,3.494]);
+  // One step more crosses the cap: refused, with Bybit's maximum for the stake.
+  assert.deepEqual(at('long',2000.3).reasons,['Bybits högsta hävstång för den här storleken är 149,97×']);
+  // A short fills below the mark; 3,498 BTC is 300 128 $ at the mark, past the cap.
+  assert.deepEqual(at('short',2000).reasons,['Bybits högsta hävstång för den här storleken är 149,92×']);
+});
+
+test('a manual order\'s funding is paid from the free cash first, as Bybit takes it: only what the cash lacks comes out of the margin and moves the liquidation, and funding received stays in the cash',()=>{
+  // 900 $ deposited, a 10 $ long at 150× (0,017 BTC), one funding of 0,01 % at 16:00 on a mark of 85 800.
+  const c=btcTiers(),q={price:85800,mark:85800,at:T+1000},ft=T+6*HOUR,now=ft+STEP+1000;
+  const {account:a,position:p}=openManual(deposit(newForecastAccount(T-HOUR),900,T),{symbol:'BTC',side:'long',margin:10,leverage:150,quote:q,contract:c,now:T+1000});
+  const paid=settlePosition(a,p.id,riskFor(p,now,{price:85800,funding:[{t:ft,rate:.0001}]}),now),x=paid.positions[0],cost=p.units*85800*.0001;
+  assert.equal(p.units,.017);near(cost,.14586);
+  near(paid.cash,a.cash-cost);assert.deepEqual([x.margin,x.liq],[p.margin,p.liq]);near(x.funding,cost);near(paid.funding,cost);
+  // With only 5 cents free, those are paid and the rest comes out of the margin: the liquidation moves closer.
+  const poor=setFree(a,.05,T+2000),lack=settlePosition(poor,p.id,riskFor(p,now,{price:85800,funding:[{t:ft,rate:.0001}]}),now),y=lack.positions[0];
+  assert.equal(lack.cash,0);near(y.margin,p.margin-(cost-.05));near(y.funding,cost);
+  near(y.liq,bybitIsolatedLevel('long',p.entry,p.units,150,p,{extra:-(cost-.05),fee:FEE}));assert.ok(y.liq>p.liq);
+  // Funding received (a negative rate for a long) goes to the free cash and is kept through a liquidation.
+  const got=settlePosition(a,p.id,riskFor(p,now,{price:85800,funding:[{t:ft,rate:-.0001}]}),now),z=got.positions[0];
+  near(got.cash,a.cash+cost);assert.deepEqual([z.margin,z.liq],[p.margin,p.liq]);near(z.funding,-cost);
+  const gone=checkQuote(got,p.id,{price:85500,mark:p.liq-1,at:now},now+1000),t=gone.trades[0];
+  // Bybit liquidates at the bankruptcy price, where the reserved fee to close pays the closing fee.
+  assert.equal(t.reason,'likvidation');near(gone.cash,got.cash);near(t.pnl,-(p.margin+p.fees+p.reserve)+cost);near(t.fees,p.fees+p.reserve);near(gone.fees,got.fees+p.reserve);
+  assert.deepEqual([t.margin,t.reserve],[p.margin,p.reserve]);near(t.funding,-cost);
+  // A stored trade cannot claim to have lost more than its margin, fees, reserved fee to close and funding paid.
+  const broken=structuredClone(gone);broken.trades[0].pnl-=1;broken.cash-=1;
+  assert.throws(()=>validateForecastAccount(broken),/Ogiltig AI Forecast-affär/);
+});
+
+test('a manual order\'s position holds its fee to close as the order reserved it; a signal position holds none',()=>{
+  const {account:a}=order(newForecastAccount(T-HOUR)),bad=f=>{const x=structuredClone(a);f(x.positions[0],x);return ()=>validateForecastAccount(x);};
+  assert.throws(bad(p=>{p.reserve+=.001;}),/Ogiltig AI Forecast-position/);
+  assert.throws(bad(p=>{p.reserve=-1;}),/Ogiltig AI Forecast-position/);
+  assert.throws(bad(p=>{p.reserve='0';}),/Ogiltig AI Forecast-position/);
+  // Funding never adds to it: what is received goes to the free cash.
+  assert.throws(bad((p,x)=>{p.margin+=1;x.cash-=1;}),/Ogiltig AI Forecast-position/);
+  // Only a manual order's position margins as Bybit does: not a signal position, nor one in a version 1 account.
+  const sig=open(newForecastAccount(T-HOUR)).account;sig.positions[0].reserve=0;
+  assert.throws(()=>validateForecastAccount(sig),/Ogiltig AI Forecast-position/);
+  const v1=JSON.parse(V1_ACCOUNT);v1.positions[0].reserve=0;
+  assert.throws(()=>validateForecastAccount(v1),/Ogiltig AI Forecast-position/);
+  // The ledger counts the reserve: cash taken from it does not reconcile.
+  assert.throws(bad((p,x)=>{x.cash+=p.reserve;}),/kassa stämmer inte/);
+});
+
+test('levels: checked as Bybit checks them against the last price and the liquidation, rounded to the tick; a key left out keeps a level, null removes it',()=>{
+  const {account:a,position:p}=order(newForecastAccount(T-HOUR),{sl:59000,tp:61000}),c=bybitLimits('BTC',T+1000),now=T+4000;
+  const quote=(price=60000,at=now-500)=>({price,mark:price,at});
+  const at=(levels,{price=60000,contract=c}={})=>previewLevels(a,p.id,levels,{quote:quote(price),contract,now});
+  const resultAt=level=>{const exit=level*(1-SLIP);return p.margin+(exit-p.entry)*p.units-p.units*exit*FEE-p.margin-p.fees;};
+  const r=at({sl:59500.04});
+  assert.deepEqual([r.ok,r.reasons,r.changed,r.sl,r.tp,r.price,r.liq],[true,[],true,59500,61000,60000,p.liq]);
+  // The result if the position closed at the level now: slippage, both fees and the funding so far.
+  near(r.slPnl,resultAt(59500));near(r.tpPnl,resultAt(61000));
+  const slLong='SL för en lång position måste ligga under priset ('+fx(60000,1)+') och över likvidationen ('+fx(p.liq,1)+')';
+  for(const [levels,reason] of [[{sl:60000},slLong],[{sl:p.liq-.5},slLong],[{tp:60000},'TP för en lång position måste ligga över priset ('+fx(60000,1)+')'],
+    [{sl:0},'Ange SL som ett pris över 0'],[{tp:'61000'},'Ange TP som ett pris över 0'],[{},'Ange SL eller TP'],[{sl:undefined},'Ange SL eller TP'],
+    [null,'Ange SL eller TP'],[[],'Ange SL eller TP'],[{stop:1},'Okänd nivå: stop']])
+    assert.deepEqual(at(levels).reasons,[reason],JSON.stringify(levels));
+  // The price now decides: a target below a risen price is refused.
+  assert.deepEqual(at({tp:60500},{price:60600}).reasons,['TP för en lång position måste ligga över priset ('+fx(60600,1)+')']);
+  // Removing needs no limits; a new price does, and a fresh price is always needed.
+  assert.deepEqual([at({sl:null},{contract:null}).ok,at({sl:null},{contract:null}).sl,at({sl:null},{contract:null}).slPnl],[true,null,null]);
+  assert.deepEqual(at({sl:59500},{contract:null}).reasons,['Bybits prissteg för BTC saknas just nu']);
+  assert.deepEqual(previewLevels(a,p.id,{sl:59500},{quote:quote(60000,now-ACCOUNT.quoteTtl-600),contract:c,now}).reasons,['Färskt pris saknas för BTC']);
+  assert.deepEqual(previewLevels(a,'m|okänd',{sl:59500},{quote:quote(),contract:c,now}).reasons,['Positionen är redan stängd']);
+  // setLevels applies exactly that, from now on: the next replay starts with the minutes after now.
+  const s=setLevels(a,p.id,{sl:59500.04,tp:null},{quote:quote(),contract:c,now});
+  assert.deepEqual([s.ok,s.changed,s.reason],[true,true,'']);
+  const q=s.account.positions[0];
+  assert.deepEqual([q.sl,q.tp,q.levelsAt,q.nextBar,q.origin,q.deadline],[59500,null,now,T+STEP,'manual',null]);assert.deepEqual(s.position,q);
+  assert.deepEqual(s.account.log.at(-1),{t:now,kind:'ändrad',symbol:'BTC',signalId:null,text:'Nya nivåer för lång BTC: SL '+sv(59500,1)+', ingen TP (manuell)'});
+  // A key left out keeps its level; unchanged levels change nothing.
+  const t2=setLevels(s.account,p.id,{tp:62000},{quote:quote(60000,now+500),contract:c,now:now+1000}).account;
+  assert.deepEqual([t2.positions[0].sl,t2.positions[0].tp,t2.positions[0].levelsAt],[59500,62000,now+1000]);
+  const same=setLevels(t2,p.id,{sl:59500.01},{quote:quote(60000,now+1500),contract:c,now:now+2000});
+  assert.deepEqual([same.ok,same.changed],[true,false]);assert.deepEqual(same.account,t2);
+  // A refused change changes nothing.
+  const bad=setLevels(a,p.id,{sl:60000},{quote:quote(),contract:c,now});
+  assert.deepEqual([bad.ok,bad.changed,bad.reason],[false,false,slLong]);assert.deepEqual(bad.account,a);
+  // The old levels must have been checked up to now: a position not settled within a quote's lifetime waits for that.
+  assert.equal(setLevels(a,p.id,{sl:59500},{quote:quote(60000,T+30000),contract:c,now:T+30000}).reason,'Positionen i BTC är inte avräknad just nu — försök igen');
+  assert.throws(()=>setLevels(a,p.id,{sl:59500},{quote:quote(),contract:c,now:NaN}),/Ogiltig tid/);
+  // A short mirrors the rules.
+  const {account:b,position:sp}=order(newForecastAccount(T-HOUR),{side:'short'});
+  const slShort='SL för en kort position måste ligga över priset ('+fx(60000,1)+') och under likvidationen ('+fx(sp.liq,1)+')';
+  for(const [levels,reason] of [[{sl:59900},slShort],[{sl:sp.liq+.5},slShort],[{tp:60100},'TP för en kort position måste ligga under priset ('+fx(60000,1)+')']])
+    assert.deepEqual(previewLevels(b,sp.id,levels,{quote:quote(),contract:c,now}).reasons,[reason]);
+  assert.equal(previewLevels(b,sp.id,{sl:60500,tp:59000},{quote:quote(),contract:c,now}).ok,true);
+  // SHIB's prices in the reasons keep their nine decimals.
+  const shib=openManual(newForecastAccount(T-HOUR),{symbol:'SHIB',side:'long',margin:10,leverage:10,quote:{price:.000012,mark:.000012,at:T+1000},
+    contract:bybitLimits('SHIB',T+1000),now:T+1000});
+  const sr=previewLevels(shib.account,shib.position.id,{tp:.0000119},{quote:{price:.000012,mark:.000012,at:T+2000},contract:bybitLimits('SHIB',T+1000),now:T+2000});
+  assert.deepEqual(sr.reasons,['TP för en lång position måste ligga över priset (0,000012000)']);
+});
+
+test('right after an order its levels are checked on the price the order filled at, though Bybit stamped that price before the order was written',()=>{
+  // Bybit stamps a ticker when it answers; the order is written a moment later on the page's clock (and that clock can run
+  // ahead of Bybit's), so the freshest price for a just-opened position is older than the position.
+  const bybitAt=T+1000-400,{account:a,position:p}=order(newForecastAccount(T-HOUR),{quote:btcQuote(bybitAt)}),c=bybitLimits('BTC',T+1000);
+  assert.equal(p.openedAt,T+1000);
+  const args={quote:btcQuote(bybitAt),contract:c,now:T+1200},r=previewLevels(a,p.id,{sl:59500,tp:61000},args);
+  assert.deepEqual([r.ok,r.reasons,r.sl,r.tp,r.price],[true,[],59500,61000,60000]);
+  const s=setLevels(a,p.id,{sl:59500},args);
+  assert.deepEqual([s.ok,s.reason,s.position.sl,s.position.levelsAt],[true,'',59500,T+1200]);
+  // The price must still be fresh, whenever the position opened.
+  assert.deepEqual(previewLevels(a,p.id,{sl:59500},{...args,now:bybitAt+ACCOUNT.quoteTtl+1}).reasons,['Färskt pris saknas för BTC']);
+  // Only the protection waits for a price taken after the opening: one from before it can trigger nothing.
+  const sa=s.account;
+  assert.deepEqual(checkQuote(sa,p.id,btcQuote(bybitAt,59000),T+1300),sa);
+});
+
+test('the levels a position has, sent back as they are or within half of Bybit\'s tick, change nothing: a signal position keeps its rules',()=>{
+  // A signal's levels come from its ATR and lie off Bybit's 0,1 $ tick.
+  const sig=signal({sl:58765.4321,tp:62345.6789,entry:60000}),{account:a,position:p}=open(tenX(),{sig,price:60000}),now=T+5000;
+  const args={quote:{price:60000,mark:60000,at:now},contract:bybitLimits('BTC',now),now};
+  for(const levels of [{sl:p.sl,tp:p.tp},{sl:p.sl},{tp:p.tp},{sl:58765.4,tp:62345.7},{sl:58765.4321+.049}]){
+    const pv=previewLevels(a,p.id,levels,args),r=setLevels(a,p.id,levels,args),label=JSON.stringify(levels);
+    assert.deepEqual([pv.ok,pv.reasons,pv.changed,pv.sl,pv.tp],[true,[],false,p.sl,p.tp],label);
+    assert.deepEqual([r.ok,r.changed,r.reason],[true,false,''],label);assert.deepEqual(r.account,a,label);
+  }
+  // Without Bybit's limits only the very same level is known to be unchanged.
+  assert.deepEqual([setLevels(a,p.id,{sl:p.sl},{...args,contract:null}).changed,previewLevels(a,p.id,{sl:58765.4},{...args,contract:null}).reasons],
+    [false,['Bybits prissteg för BTC saknas just nu']]);
+  // Further than half a tick away it is a new level on Bybit's tick, and the position becomes manual.
+  const moved=setLevels(a,p.id,{sl:58765.36},args).position;
+  assert.deepEqual([moved.sl,moved.tp,moved.origin,moved.deadline],[58765.4,p.tp,'manual',null]);
+  // Removing a level a position does not have changes nothing either.
+  const {account:m,position:q}=order(newForecastAccount(T-HOUR),{sl:59000});
+  assert.deepEqual([setLevels(m,q.id,{tp:null},{quote:btcQuote(T+2000),contract:null,now:T+2000}).changed,setLevels(m,q.id,{sl:59000},{quote:btcQuote(T+2000),contract:null,now:T+2000}).changed],[false,false]);
+});
+
+test('a manual order\'s texts give prices with the decimals of Bybit\'s tick, also from 100 000 $ on',()=>{
+  // BTC at 123 456,7: six significant digits would show 123 518 for a fill of 123 518,4 and 120 000 for a stop at 120 000,1.
+  const q={price:123456.7,mark:123456.7,at:T+1000},c=bybitLimits('BTC',T+1000);
+  const o=openManual(newForecastAccount(T-HOUR),{symbol:'BTC',side:'long',margin:13,leverage:10,sl:120000.1,tp:130000.3,quote:q,contract:c,now:T+1000});
+  assert.equal(o.account.log[0].text,'Öppnade lång 0,001 BTC till '+sv(123518.4,1)+' · 10× · marginal 12,35 $ · SL '+sv(120000.1,1)+' · TP '+sv(130000.3,1)+' (manuell)');
+  const s=setLevels(o.account,o.position.id,{sl:119999.9},{quote:{...q,at:T+2000},contract:c,now:T+2000});
+  assert.equal(s.account.log.at(-1).text,'Nya nivåer för lång BTC: SL '+sv(119999.9,1)+', TP '+sv(130000.3,1)+' (manuell)');
+  // SHIB keeps its nine decimals per token.
+  const shib=openManual(newForecastAccount(T-HOUR),{symbol:'SHIB',side:'long',margin:10,leverage:10,tp:.0000125006,quote:{price:.000012,mark:.000012,at:T+1000},
+    contract:bybitLimits('SHIB',T+1000),now:T+1000});
+  assert.match(shib.account.log[0].text,/ till 0,000012006 · 10× · marginal \d+,\d\d \$ · TP 0,000012501 \(manuell\)$/);
+});
+
+test('in the texts a fill, a price and a liquidation have all of Bybit\'s tick decimals, as the page writes them; a stop or a target has as many as the page gives a price of its size, more where the level has them, never more than the tick',()=>{
+  // BTC at a whole dollar: the fill reads 60 030,0, as Positioner and the chart's entry tag write it; a stop at 59 000 as the chart's tag.
+  const o=order(newForecastAccount(T-HOUR),{sl:59000});
+  assert.equal(o.account.log[0].text,'Öppnade lång 0,001 BTC till '+fx(60030,1)+' · 10× · marginal '+money2(o.position.margin)+' $ · SL '+fx(59000,0)+' (manuell)');
+  // A refusal's price and liquidation likewise.
+  const r=previewLevels(o.account,o.position.id,{sl:60000},{quote:btcQuote(T+2000),contract:bybitLimits('BTC',T+1000),now:T+2000});
+  assert.deepEqual(r.reasons,['SL för en lång position måste ligga under priset ('+fx(60000,1)+') och över likvidationen ('+fx(o.position.liq,1)+')']);
+  // SOL's tick is 0,01 $: a target at 120,8 reads 120,80, as the chart's tag writes it.
+  const sol=openManual(newForecastAccount(T-HOUR),{symbol:'SOL',side:'long',margin:10,leverage:10,quote:{price:120,mark:120,at:T+1000},contract:bybitLimits('SOL',T+1000),now:T+1000});
+  assert.match(sol.account.log[0].text,/^Öppnade lång 0,8 SOL till 120,06 · /);
+  const s=setLevels(sol.account,sol.position.id,{tp:120.8},{quote:{price:120,mark:120,at:T+2000},contract:bybitLimits('SOL',T+1000),now:T+2000});
+  assert.equal(s.account.log.at(-1).text,'Nya nivåer för lång SOL: ingen SL, TP 120,80 (manuell)');
+  // SHIB: nine decimals per token (Bybit's tick), never the ten the chart gives a price of its size.
+  const shib=openManual(newForecastAccount(T-HOUR),{symbol:'SHIB',side:'short',margin:10,leverage:10,tp:.0000058,quote:{price:.00000589,mark:.00000589,at:T+1000},
+    contract:bybitLimits('SHIB',T+1000),now:T+1000});
+  assert.match(shib.account.log[0].text,/ SHIB till 0,000005887 · 10× · marginal \d+,\d\d \$ · TP 0,000005800 \(manuell\)$/);
+  // The rule: BTC 85 700 and 85 700,5 (tick 0,1), SOL 120,8 (0,01), PEPE and SHIB (0,000000001), ETH 4 123 (0,01), DOGE 0,21
+  // (0,00001), BTC over 100 000; a signal's level off the tick as the chart writes it (BTC in whole dollars, PEPE and ETH
+  // never past the tick); without the tick as the chart writes a price of its size, more where it has them.
+  const d=accountModule.levelDecimals;
+  assert.equal(typeof d,'function');
+  assert.deepEqual([d(85700,1),d(85700.5,1),d(120.8,2),d(.000004366,9),d(.00000589,9),d(4123,2),d(.21,5),d(123456.7,1)],[0,1,2,9,9,1,5,1]);
+  assert.deepEqual([d(86123.4567,1),d(.0000043661234,9),d(4123.456,2)],[0,9,1]);
+  assert.deepEqual([d(120.8),d(.000004366),d(85700.25)],[2,10,2]);
+});
+
+test('changing the levels of a signal position makes it manual: no time stop and no close on a signal, and the log says so',()=>{
+  const {account:a,position:p}=open(tenX()),c=bybitLimits('BTC',T+1000),now=T+5000;
+  const s=setLevels(a,p.id,{tp:105},{quote:{price:100,mark:100,at:now},contract:c,now}),q=s.account.positions[0];
+  assert.deepEqual([q.origin,q.deadline,q.signalId,q.tf,q.sl,q.tp,q.levelsAt],['manual',null,p.signalId,'1h',98,105,now]);
+  assert.deepEqual(s.account.log.at(-1),{t:now,kind:'ändrad',symbol:'BTC',signalId:p.signalId,
+    text:'Nya nivåer för lång BTC: SL 98,0, TP 105,0 — signalpositionen hanteras nu manuellt, utan tidsstopp'});
+  // Past the signal's holding time it is still open.
+  const later=p.deadline+HOUR,held=settlePosition(s.account,p.id,riskFor(q,later),later);
+  assert.deepEqual([held.positions.length,held.trades],[1,[]]);
+  assert.equal(checkQuote(held,p.id,{price:100,mark:100,at:later},later+1000).positions.length,1);
+  // It closes only on its levels, liquidation or the user's close; the trade and the log say manual.
+  for(const reason of ['signal','tid','slut'])
+    assert.throws(()=>closePosition(s.account,p.id,{price:100,now,reason}),{message:'En manuell position stängs bara av SL, TP, likvidation eller Stäng'});
+  const closed=closePosition(s.account,p.id,{price:100,now,reason:'manuell'});
+  assert.equal(closed.trades[0].origin,'manual');assert.match(closed.log.at(-1).text,/^Stängd manuellt: lång BTC [+−]\d+,\d\d \$ \(manuell\)$/);
+  // Untouched, a signal position keeps its rules.
+  assert.equal(settlePosition(a,p.id,riskFor(p,later),later).trades[0].reason,'tid');
+  // Removing a level converts it too; unchanged levels do not.
+  assert.equal(setLevels(a,p.id,{tp:null},{quote:{price:100,mark:100,at:now},contract:null,now}).account.positions[0].origin,'manual');
+  const kept=setLevels(a,p.id,{sl:98},{quote:{price:100,mark:100,at:now},contract:c,now});
+  assert.deepEqual([kept.ok,kept.changed,kept.account.positions[0].origin],[true,false,'signal']);
+});
+
+test('a change of levels applies only to prices after it: the old stop hit before the change is booked, and after it only the new level counts, replayed from the minute after the change',()=>{
+  // A manual long at 100,05 (10×) with its stop at 98, opened at 10:00:01. The change comes at 10:12:30, in the step
+  // 10:10–10:15 that is still forming.
+  const S0=T+2*STEP,t=S0+2*MIN+30000,c=bybitLimits('BTC',T+1000);
+  const {account:a,position:p}=order(newForecastAccount(T-HOUR),{quote:btcQuote(T+1000,100),margin:20,sl:98});
+  assert.deepEqual([p.entry,p.sl,p.nextBar],[100*(1+SLIP),98,T+STEP]);
+  // The old stop was reached at 10:11, before the change: settling with the old levels books it, and the change finds no position.
+  const hit=settlePosition(a,p.id,riskFor(p,t,{lasts:{[S0]:{l:97.9}}}),t);
+  assert.deepEqual(hit.trades.map(x=>[x.reason,x.closedAt]),[['stopp',t]]);near(hit.trades[0].exit,98*(1-SLIP));
+  assert.equal(setLevels(hit,p.id,{sl:95},{quote:btcQuote(t,100),contract:bybitLimits('BTC',t),now:t}).reason,'Positionen är redan stängd');
+  // Not reached: settled up to 10:12:30 with the forming step's low at 98,5 so far, then the stop moves up to 99,5.
+  const held=settlePosition(a,p.id,riskFor(p,t,{lasts:{[S0]:{l:98.5}}}),t);
+  assert.deepEqual([held.positions.length,held.positions[0].nextBar,held.positions[0].fundingThrough],[1,S0,t]);
+  const moved=setLevels(held,p.id,{sl:99.5},{quote:btcQuote(t,100),contract:bybitLimits('BTC',t),now:t}).account,q=moved.positions[0];
+  assert.deepEqual([q.sl,q.levelsAt,q.nextBar],[99.5,t,S0+STEP]);
+  // The step dipped to 99,2 at 10:11 and 99,1 at 10:12, before the change and under the new stop, and to 99,3 at 10:14,
+  // after it. Only 10:14 counts: the new stop at that minute's end.
+  const later=S0+2*STEP+1000,flat=x=>({o:100,h:100,l:100,c:100,...x}),early=[{t:S0+MIN,...flat({l:99.2})},{t:S0+2*MIN,...flat({l:99.1})}];
+  const withEarly=r=>({...r,minuteMarks:[...early.map(b=>({...b,l:100})),...r.minuteMarks],minuteLasts:[...early,...r.minuteLasts]});
+  const r=riskFor(q,later,{lasts:{[S0]:{l:99.1}},minuteLasts:{[S0+4*MIN]:{l:99.3}}});
+  assert.deepEqual(r.minuteLasts.map(b=>b.t),[S0+3*MIN,S0+4*MIN]);
+  const done=settlePosition(moved,p.id,withEarly(r),later);
+  assert.deepEqual(done.trades.map(x=>[x.reason,x.closedAt]),[['stopp',S0+5*MIN]]);near(done.trades[0].exit,99.5*(1-SLIP));
+  // Without that last dip nothing after the change reached the new stop: still open, settled to the next step.
+  const quiet=settlePosition(moved,p.id,withEarly(riskFor(q,later,{lasts:{[S0]:{l:99.1}}})),later);
+  assert.deepEqual([quiet.trades,quiet.positions[0].nextBar,quiet.positions[0].levelsAt],[[],S0+2*STEP,t]);
+  // With the old stop the same prices never reached 98.
+  assert.equal(settlePosition(held,p.id,riskFor(held.positions[0],later,{lasts:{[S0]:{l:99.1}}}),later).positions.length,1);
+  // Every closed minute after the change is needed.
+  assert.throws(()=>settlePosition(moved,p.id,{...r,minuteLasts:r.minuteLasts.filter(b=>b.t!==S0+3*MIN)},later),/Lucka i 1-minuterspriserna för BTC/);
+  // Live: a quote taken before the change cannot trigger the new stop; one taken after it does. Liquidation needs no level.
+  assert.equal(checkQuote(moved,p.id,{price:99.4,mark:99.4,at:t-1000},t+1000).positions.length,1);
+  const live=checkQuote(moved,p.id,{price:99.4,mark:99.4,at:t+500},t+1000).trades[0];
+  assert.deepEqual([live.reason,live.closedAt],['stopp',t+1000]);near(live.exit,99.4*(1-SLIP));
+  assert.equal(checkQuote(moved,p.id,{price:90,mark:q.liq-.01,at:t-1000},t+1000).trades[0].reason,'likvidation');
+});
+
+test('after a change of the stop or target the liquidation is still checked on every minute of that 5-minute step after the opening; the new levels only on the minutes after the change',()=>{
+  // A manual long at 25× opened at 10:00:01, its stop at 98,5. At 10:12:20 the stop moves up to 99,2, settled up to then.
+  const S0=T+2*STEP,t=S0+2*MIN+20000,later=S0+2*STEP+1000;
+  const {account:a,position:p}=order(newForecastAccount(T-HOUR),{quote:btcQuote(T+1000,100),margin:20,leverage:25,sl:98.5});
+  const held=settlePosition(a,p.id,riskFor(p,t),t);
+  const moved=setLevels(held,p.id,{sl:99.2},{quote:btcQuote(t,100),contract:bybitLimits('BTC',t),now:t}).account,q=moved.positions[0];
+  assert.deepEqual([q.sl,q.levelsAt,q.nextBar,q.liq],[99.2,t,S0+STEP,p.liq]);
+  // The replay reads the mark from the start of the step, the last price from the minute after the change.
+  const r=riskFor(q,later);
+  assert.deepEqual([r.minuteMarks.map(b=>b.t),r.minuteLasts.map(b=>b.t)],[[0,1,2,3,4].map(k=>S0+k*MIN),[S0+3*MIN,S0+4*MIN]]);
+  // A mark wick through the liquidation level while the page was closed, in the minute of the change or the one before:
+  // liquidated at that minute's end, as the 5-minute candle liquidates it without the change.
+  for(const minute of [S0+2*MIN,S0+MIN]){
+    const done=settlePosition(moved,p.id,riskFor(q,later,{minuteMarks:{[minute]:{l:q.liq-.05}}}),later).trades[0];
+    assert.deepEqual([done?.reason,done?.closedAt],['likvidation',minute+MIN],String((minute-S0)/MIN));
+    near(done.pnl,-(p.margin+p.fees+p.reserve));near(done.fees,p.fees+p.reserve);
+  }
+  const without=settlePosition(held,p.id,riskFor(held.positions[0],later,{marks:{[S0]:{l:q.liq-.05}}}),later).trades[0];
+  assert.deepEqual([without.reason,without.closedAt],['likvidation',S0+STEP]);
+  // A last price under the new stop in the minute of the change does not stop it: that minute also holds prices from before
+  // the change. One minute later it does, at the new stop.
+  const early={...r,minuteLasts:[{t:S0+2*MIN,o:100,h:100,l:99.1,c:100},...r.minuteLasts]};
+  assert.deepEqual(settlePosition(moved,p.id,early,later).positions.map(x=>x.nextBar),[S0+2*STEP]);
+  const stop=settlePosition(moved,p.id,riskFor(q,later,{minuteLasts:{[S0+3*MIN]:{l:99.1}}}),later).trades[0];
+  assert.deepEqual([stop.reason,stop.closedAt],['stopp',S0+4*MIN]);near(stop.exit,99.2*(1-SLIP));
+  // Every closed minute of the mark is needed, also before the change.
+  assert.throws(()=>settlePosition(moved,p.id,{...r,minuteMarks:r.minuteMarks.filter(b=>b.t!==S0+MIN)},later),/Lucka i 1-minuterspriserna för BTC/);
+  // Opened inside that step, at 10:11:10: the minutes before the opening count for nothing, not even for the liquidation.
+  const o=order(newForecastAccount(T-HOUR),{quote:btcQuote(S0+MIN+10000,100),margin:20,leverage:25,contract:bybitLimits('BTC',S0+MIN+10000),now:S0+MIN+10000});
+  const o2=setLevels(settlePosition(o.account,o.position.id,riskFor(o.position,t),t),o.position.id,{sl:99.2},{quote:btcQuote(t,100),contract:bybitLimits('BTC',t),now:t}).account;
+  const q2=o2.positions[0],r2=riskFor(q2,later);
+  assert.deepEqual([r2.minuteMarks.map(b=>b.t),r2.minuteLasts.map(b=>b.t)],[[2,3,4].map(k=>S0+k*MIN),[S0+3*MIN,S0+4*MIN]]);
+  const before={...r2,minuteMarks:[{t:S0+MIN,o:100,h:100,l:q2.liq-.05,c:100},...r2.minuteMarks]};
+  assert.equal(settlePosition(o2,q2.id,before,later).positions.length,1);
+  assert.equal(settlePosition(o2,q2.id,riskFor(q2,later,{minuteMarks:{[S0+2*MIN]:{l:q2.liq-.05}}}),later).trades[0].reason,'likvidation');
+});
+
+test('a long absence is settled window by window, each up to its end, and the windows book exactly what one long replay books',()=>{
+  // Three days of 5-minute candles in a random walk, funding every 8 hours.
+  let seed=29;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
+  const bars=[];let px=100;
+  for(let t=T;t<T+864*STEP;t+=STEP){const o=px,c=o*(1+(rnd()-.5)*.004);bars.push({t,o,h:Math.max(o,c)*(1+rnd()*.001),l:Math.min(o,c)*(1-rnd()*.001),c});px=c;}
+  const funding=bars.filter(b=>b.t%(8*HOUR)===0).map(b=>({t:b.t,rate:(rnd()-.4)*.001}));
+  const riskAt=(q,now)=>{
+    const cur=Math.floor(now/STEP)*STEP,from=Math.min(q.nextBar,Math.floor(q.fundingThrough/STEP)*STEP),seen=bars.filter(b=>b.t>=from&&b.t<=cur),mm=[],ml=[];
+    const since=Math.max(q.openedAt,q.levelsAt),first=(Math.floor(since/STEP)+1)*STEP;
+    for(let t=Math.max(first-STEP,Math.ceil(q.openedAt/MIN)*MIN);t<first&&t<=now;t+=MIN){const b=bars.find(x=>x.t===first-STEP),m={t,o:b.o,h:b.o,l:b.o,c:b.o};mm.push(m);if(t>=Math.ceil(since/MIN)*MIN)ml.push(m);}
+    return {price:seen.at(-1).c,mark:seen.at(-1).c,at:now,markBars:seen,lastBars:seen.filter(b=>b.t>=q.nextBar),minuteMarks:mm,minuteLasts:ml,
+      funding:funding.filter(f=>f.t>q.fundingThrough&&f.t<=now),fundingThrough:now,historyFrom:from};
+  };
+  // fetchPositionRisk's window: the candles before `through`, the funding before it.
+  const windowOf=(r,through)=>({...r,markBars:r.markBars.filter(b=>b.t<through),lastBars:r.lastBars.filter(b=>b.t<through),
+    funding:r.funding.filter(f=>f.t<through),fundingThrough:through-STEP,through});
+  const end=T+863*STEP+1000,start=(x,id)=>{const q=x.positions.find(y=>y.id===id);return Math.min(q.nextBar,Math.floor(q.fundingThrough/STEP)*STEP);};
+  const cases=[
+    order(newForecastAccount(T-HOUR),{quote:btcQuote(T+1000,100),margin:20,leverage:3}),
+    order(newForecastAccount(T-HOUR),{quote:btcQuote(T+1000,100),margin:20,leverage:5,side:'short',sl:104}),
+    open(tenX({tf:'15m'}),{sig:signal({tf:'15m',barTime:T-15*MIN,sl:97,tp:103})})];
+  for(const {account:a,position:p} of cases){
+    const once=settlePosition(a,p.id,riskAt(p,end),end);
+    let x=a,windows=0;
+    while(x.positions.length&&start(x,p.id)+200*STEP<=Math.floor((end-8*HOUR)/STEP)*STEP){
+      const through=start(x,p.id)+200*STEP,before=x.positions[0];
+      x=settlePosition(x,p.id,windowOf(riskAt(before,end),through),end);windows++;
+      if(x.positions.length){
+        const q=x.positions[0];
+        // Settled up to the window's end and no further: its funding, not one at its end; nor the time stop due by now.
+        assert.deepEqual([q.nextBar,q.fundingThrough],[through,through-STEP]);
+        near(q.funding,funding.filter(f=>f.t>before.fundingThrough&&f.t<through).reduce((s,f)=>s+(q.side==='long'?1:-1)*q.units*bars.find(b=>b.t===f.t).o*f.rate,before.funding));
+      }
+    }
+    if(x.positions.length)x=settlePosition(x,p.id,riskAt(x.positions[0],end),end);
+    // The manual positions are still open at the end (the price fell from 100 to 94); the signal one ended at its time stop.
+    assert.ok(p.origin==='signal'?windows===1&&x.trades[0].reason==='tid':windows===3&&x.positions.length===1,p.origin+' '+windows);
+    assert.deepEqual(x,once,p.side+' '+p.origin);
+  }
+  // A window ends on a 5-minute boundary of a closed candle, and says so in its funding mark.
+  const {account:a,position:p}=cases[0],r=riskAt(p,end),through=p.nextBar+100*STEP;
+  for(const bad of [{...windowOf(r,through),through:through+1},{...windowOf(r,through),fundingThrough:through},windowOf(r,Math.floor(end/STEP)*STEP+STEP)])
+    assert.throws(()=>settlePosition(a,p.id,bad,end),/Markpris- eller fundinghistorik saknas för BTC/);
+  // A signal position past its time stop by now, with the deadline after the window: still open after it, closed at the
+  // deadline candle by a later one.
+  const s=cases[2],w=settlePosition(s.account,s.position.id,windowOf(riskAt(s.position,end),s.position.nextBar+2*STEP),end);
+  assert.ok(end>s.position.deadline&&s.position.nextBar+2*STEP<s.position.deadline);assert.equal(w.positions.length,1);
+});
+
+test('a manual position without a stop, a target or a time stop ends only by liquidation or the user\'s close, and pays funding meanwhile',()=>{
+  const {account:a,position:p}=order(newForecastAccount(T-HOUR),{quote:btcQuote(T+1000,100),margin:20});
+  assert.deepEqual([p.sl,p.tp,p.deadline],[null,null,null]);
+  // 30 hours later, the price having been far from the entry both ways, with a funding every 8 hours.
+  const now=T+30*HOUR,funding=[8,16,24].map(h=>({t:T+h*HOUR,rate:.0001})),swings={[T+2*HOUR]:{l:92},[T+5*HOUR]:{h:130}};
+  const s=settlePosition(a,p.id,riskFor(p,now,{lasts:swings,funding}),now),paid=3*p.units*100*.0001;
+  assert.deepEqual([s.positions.length,s.trades],[1,[]]);near(s.positions[0].funding,paid);
+  // Paid from the free cash, as Bybit takes it: the margin and the liquidation price stay where they were.
+  near(s.cash,a.cash-paid);assert.deepEqual([s.positions[0].margin,s.positions[0].liq],[p.margin,p.liq]);
+  assert.equal(checkQuote(s,p.id,{price:150,mark:150,at:now-1000},now).positions.length,1);
+  assert.equal(checkQuote(s,p.id,{price:93,mark:93,at:now-1000},now).positions.length,1);
+  // A liquidation loses the margin, the opening fee and the reserved fee to close; the funding was paid on the way.
+  const liq=checkQuote(s,p.id,{price:80,mark:s.positions[0].liq-.01,at:now-1000},now).trades[0];
+  assert.deepEqual([liq.reason,liq.origin],['likvidation','manual']);near(liq.pnl,-(p.margin+p.fees+p.reserve+paid));near(liq.funding,paid);
+  // A mark through the level in a replayed candle liquidates it too.
+  const crash=settlePosition(a,p.id,riskFor(p,now,{marks:{[T+3*HOUR]:{l:p.liq-.01}},funding}),now).trades[0];
+  assert.deepEqual([crash.reason,crash.closedAt],['likvidation',T+3*HOUR+STEP]);
+  // No distance to a missing level.
+  const row=accountLive(s,{BTC:{price:101,mark:101,at:now-1000}},now).positions[0];
+  assert.deepEqual([row.toSl,row.toTp,row.price],[null,null,101]);
+});
+
+test('deposits and withdrawals are ledger entries: free cash only, whole cents up to 1 000 000 $, and the ledger reconciles',()=>{
+  let a=deposit(newForecastAccount(T-HOUR),50,T);
+  assert.deepEqual([a.cash,a.transfers,a.log.at(-1)],[150,[{id:'t|1|'+T,t:T,kind:'in',amount:50,cashAfter:150,tradeCount:0}],
+    {t:T,kind:'insättning',symbol:null,signalId:null,text:'Insättning 50,00 $'}]);
+  a=withdraw(a,20.5,T+1000);
+  assert.deepEqual([a.cash,a.transfers[1],a.log.at(-1).text],[129.5,{id:'t|2|'+(T+1000),t:T+1000,kind:'out',amount:20.5,cashAfter:129.5,tradeCount:0},'Uttag 20,50 $']);
+  // With a position open, its margin cannot be withdrawn: only the free cash, as the page shows it in whole cents.
+  const o=order(a,{margin:50}).account,free=o.cash;
+  const refusal='Det går bara att ta ut tillgängligt saldo (högst '+money2(free)+' $), inte marginalen i öppna positioner';
+  assert.throws(()=>withdraw(o,Math.round(free*100)/100+.01,T+2000),{message:refusal});
+  // 89,8297… $ of free cash shows as 89,83 $, and 89,83 $ can be taken out: that takes all of it, to 0 $, and books what
+  // there was (the amount typed is whole cents; the fees left the free cash with less than a cent more).
+  const doge=openManual(newForecastAccount(T-HOUR),{symbol:'DOGE',side:'long',margin:10.07,leverage:10,quote:{price:.2,mark:.2,at:T+1000},
+    contract:bybitLimits('DOGE',T+1000,[{id:1,cap:1e7,max:75,maintenance:.01,deduction:0}],75),now:T+1000}).account;
+  assert.equal(money2(doge.cash),'89,83');assert.ok(doge.cash<89.83);
+  const emptied=withdraw(doge,89.83,T+2000),out=emptied.transfers.at(-1);
+  assert.deepEqual([emptied.cash,out.kind,out.amount,out.cashAfter,emptied.log.at(-1).text],[0,'out',doge.cash,0,'Uttag 89,83 $']);
+  assert.deepEqual(emptied.positions,doge.positions);
+  assert.throws(()=>withdraw(doge,89.84,T+2000),{message:'Det går bara att ta ut tillgängligt saldo (högst 89,83 $), inte marginalen i öppna positioner'});
+  // Less than all of it leaves the rest.
+  near(withdraw(doge,89.82,T+2000).cash,doge.cash-89.82);
+  const all=withdraw(o,Math.floor(free*100)/100,T+2000);
+  assert.ok(all.cash>=0&&all.cash<.01);assert.deepEqual(all.positions,o.positions);
+  // Amounts: over 0, at most 1 000 000 $, whole cents.
+  for(const [x,message] of [[0,'Ange ett belopp över 0 $'],[-5,'Ange ett belopp över 0 $'],[NaN,'Ange ett belopp över 0 $'],['50','Ange ett belopp över 0 $'],
+    [1e6+.01,'Högst '+sv(1e6,0)+' $ per insättning eller uttag'],[12.345,'Ange beloppet i hela cent']]){
+    assert.throws(()=>deposit(a,x,T),{message});assert.throws(()=>withdraw(a,x,T),{message});
+  }
+  assert.equal(deposit(a,1e6,T).cash,a.cash+1e6);assert.equal(deposit(a,.1+.2,T).transfers.at(-1).amount,.3);
+  assert.throws(()=>deposit(a,5,NaN),/Ogiltig tid/);
+  // setFree deposits or withdraws the difference.
+  const down=setFree(a,75,T+3000),up=setFree(down,200,T+4000);
+  assert.deepEqual([down.cash,down.transfers.at(-1).kind,down.transfers.at(-1).amount,down.log.at(-1).text],[75,'out',54.5,'Uttag 54,50 $']);
+  assert.deepEqual([up.cash,up.transfers.at(-1).kind,up.transfers.at(-1).amount,up.log.at(-1).text],[200,'in',125,'Insättning 125,00 $']);
+  assert.throws(()=>setFree(up,200,T+5000),{message:'Tillgängligt saldo är redan 200,00 $'});
+  for(const [x,message] of [[-1,'Ange ett tillgängligt saldo på 0 $ eller mer'],[NaN,'Ange ett tillgängligt saldo på 0 $ eller mer'],[12.345,'Ange beloppet i hela cent'],
+    [2e6,'Högst '+sv(1e6,0)+' $ per insättning eller uttag']])assert.throws(()=>setFree(a,x,T),{message});
+  // With a position open, the free cash can be set to anything from 0 $: the margin stays where it is.
+  const zero=setFree(o,0,T+5000);
+  assert.equal(zero.cash,0);near(zero.transfers.at(-1).amount,free);assert.deepEqual(zero.positions,o.positions);
+  const ten=setFree(o,10,T+5000);assert.equal(ten.cash,10);near(ten.transfers.at(-1).amount,free-10);
+  // A trade closed after transfers: its realized equity includes them, and the transfer after it counts the trades before it.
+  const closed=closePosition(ten,ten.positions[0].id,{price:60000,now:T+6000,reason:'manuell'}),later=deposit(closed,5,T+7000);
+  near(closed.trades[0].equityAfter,closed.cash);assert.equal(later.transfers.at(-1).tradeCount,1);
+  near(later.cash,100+50-20.5-(free-10)+closed.trades[0].pnl+5);
+  // The ledger reconciles: start + deposits − withdrawals + realized results − what open positions locked up.
+  const broken=f=>{const x=structuredClone(up);f(x);return ()=>validateForecastAccount(x);};
+  assert.throws(broken(x=>{x.transfers[0].amount=60;}),/kassa stämmer inte/);
+  assert.throws(broken(x=>{x.transfers[0].kind='gåva';}),/Ogiltig insättning eller uttag/);
+  assert.throws(broken(x=>{x.transfers[0].tradeCount=1;}),/Ogiltig insättning eller uttag/);
+  assert.throws(broken(x=>{x.transfers[1].id=x.transfers[0].id;}),/Ogiltig insättning eller uttag/);
+  assert.throws(broken(x=>{x.transfers[0].cashAfter=-1;}),/Ogiltig insättning eller uttag/);
+  assert.throws(broken(x=>{x.transfers[0].amount=2e6;x.cash+=2e6-50;}),/Ogiltig insättning eller uttag/);
+  // Transfers stay in the order they were made: one cannot come after a trade and before an earlier transfer.
+  const unordered=structuredClone(later);unordered.transfers[0].tradeCount=1;
+  assert.throws(()=>validateForecastAccount(unordered),/Ogiltig insättning eller uttag/);
+});
+
+test('accountStats: a deposit is no gain and a withdrawal no drawdown; win rate and profit factor come from the trades alone',()=>{
+  // +10, then a 1 000 $ deposit, −55, then a 500 $ withdrawal, +5,55.
+  const a=newForecastAccount(T-10*HOUR);
+  a.trades=[[10,110],[-55,1055],[5.55,560.55]].map(([pnl,equityAfter],i)=>({id:'p|s'+i,symbol:SYMBOLS[i],side:'long',signalId:'s'+i,tf:'1h',entry:100,exit:100+pnl/10,
+    units:1,margin:60,leverage:10,openedAt:T+i*HOUR,closedAt:T+i*HOUR+60000,reason:pnl<0?'stopp':'mål',pnl,fees:0,funding:0,equityAfter,origin:'signal'}));
+  a.transfers=[{id:'t|1',t:T+HOUR-1000,kind:'in',amount:1000,cashAfter:1110,tradeCount:1},{id:'t|2',t:T+2*HOUR-1000,kind:'out',amount:500,cashAfter:555,tradeCount:2}];
+  a.cash=560.55;
+  const s=accountStats(validateForecastAccount(a));
+  assert.deepEqual([s.trades,s.wins,s.losses,s.deposits,s.withdrawals,s.netTransfers],[3,2,1,1000,500,500]);
+  near(s.winRate,2/3);near(s.net,-39.45);near(s.profitFactor,15.55/55);assert.equal(s.best,10);assert.equal(s.worst,-55);
+  // −55 on 1 110 $ is the deepest fall, 4,95 %; the 500 $ withdrawal is no fall from 1 055 $ to 560,55 $ (47 %).
+  near(s.maxDrawdown,55/1110);
+  // A deposit before any trade, then a loss: measured on the capital at the time.
+  const b=newForecastAccount(T-10*HOUR);
+  b.transfers=[{id:'t|1',t:T,kind:'in',amount:100,cashAfter:200,tradeCount:0}];
+  b.trades=[{...a.trades[1],pnl:-20,equityAfter:180,id:'p|x',signalId:'x'}];b.cash=180;
+  near(accountStats(validateForecastAccount(b)).maxDrawdown,.1);
+  // A withdrawal down to 20 $, then a 2 $ gain: no drawdown at all.
+  const c=newForecastAccount(T-10*HOUR);
+  c.transfers=[{id:'t|1',t:T,kind:'out',amount:80,cashAfter:20,tradeCount:0}];
+  c.trades=[{...a.trades[0],pnl:2,equityAfter:22,id:'p|y',signalId:'y'}];c.cash=22;
+  assert.equal(accountStats(validateForecastAccount(c)).maxDrawdown,0);
+  // An account emptied before a deposit stays at its 100 % drawdown: new money wins nothing back.
+  const d=newForecastAccount(T-10*HOUR);
+  d.trades=[{...a.trades[1],pnl:-100,equityAfter:0,id:'p|z',signalId:'z',margin:100},{...a.trades[0],pnl:5,equityAfter:55,id:'p|w',signalId:'w'}];
+  d.transfers=[{id:'t|1',t:T,kind:'in',amount:50,cashAfter:50,tradeCount:1}];d.cash=55;
+  assert.equal(accountStats(validateForecastAccount(d)).maxDrawdown,1);
+  // accountLive: the result since the start leaves the transfers out.
+  const live=accountLive(deposit(newForecastAccount(T),50,T),{},T);
+  assert.deepEqual([live.equity,live.netTransfers,live.result],[150,50,0]);
+  const {account:o,position:p}=order(withdraw(newForecastAccount(T-HOUR),30,T),{margin:20}),l=accountLive(o,{BTC:{price:61000,mark:61000,at:T+1500}},T+2000);
+  near(l.result,l.equity-100+30);near(l.result,l.openPnl);assert.equal(l.netTransfers,-30);assert.equal(l.positions[0].id,p.id);
+  assert.deepEqual([accountLive(o,{},T+2000).result,accountLive(o,{},T+2000).equity],[null,null]);
 });

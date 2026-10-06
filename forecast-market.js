@@ -5,6 +5,8 @@
 import {CONTRACTS,CONTRACT_UNITS} from './bybit-contracts.js';
 import {TF} from './forecast-config.js';
 export const POLL_MS=5000,STALE=Object.freeze({delayed:15000,stale:60000}),MAX_SKEW=120000;
+// The most 5-minute candles one fetchPositionRisk reads (about 69 days): a longer absence is settled window by window.
+export const RISK_WINDOW=20000;
 // LONGEST_FUNDING: Bybit's longest funding interval (8 h). A longer gap between funding times is a missing time, and so
 // is one at least twice the gaps on both sides of it; either is waited for while the funding after it is younger than this.
 const API='https://api.bybit.com/v5/market/',PAGE=1000,MIN=60000,STEP=300000,DAY=86400000,WEEK=7*DAY,LONGEST_FUNDING=8*3600000;
@@ -280,9 +282,9 @@ function priceBar(r,scale,step){
   const n=Array.isArray(r)?r.slice(0,5).map(num):[],b={t:n[0],o:n[1]/scale,h:n[2]/scale,l:n[3]/scale,c:n[4]/scale};
   return n.length<5||!Number.isSafeInteger(b.t)||b.t%step||![b.o,b.h,b.l,b.c].every(positive)||b.h<Math.max(b.o,b.c,b.l)||b.l>Math.min(b.o,b.c)?null:b;
 }
-// Mark-price 5-minute candles from `from` through the current one, paged backwards, without a gap.
-async function markPriceBars(grab,symbol,from,clock){
-  const {contract,scale}=contractOf(symbol),bars=new Map();let end=clock();
+// Mark-price 5-minute candles from `from` through `last` (by default the current one), paged backwards, without a gap.
+async function markPriceBars(grab,symbol,from,clock,last=null){
+  const {contract,scale}=contractOf(symbol),bars=new Map(),until=()=>last??clock();let end=until();
   for(let pages=0;end>=from;pages++){
     if(pages>=40)throw Error('För lång frånvaro: markprishistoriken kunde inte återställas');
     const limit=Math.min(PAGE,Math.max(2,Math.ceil((end-from)/STEP)+1));
@@ -293,7 +295,7 @@ async function markPriceBars(grab,symbol,from,clock){
       const b=priceBar(r,scale,STEP);
       if(!b)throw Error('Ogiltig markprisstapel för '+symbol);
       oldest=Math.min(oldest,b.t);
-      if(b.t>=from&&b.t<=clock())bars.set(b.t,b);
+      if(b.t>=from&&b.t<=until())bars.set(b.t,b);
     }
     if(oldest-1>=end)throw Error('Markprispaginering stannade för '+symbol);
     end=oldest-1;
@@ -303,17 +305,18 @@ async function markPriceBars(grab,symbol,from,clock){
   return out;
 }
 
-// Last-price 5-minute candles from `from` through the current one, paged backwards.
-async function lastPriceBars(grab,symbol,from,clock){
-  if(from>Math.floor(clock()/STEP)*STEP)return [];
-  const bars=new Map();let end=clock();
+// Last-price 5-minute candles from `from` through `last` (by default the current one), paged backwards.
+async function lastPriceBars(grab,symbol,from,clock,last=null){
+  const until=()=>last??clock();
+  if(from>Math.floor(until()/STEP)*STEP)return [];
+  const bars=new Map();let end=until();
   for(let pages=0;end>=from;pages++){
     if(pages>=40)throw Error('För lång frånvaro: prishistoriken kunde inte återställas');
     const limit=Math.min(PAGE,Math.max(2,Math.ceil((end-from)/STEP)+1));
     const page=await fetchKlines(grab,symbol,'5m',{limit,end,now:clock});
     const got=page.bars.filter(b=>b.t<=end);
     if(!got.length)throw Error('Senaste priser saknas för '+symbol);
-    for(const b of got)if(b.t>=from&&b.t<=clock())bars.set(b.t,b);
+    for(const b of got)if(b.t>=from&&b.t<=until())bars.set(b.t,b);
     end=got[0].t-1;
   }
   const out=[...bars.values()].sort(byTime);
@@ -342,9 +345,16 @@ async function minuteBars(grab,symbol,path,from,to,clock){
  * 5-minute candles from the last settlement's step, funding since the last
  * settlement, and last-price 5-minute candles since position.nextBar for the
  * stop and the target. While the position may still be in the step it opened
- * in (nextBar not past that step's successor), also the mark-price and
- * last-price 1-minute candles of that step from the minute after position.openedAt.
- * → {price,mark,at,markBars,lastBars,minuteMarks,minuteLasts,funding,fundingThrough,historyFrom}
+ * in, or the step its levels last changed in (position.levelsAt, when later),
+ * and nextBar is not past that step's successor, also the 1-minute candles of
+ * that step: last prices from the minute after that moment, mark prices from
+ * the minute after the opening (the liquidation does not depend on the levels).
+ * → {price,mark,at,markBars,lastBars,minuteMarks,minuteLasts,funding,fundingThrough,historyFrom,through?}
+ * After a long absence (more than RISK_WINDOW candles to settle, ending at
+ * least 8 hours before now) only a window is read: RISK_WINDOW candles from the
+ * last settlement's step, and the funding before their end, `through`; then
+ * fundingThrough is the last candle's start. Every funding time in it is final,
+ * and the next read goes on from there.
  * Read here rather than with crypto-momentum-market.js's fetchDerivatives (which
  * AI-momentum keeps using as it is), because Bybit changes a contract's funding
  * interval now and then (SOL went from 8 to 2 hours on 10 November 2022): its
@@ -368,14 +378,23 @@ export async function fetchPositionRisk(grab,symbol,position,now){
   const {contract,scale}=contractOf(symbol);
   if(!position||!finite(position.nextBar)||position.nextBar%STEP||!finite(position.fundingThrough))throw Error('Ogiltig position');
   const clock=clockOf(now),settled=position.fundingThrough,from=Math.min(position.nextBar,Math.floor(settled/STEP)*STEP);
-  const first=finite(position.openedAt)?(Math.floor(position.openedAt/STEP)+1)*STEP:-Infinity,opening=position.nextBar<=first;
-  const minutes=path=>opening?minuteBars(grab,symbol,path,Math.ceil(position.openedAt/MIN)*MIN,first,clock):[];
+  const end=from+RISK_WINDOW*STEP,through=end<=Math.floor((clock()-LONGEST_FUNDING)/STEP)*STEP?end:null,last=through===null?null:through-STEP;
+  // The minutes replayed: mark prices after the open, last prices after it or after the latest change of the stop and target.
+  const opened=finite(position.openedAt)?position.openedAt:null,since=opened===null?null:Math.max(opened,finite(position.levelsAt)?position.levelsAt:-Infinity);
+  const first=since===null?-Infinity:(Math.floor(since/STEP)+1)*STEP,opening=position.nextBar<=first;
+  const minutes=(path,start)=>opening?minuteBars(grab,symbol,path,start,first,clock):[];
   const [ticker,info,markBars,lastBars,rates,minuteMarks,minuteLasts]=await Promise.all([derivative(grab,symbol,'tickers',{},clock),
-    derivative(grab,symbol,'instruments-info',{},clock),markPriceBars(grab,symbol,from,clock),lastPriceBars(grab,symbol,position.nextBar,clock),
-    fetchFunding(grab,symbol,{from:settled-LONGEST_FUNDING,to:clock(),now:clock}),minutes('mark-price-kline'),minutes('kline')]);
-  const q=ticker.result.list.find(x=>x?.symbol===contract),instrument=info.result.list.find(x=>x?.symbol===contract);
-  const price=num(q?.lastPrice)/scale,mark=num(q?.markPrice)/scale,next=num(q?.nextFundingTime),interval=num(instrument?.fundingInterval)*60000,t=clock();
+    through===null?derivative(grab,symbol,'instruments-info',{},clock):null,markPriceBars(grab,symbol,from,clock,last),
+    lastPriceBars(grab,symbol,position.nextBar,clock,last),fetchFunding(grab,symbol,{from:settled-LONGEST_FUNDING,to:last??clock(),now:clock}),
+    minutes('mark-price-kline',Math.max(first-STEP,Math.ceil(opened/MIN)*MIN)),minutes('kline',Math.ceil(since/MIN)*MIN)]);
+  const q=ticker.result.list.find(x=>x?.symbol===contract),price=num(q?.lastPrice)/scale,mark=num(q?.markPrice)/scale;
   if(!positive(price)||!positive(mark))throw Error('Ogiltigt derivatpris för '+symbol);
+  // A window: its funding times are older than Bybit's longest interval, final as Bybit has them.
+  if(through!==null){
+    if(!rates.length)throw Error('Fundinghistoriken är ännu inte komplett för '+symbol);
+    return {price,mark,at:ticker.time,markBars,lastBars,minuteMarks,minuteLasts,funding:rates.filter(f=>f.t>settled&&f.t<through),fundingThrough:last,historyFrom:from,through};
+  }
+  const instrument=info.result.list.find(x=>x?.symbol===contract),next=num(q?.nextFundingTime),interval=num(instrument?.fundingInterval)*60000,t=clock();
   if(!positive(interval)||!positive(next)||next<=t||next-t>interval+MAX_SKEW)throw Error('Fundingintervall saknas eller håller på att växla för '+symbol);
   // gap(i): from the funding time before rates[i] (none within 8 h before the last settlement: unbounded) to rates[i].
   const gap=i=>i?rates[i].t-rates[i-1].t:Infinity,after=i=>i+1<rates.length?gap(i+1):next-rates[i].t;

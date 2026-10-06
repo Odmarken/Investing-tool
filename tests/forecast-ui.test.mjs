@@ -11,6 +11,8 @@ import {createContractCache} from '../bybit-contracts.js';
 import {TF,SYMBOLS,SIGNAL_PARAMS,FORECAST_PARAMS} from '../forecast-config.js';
 import {evaluateBar,forecastAt,forecastFeatures,computeIndicators,aggregateClosed,requiredLookback} from '../forecast-model.js';
 import {scriptMarket,fakeBybit,memoryStorage,tabLocks,START,HOUR,DAY,MAX_LEVERAGE} from './forecast-fixtures.mjs';
+// The terminal's figures through the namespace, so this file also loads against a terminal without them.
+import * as terminalModule from '../forecast-terminal.js';
 
 // A file of the repo as text with LF line ends, whatever the checkout made of them (core.autocrlf turns them into
 // CRLF on Windows), so tests that split or match lines read the same text everywhere.
@@ -50,11 +52,13 @@ function chain(el,parts){
 const serialize=n=>n.nodeType===3?escText(n.data):'<'+n.localName+[...n.attrs].map(([k,v])=>' '+k+'="'+escAttr(v)+'"').join('')+'>'+
   (VOID.has(n.localName)?'':n.childNodes.map(serialize).join('')+'</'+n.localName+'>');
 class FakeText{constructor(data){this.nodeType=3;this.data=data;this.parentNode=null;}get textContent(){return this.data;}}
-// As in a browser, focus falls back to the page when the focused control is disabled or removed.
+// As in a browser, focus falls back to the page when the focused control is removed. One that is disabled is still
+// reported as focused until the browser's next frame, as Chrome does, and only then falls back to the page.
 function blur(el,self){
   const doc=el.ownerDocument,a=doc?.activeElement;
   if(a&&(self?a===el:a!==el&&el.contains(a)))doc.activeElement=null;
 }
+const blurLater=el=>{setImmediate(()=>{if(el.disabled)blur(el,true);});};
 function clear(el){blur(el,false);for(const c of el.childNodes)c.parentNode=null;el.childNodes=[];}
 class FakeElement{
   constructor(tag,doc){
@@ -67,7 +71,7 @@ class FakeElement{
   hasAttribute(k){return this.attrs.has(k);}
   get children(){return this.childNodes.filter(n=>n.nodeType===1);}
   get hidden(){return this.attrs.has('hidden');}set hidden(v){if(v)this.attrs.set('hidden','');else this.attrs.delete('hidden');}
-  get disabled(){return this.attrs.has('disabled');}set disabled(v){if(v){this.attrs.set('disabled','');blur(this,true);}else this.attrs.delete('disabled');}
+  get disabled(){return this.attrs.has('disabled');}set disabled(v){if(v){this.attrs.set('disabled','');blurLater(this);}else this.attrs.delete('disabled');}
   get checked(){return 'checked' in this.state?this.state.checked:this.attrs.has('checked');}set checked(v){this.state.checked=!!v;}
   get selected(){return 'selected' in this.state?this.state.selected:this.attrs.has('selected');}set selected(v){this.state.selected=!!v;}
   get options(){return this.querySelectorAll('option');}
@@ -165,19 +169,29 @@ const fixed=(x,d)=>x.toLocaleString('sv-SE',{minimumFractionDigits:d,maximumFrac
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(f,what='the view'){for(let k=0;k<2000;k++){if(f())return;await turn();}assert.fail('timed out waiting for '+what);}
 
+// A stand-in for the account terminal (forecast-terminal.js) that records how the view mounts, updates and destroys it.
+function terminalStub(){
+  const log={mounts:[],updates:0,destroys:0};
+  const mount=(root,deps)=>{
+    log.mounts.push({root,deps});root.innerHTML='<p data-stub-terminal>Kontoterminal</p>';
+    return {update(){log.updates++;},destroy(){log.destroys++;}};
+  };
+  return {mount,log};
+}
 // One browser tab: the view with its own runner, over a fake Bybit, storage, record archive and tab locks.
 // store:null leaves the archive to the view (its default backend); wrap wraps the fake Bybit; extra adds deps.
-function page({time,user='u1',runtime={},settings=null,storage=memoryStorage(),store=createForecastStore(memoryBackend()),locks=tabLocks(),prefs=memoryStorage(),runner=null,defer=()=>Promise.resolve(),wrap=g=>g,extra={}}={}){
+// terminal: the stand-in by default; null mounts the real forecast-terminal.js.
+function page({time,user='u1',runtime={},settings=null,storage=memoryStorage(),store=createForecastStore(memoryBackend()),locks=tabLocks(),prefs=memoryStorage(),runner=null,defer=()=>Promise.resolve(),wrap=g=>g,terminal=terminalStub(),extra={}}={}){
   const rt={at:time,urls:[],market:m,...runtime},who={user,active:true,visible:true,answer:true},doc=fakeDocument(),root=doc.createElement('main'),queued=[],asked=[];
   if(settings)storage.setItem(accountKey(user),JSON.stringify(newForecastAccount(time-HOUR,settings)));
   const grab=wrap(fakeBybit(rt));
   const view=mountForecast(root,{getUser:()=>who.user,isActive:()=>who.active,isVisible:()=>who.visible,grab,contracts:createContractCache(grab,()=>rt.at),
     storage,...(store?{store}:{}),locks,now:()=>rt.at,confirm:message=>{asked.push(message);return who.answer;},raf:fn=>queued.push(fn),prefs,
-    defer,reducedMotion:()=>true,...(runner?{runner}:{}),...extra});
+    defer,reducedMotion:()=>true,...(runner?{runner}:{}),...(terminal?{mountTerminal:terminal.mount}:{}),...extra});
   const q=s=>root.querySelector(s),ctx=q('[data-fc-canvas]').getContext('2d');
   // Runs the animation frames the chart asked for; returns how many ran.
   const draw=()=>{let n=0;while(queued.length){queued.shift()(rt.at);n++;}return n;};
-  return {rt,who,doc,root,view,q,ctx,draw,asked,storage,store,locks,prefs};
+  return {rt,who,doc,root,view,q,ctx,draw,asked,storage,store,locks,prefs,terminal};
 }
 const account=(p,user='u1')=>JSON.parse(p.storage.getItem(accountKey(user)));
 async function records(store,{user='u1',symbol='BTC',tf='1h'}={}){
@@ -354,7 +368,8 @@ test('a closed candle that Bybit changes afterwards is reported while the stored
 });
 
 test('missing data is unmistakable and pauses new demo entries; entries resume when the data is live again',async()=>{
-  const p=page({time:after(L1.i-1)});
+  // Signal entries are auto-trading's: on here.
+  const p=page({time:after(L1.i-1),settings:{auto:true}});
   await p.view.show();await p.view.refreshLive();
   assert.equal(p.q('[data-fc-pill-text]').textContent,'Live');
   assert.match(p.q('[data-fc-forecast]').textContent,/För kort historik för prognos/,'a short history gets no forecast');
@@ -385,13 +400,13 @@ test('missing data is unmistakable and pauses new demo entries; entries resume w
   assert.deepEqual(stored.map(r=>[r.barTime,r.origin]),[[L1.t,'live']]);
   const btc=a.positions[0],dec=priceDecimals(btc.entry);
   p.draw();
-  // Axis tags; a level outside the visible prices is pinned to the edge with an arrow.
+  // Axis tags; a level outside the visible prices is pinned to the edge with an arrow. The entry and the liquidation have
+  // the decimals of Bybit's tick (0,10 $ on BTC), as the terminal writes them; the signal's SL and TP the chart's.
   const texts=drawn(p.ctx).map(t=>t.replace(/^[▲▼] /,''));
-  for(const [name,value] of [['Entry',btc.entry],['SL',btc.sl],['TP',btc.tp],['Likv.',btc.liq]])assert.ok(texts.includes(name+' '+fixed(value,dec)),name);
+  for(const [name,value,d] of [['Entry',btc.entry,1],['SL',btc.sl,dec],['TP',btc.tp,dec],['Likv.',btc.liq,1]])assert.ok(texts.includes(name+' '+fixed(value,d)),name+': '+texts.join(' | '));
   assert.ok(texts.includes('KÖP'));
-  const card=p.q('[data-fc-account]');
-  assert.equal(card.querySelectorAll('[data-fc-close]').length,3);
-  assert.match(card.textContent,/Öppna positioner · 3 av 3/);
+  // The card says the account trades again; the positions themselves are listed in the terminal under the chart.
+  assert.match(p.q('[data-fc-account] .fc-status').textContent,/^Handlar · 3 av 3 positioner · nästa beslut \d\d:\d\d$/);
 });
 
 test('levels: open positions first, otherwise only the latest signal while it is still live',()=>{
@@ -454,31 +469,28 @@ test('the values beside the rule checks are the numbers of the explanation lines
   assert.equal(checkText(c('cooldown',1),lean,0),'signal för 1 candle sedan','one candle is singular');
 });
 
-test('manual close asks first, shows the result and leaves a failed close open',async()=>{
-  const p=page({time:after(L1.i),settings:{symbols:['BTC'],leverage:10}});
+test('the Demokonto card keeps the auto-trading settings, Återställ and the research note; the terminal under the chart has the positions and closes them through the view\'s runner',async()=>{
+  const p=page({time:after(L1.i),settings:{symbols:['BTC'],leverage:10,auto:true}});
   await p.view.show();await p.view.refreshLive();
-  const [pos]=account(p).positions,button=()=>p.q(`[data-fc-close="${pos.id}"]`),msg=p.q('[data-fc-account-msg]');
-  assert.equal(pos.symbol,'BTC');assert.equal(button().textContent,'Stäng');
-  // Declined: nothing happens.
-  p.who.answer=false;click(button());
-  assert.deepEqual(p.asked,['Stäng lång BTC till marknadspris nu? Hela positionen stängs i demokontot.']);
-  await turn();assert.equal(account(p).positions.length,1);
-  // A failing read is reported and the position stays open.
-  p.who.answer=true;p.rt.fail='Proxy nere';p.rt.at+=10*MIN;
-  click(button());
-  // Busy, but still focusable: marked aria-disabled rather than disabled.
-  assert.equal(button().textContent,'Stänger…');assert.deepEqual([button().disabled,button().getAttribute('aria-disabled')],[false,'true']);
-  await until(()=>msg.textContent==='Kunde inte stänga BTC: Proxy nere','the failed close');
-  assert.ok(msg.classList.contains('bad'));assert.equal(account(p).positions.length,1);assert.equal(busy(button()),false);
-  // Closed at market.
-  p.rt.fail=null;click(button());
-  await until(()=>/^Stängde lång BTC/.test(msg.textContent),'the close');
-  const a=account(p),[trade]=a.trades;
-  assert.deepEqual(a.positions,[]);assert.equal(trade.reason,'manuell');
-  assert.equal(msg.textContent,'Stängde lång BTC till '+trade.exit.toLocaleString('sv-SE',{maximumSignificantDigits:6})+' · '+(trade.pnl<0?'−':'+')+fixed(Math.abs(trade.pnl),2)+'\xa0$');
-  assert.ok(!msg.classList.contains('bad'));
-  assert.equal(button(),null);
-  assert.match(p.q('[data-fc-account]').textContent,new RegExp('BTClång · '+tradeReasons.manuell));
+  const card=p.q('[data-fc-account]').closest('section'),[pos]=account(p).positions;
+  assert.equal(pos.symbol,'BTC');
+  // No money tiles, no position, trade or event lists and no Stäng: they are the terminal's now.
+  for(const sel of ['[data-fc-close]','.fc-positions','.fc-trades','.fc-events','.fc-tiles'])assert.equal(card.querySelector(sel),null,sel);
+  assert.doesNotMatch(card.textContent,/Öppna positioner|Senaste avslut|Senaste händelser|Kapital|tidsstopp/);
+  // What stays: the settings for signal entries, the pause, Återställ and the research note.
+  for(const sel of ['[data-fc-settings]','[data-fc-pause]','[data-fc-reset]','[data-fc-research="account"]'])assert.ok(card.querySelector(sel),sel);
+  assert.equal(card.querySelector('[data-fc-settings] h3').textContent,'Auto-handel · inställningar för signalaffärer');
+  assert.match(p.q('[data-fc-account]').textContent,/Auto-handel på · signaler på 1h · BTC · 10× · högst 3 signalpositioner · konto sedan \d+ [a-zåäö]+ \d{4}/);
+  // The terminal sits under the chart, in the chart column, and acts through the view's own runner: a close there ends
+  // the position and the chart's level lines go.
+  const term=p.q('[data-fc-terminal]');
+  assert.equal(term.closest('.fc-chart'),p.q('.fc-chart'));assert.equal(p.terminal.log.mounts[0].root,term);
+  p.draw();assert.ok(drawn(p.ctx).some(t=>/^Likv\. /.test(t)),'the position\'s liquidation line');
+  const r=await p.terminal.log.mounts[0].deps.runner.closePosition(pos.id);
+  assert.equal(r.ok,true,r.text);assert.deepEqual(account(p).positions,[]);assert.equal(account(p).trades[0].reason,'manuell');
+  // Only the live signal's own entry, SL and TP are left: no liquidation line, no position to drag.
+  p.ctx.calls.length=0;p.draw();assert.ok(!drawn(p.ctx).some(t=>/^Likv\. /.test(t)));
+  assert.equal(p.q('[data-fc-handle="sl"]').hidden,true);
 });
 
 test('settings are validated, saved through the runner, and pause, resume and reset with archive work',async()=>{
@@ -500,19 +512,21 @@ test('settings are validated, saved through the runner, and pause, resume and re
   click(save);
   await until(()=>/^Sparat/.test(msg.textContent),'the save');
   assert.equal(msg.textContent,'Sparat. Gäller nya affärer; kontot handlar nu på 4h-candles.');
-  assert.deepEqual(account(p).settings,{tf:'4h',symbols:['BTC','ETH'],positionPct:.1,riskPct:.025,maxOpen:2,leverage:10,paused:false});
+  // Auto-trading stays off: it has its own switch in the ticket.
+  assert.deepEqual(account(p).settings,{tf:'4h',symbols:['BTC','ETH'],positionPct:.1,riskPct:.025,maxOpen:2,leverage:10,paused:false,auto:false});
   assert.deepEqual(['positionPct','riskPct','maxOpen','leverage','tf'].map(k=>f(k).value),['10','2.5','2','10','4h']);
   for(const b of boxes())enter(b,false);
   click(save);
   await until(()=>msg.textContent==='Välj minst ett par att handla','the empty pairs');
-  // Pause and resume.
+  // Pause and resume: they hold back signal entries only, so the account still trades by hand.
   const pause=p.q('[data-fc-pause]'),note=p.q('[data-fc-account-msg]');
   click(pause);
-  await until(()=>account(p).settings.paused===true&&pause.textContent==='▶ Återuppta nya affärer','the pause');
-  assert.equal(note.textContent,'Nya affärer är pausade. Öppna positioner skyddas och stängs som vanligt.');
-  assert.match(p.q('[data-fc-account] .fc-status').textContent,/^Pausad$/);
+  await until(()=>account(p).settings.paused===true&&pause.textContent==='▶ Återuppta nya signalaffärer','the pause');
+  assert.equal(note.textContent,'Nya signalaffärer är pausade. Öppna positioner skyddas och stängs som vanligt, och egna order går att lägga.');
+  assert.match(p.q('[data-fc-account] .fc-status').textContent,/^Manuell handel · 0 öppna positioner$/);
   click(pause);
-  await until(()=>account(p).settings.paused===false&&pause.textContent==='⏸ Pausa nya affärer','the resume');
+  await until(()=>account(p).settings.paused===false&&pause.textContent==='⏸ Pausa nya signalaffärer','the resume');
+  assert.equal(note.textContent,'Pausen är av. Signaler handlas när auto-handeln slås på.');
   // Reset: asks first, archives the old account under before-reset and keeps the settings.
   const key=accountKey('u1'),old=p.storage.getItem(key);
   p.who.answer=false;click(p.q('[data-fc-reset]'));await turn();
@@ -530,6 +544,8 @@ test('renderSummary shows the account compactly in the Kryptokonton tab, follows
   p.view.renderSummary(box);
   assert.match(box.textContent,/Laddar AI Forecast-kontot…/);
   const link=box.querySelector('a[href="#forecast"]');assert.equal(link.textContent,'Öppna AI Forecast →');
+  // The account appears (made in another tab), with auto-trading on.
+  p.storage.setItem(accountKey('u1'),JSON.stringify(newForecastAccount(p.rt.at-HOUR,{auto:true})));
   // The runner's tick (hidden view) opens the fresh signal at Bybit's maximum; the summary follows by itself.
   await p.view.refreshLive();
   const cells=Object.fromEntries(box.querySelectorAll('.fc-sum-grid div').map(d=>[d.querySelector('span').textContent,d.querySelector('b').textContent]));
@@ -555,7 +571,7 @@ test('renderSummary shows the account compactly in the Kryptokonton tab, follows
 });
 
 test('leaving the view stops chart polling and drawing while refreshLive keeps ticking the runner',async()=>{
-  const p=page({time:after(L1.i-1)});
+  const p=page({time:after(L1.i-1),settings:{auto:true}});
   await p.view.show();await p.view.refreshLive();p.draw();
   // The chart polls the three newest 1h candles; the runner reads 1000 of them, and 5-minute candles for its positions.
   const chartPoll=()=>p.rt.urls.some(u=>u.pathname.endsWith('/kline')&&u.searchParams.get('interval')==='60'&&u.searchParams.get('limit')==='3');
@@ -704,18 +720,21 @@ test('a walk-forward stops when the view closes on sign-out, and the next user n
 });
 
 test('a new user on the same page never gets the previous user\'s unsaved settings, messages or account card',async()=>{
-  const p=page({time:after(L1.i)});
+  const p=page({time:after(L1.i),settings:{auto:true}});
   p.storage.setItem(accountKey('u2'),JSON.stringify(newForecastAccount(p.rt.at-HOUR,{maxOpen:5,positionPct:.5,leverage:3})));
   await p.view.show();await p.view.refreshLive();
-  const f=name=>p.q(`[name="${name}"]`),note=p.q('[data-fc-account-msg]'),msg=p.q('[data-fc-settings-msg]'),card=p.q('[data-fc-account]');
-  assert.equal(card.querySelectorAll('[data-fc-close]').length,3);
+  const f=name=>p.q(`[name="${name}"]`),note=p.q('[data-fc-account-msg]'),msg=p.q('[data-fc-settings-msg]'),card=p.q('[data-fc-account]'),said=p.q('[data-fc-ticket-msg]');
+  assert.match(card.querySelector('.fc-status').textContent,/^Handlar · 3 av 3 positioner/);
   click(p.q('[data-fc-pause]'));
   await until(()=>/pausade/.test(note.textContent),'the pause');
   enter(f('maxOpen'),'7');enter(f('positionPct'),'90');enter(f('leverage'),'50');
+  // u1 also switches auto-trading off, which the ticket answers.
+  click(p.q('[data-fc-auto]'));
+  await until(()=>/^Auto-handel av/.test(said.textContent),'the switch');
   // u1 signs out: the page hides the view, and nothing of u1's account stays in the document.
   p.view.hide();p.who.visible=false;p.who.user=null;await p.view.refreshLive();
-  assert.equal(card.querySelectorAll('[data-fc-close]').length,0);assert.doesNotMatch(card.textContent,/Kapital/);
-  assert.equal(note.textContent,'');
+  assert.doesNotMatch(card.textContent,/Handlar|Manuell handel|Auto-handel (på|av) ·/);
+  assert.equal(note.textContent,'');assert.equal(said.textContent,'');
   // u2 signs in on #forecast and sees only u2's own settings; Spara keeps them.
   p.who.user='u2';p.who.visible=true;await p.view.show();await p.view.refreshLive();
   assert.deepEqual(['positionPct','maxOpen','leverage'].map(k=>f(k).value),['50','5','3']);
@@ -865,7 +884,7 @@ test('keyboard focus stays on the control while pause, save, close and walk-forw
   assert.equal(account(p).settings.paused,true,'paused once');assert.deepEqual(p.asked,[]);
   assert.equal(doc.activeElement,pause);assert.equal(reset.getAttribute('aria-disabled'),null);
   // The label says what the button does now; no pressed state reads the opposite.
-  assert.deepEqual([pause.textContent,pause.getAttribute('aria-pressed')],['▶ Återuppta nya affärer',null]);
+  assert.deepEqual([pause.textContent,pause.getAttribute('aria-pressed')],['▶ Återuppta nya signalaffärer',null]);
   // Enter in a settings field submits the form; that field keeps focus, read-only, and the rest of the form is locked.
   const field=p.q('[name="maxOpen"]'),save=p.q('[data-fc-save]');field.focus();enter(field,'2');fire(p.q('[data-fc-settings]'),'submit');
   assert.equal(doc.activeElement,field);
@@ -873,12 +892,18 @@ test('keyboard focus stays on the control while pause, save, close and walk-forw
   await until(()=>/^Sparat/.test(p.q('[data-fc-settings-msg]').textContent)&&!busy(field),'the save');
   assert.equal(doc.activeElement,field);assert.deepEqual([field.readOnly,save.disabled],[false,false]);
   assert.equal(account(p).settings.maxOpen,2);
-  // Closing keeps focus on the position's button; once the position is gone, focus moves to the card's heading.
-  const close=p.q('[data-fc-close]');close.focus();click(close);
-  const closing=p.q('[data-fc-close]');
-  assert.equal(doc.activeElement,closing);assert.deepEqual([closing.textContent,closing.getAttribute('aria-disabled')],['Stänger…','true']);
-  await until(()=>/^Stängde/.test(p.q('[data-fc-account-msg]').textContent),'the close');await turn();
-  assert.equal(doc.activeElement,p.q('#fcAccountTitle'));
+  // An order keeps focus on its button while it runs, and a second click meanwhile places nothing. Once the position is
+  // open both buttons are disabled (one position per coin), and focus moves to the ticket itself, never to the page,
+  // although the browser still reports the button it has just disabled as focused (it lets go a frame later).
+  const buy=p.q('[data-fc-order="long"]');
+  await until(()=>!buy.disabled,'the preview');
+  buy.focus();click(buy);
+  assert.equal(doc.activeElement,buy);assert.deepEqual([buy.textContent,buy.disabled,buy.getAttribute('aria-disabled')],['Köper…',false,'true']);
+  click(buy);
+  await until(()=>/^Köpte/.test(p.q('[data-fc-ticket-msg]').textContent),'the order');await turns(3);
+  assert.equal(account(p).positions.length,1,'one order, not two');
+  assert.deepEqual([buy.textContent,buy.disabled],['Köp / Lång',true]);
+  assert.equal(doc.activeElement,p.q('[data-fc-ticket]'));assert.equal(p.q('[data-fc-ticket]').getAttribute('tabindex'),'-1');
   const run=p.q('[data-fc-eval="pair"]');run.focus();click(run);
   assert.equal(doc.activeElement,run);assert.equal(run.getAttribute('aria-disabled'),'true');
   await until(()=>!busy(run),'the walk-forward');
@@ -886,7 +911,7 @@ test('keyboard focus stays on the control while pause, save, close and walk-forw
 });
 
 test('unreliable data for one coin stays visible while another problem leads the status line',async()=>{
-  const p=page({time:after(L1.i)}),box=p.doc.createElement('section');
+  const p=page({time:after(L1.i),settings:{auto:true}}),box=p.doc.createElement('section');
   await p.view.show();await p.view.refreshLive();p.view.renderSummary(box);
   // BTC's protection check fails, and so do SOL's hourly candles at the next close.
   p.rt.fail=u=>u.pathname.endsWith('/mark-price-kline')&&u.searchParams.get('symbol')==='BTCUSDT'||
@@ -902,13 +927,17 @@ test('browser errors reach the view and the runner\'s texts in Swedish',async()=
   let down=false;
   const p=page({time:after(L1.i),settings:{symbols:['BTC'],leverage:10},wrap:g=>(url,o)=>down?Promise.reject(new TypeError('Failed to fetch')):g(url,o)});
   await p.view.show();await p.view.refreshLive();
+  await until(()=>!p.q('[data-fc-order="long"]').disabled,'the preview');
   down=true;
   click(p.q('[data-fc-eval="pair"]'));
   await until(()=>!busy(p.q('[data-fc-eval="pair"]')),'the walk-forward');
   assert.equal(p.q('[data-fc-eval-result]').textContent,'BTC · 1h: Bybit kunde inte nås via proxyn');
-  click(p.q('[data-fc-close]'));
-  await until(()=>/^Kunde inte stänga/.test(p.q('[data-fc-account-msg]').textContent),'the failed close');
-  assert.equal(p.q('[data-fc-account-msg]').textContent,'Kunde inte stänga BTC: Bybit kunde inte nås via proxyn');
+  // An order needs a fresh price, which cannot be read now: the runner says why, in Swedish.
+  click(p.q('[data-fc-order="long"]'));
+  const said=p.q('[data-fc-ticket-msg]');
+  await until(()=>/^Färskt pris saknas/.test(said.textContent),'the failed order');
+  assert.equal(said.textContent,'Färskt pris saknas för BTC: Bybit kunde inte nås via proxyn');assert.ok(said.classList.contains('bad'));
+  assert.deepEqual(account(p).positions,[]);
   assert.doesNotMatch(p.root.textContent,/Failed to fetch/);
 });
 
@@ -948,7 +977,7 @@ test('the walk-forward progress is shown, but only its start and end are announc
 
 test('an archive that never answers stalls neither the runner that shares it nor the chart',async()=>{
   const never=()=>new Promise(()=>{}),store={putForecast:never,putSignal:never,listForecasts:never,listSignals:never,get:never};
-  const p=page({time:after(L1.i),store,settings:{symbols:['BTC'],leverage:10},extra:{archiveTimeout:20}}),box=p.doc.createElement('section');
+  const p=page({time:after(L1.i),store,settings:{symbols:['BTC'],leverage:10,auto:true},extra:{archiveTimeout:20}}),box=p.doc.createElement('section');
   p.who.visible=false;p.view.renderSummary(box);
   // The runner meets a fresh signal it cannot store: its tick ends and says why.
   await within(p.view.refreshLive(),3000,'the runner\'s tick');
@@ -1074,23 +1103,21 @@ test('a walk-forward on a history shorter than the first window\'s library says 
   assert.equal(p.q('[data-fc-eval-result]').textContent,'BTC · 4h: För kort historik för walk-forward: 0 candles efter träningsfönstret');
 });
 
-test('the account card lists the newest account events, so a refusal and its reason are visible',async()=>{
-  const p=page({time:after(L1.i)});
+test('the account card keeps auto-trading\'s latest decision, so a refusal and its reason stay visible; the whole log is the terminal\'s',async()=>{
+  const p=page({time:after(L1.i),settings:{auto:true}});
   await p.view.show();await p.view.refreshLive();
   // Default settings: three coins open on the shared breakout and the other four are refused for want of a slot.
-  const a=account(p),items=p.q('[data-fc-account]').querySelectorAll('.fc-events li'),text=li=>li.querySelector('span').textContent;
+  const a=account(p),card=p.q('[data-fc-account]'),last=p.terminal.log.mounts[0].deps.runner.status().last;
   assert.deepEqual(a.log.map(e=>[e.kind,e.symbol]),[...['BTC','ETH','SOL'].map(s=>['öppnad',s]),...['XRP','DOGE','SHIB','PEPE'].map(s=>['avvisad',s])]);
-  assert.equal(items.length,5,'the five newest');
-  assert.deepEqual(items.slice(0,4).map(text),['PEPE','SHIB','DOGE','XRP'].map(s=>'Avvisad '+s+': Max antal öppna positioner är nått (3)'));
-  // The log's own text, with its amounts bound to their units as everywhere in the view.
-  assert.equal(text(items[4]),a.log[2].text.replace(/(\d) ([%$])/g,'$1\xa0$2'));assert.match(text(items[4]),/^Öppnade lång SOL till .*\d\xa0\$$/);
-  assert.deepEqual(items.map(li=>li.classList.contains('no')),[true,true,true,true,false]);
-  assert.equal(items[0].querySelector('time').textContent,hhmm(a.log.at(-1).t));
-  assert.ok(p.q('[data-fc-account]').querySelectorAll('h3').some(h=>h.textContent==='Senaste händelser'));
-  // A fresh account has none yet.
-  const q=page({time:after(L1.i-1)});
+  assert.equal(card.querySelector('.fc-events'),null,'the log is listed in the terminal\'s Händelser');
+  // The newest decision, PEPE's, with its refusal, bound to its units as everywhere in the view.
+  assert.equal(last.symbol,'PEPE');
+  assert.ok(card.textContent.includes('Senaste beslut '+hhmm(last.at)+': PEPE 1h candle '+hhmm(last.t+HOUR)+' · köpsignal · Max antal öppna positioner är nått (3)'),card.textContent);
+  // With auto-trading off the card says signals are stored but not traded.
+  const q=page({time:after(L1.i)});
   await q.view.show();await q.view.refreshLive();
-  assert.match(q.q('[data-fc-account]').textContent,/Senaste händelserInga händelser ännu\./);
+  assert.match(q.q('[data-fc-account]').textContent,/Auto-handel av · signaler på 1h · .*Signalerna utvärderas och sparas, men inget handlas på dem\./);
+  assert.deepEqual(account(q).positions,[]);
 });
 
 test('a show or a switch reads only the newest versions and signals from the archive, and older versions come one page at a time',async()=>{
@@ -1167,7 +1194,7 @@ test('the forecast card says where records are kept when IndexedDB cannot be use
 test('a full archive shows the runner\'s own words in the account card and the summary, and the view reports its own failed save',async()=>{
   const full=()=>Promise.reject(Object.assign(Error('Prognosarkivet är fullt'),{code:ARCHIVE_FULL}));
   const store={...createForecastStore(memoryBackend()),putSignal:full,putForecast:full};
-  const p=page({time:after(L1.i),store,settings:{symbols:['BTC'],leverage:10}}),box=p.doc.createElement('section');
+  const p=page({time:after(L1.i),store,settings:{symbols:['BTC'],leverage:10,auto:true}}),box=p.doc.createElement('section');
   p.view.renderSummary(box);
   await p.view.show();await p.view.refreshLive();
   const text='Prognosarkivet är fullt: nya signaler kan inte sparas och nya affärer är pausade',status=p.q('[data-fc-account] .fc-status');
@@ -1193,12 +1220,22 @@ test('a value never splits from its unit: cards, legend, runner texts and the Kr
   assert.match(p.q('.fc-stats').textContent,/medelfel \d+,\d\d\xa0% · .* inom 80\xa0%-bandet$/);
   for(const [what,el] of [['Prognos',p.q('[data-fc-forecast]')],['Demokonto',p.q('[data-fc-account]')],['Teckenförklaring',p.q('.fc-legend')]])
     assert.doesNotMatch(el.textContent,split,what);
-  // Open positions, the account log's own texts and the compact summary in the Kryptokonton tab.
+  // The ticket's preview and the runner's answer to an order, and the compact summary in the Kryptokonton tab.
   const q=page({time:after(L1.i)}),box=q.doc.createElement('section');
   q.view.renderSummary(box);await q.view.show();await q.view.refreshLive();
-  assert.ok(q.q('[data-fc-account]').querySelectorAll('.fc-pos').length>0,'positions are shown');
-  assert.match(q.q('[data-fc-account] .fc-events').textContent,/marginal \d+,\d\d\xa0\$/);
-  for(const [what,el] of [['Demokonto',q.q('[data-fc-account]')],['Kryptokonton',box]])assert.doesNotMatch(el.textContent,split,what);
+  await until(()=>!q.q('[data-fc-order="long"]').disabled,'the preview');
+  // A part of the shared line is bound with no-break spaces too, so its line breaks only before a ' · '.
+  assert.match(q.q('[data-fc-shared-wide]').textContent,/^0,001\xa0BTC ·\xa0marginal\xa0\d+,\d\d(–\d+,\d\d)?\xa0\$ ·\xa0avgift\xa0\d+,\d\d(–\d+,\d\d)?\xa0\$$/);
+  assert.match(q.q('[data-fc-shared-narrow]').textContent,/^0,001\xa0BTC ·\xa0värde\xa0[\d,–]+\xa0\$ ·\xa0kostnad\xa0[\d,–]+\xa0\$ ·\xa0avgift\xa0[\d,–]+\xa0\$$/);
+  click(q.q('[data-fc-order="long"]'));
+  await until(()=>/^Köpte/.test(q.q('[data-fc-ticket-msg]').textContent),'the order');
+  assert.match(q.q('[data-fc-ticket-msg]').textContent,/marginal \d+,\d\d\xa0\$$/);
+  // And the reason the buttons give now (one position per coin), and a refusal with amounts in it.
+  enter(q.q('[data-fc-symbol]'),'ETH');enter(q.q('[data-fc-stake]'),'500');
+  await until(()=>/^Otillräckligt/.test(q.q('[data-fc-why]').textContent),'the refusal');
+  // Both sides refuse with figures a little apart (a buy fills higher than a sell): one reason, the figures as a range.
+  assert.match(q.q('[data-fc-why]').textContent,/^Otillräckligt tillgängligt saldo: \d+,\d\d–\d+,\d\d\xa0\$ behövs, \d+,\d\d\xa0\$ finns$/);
+  for(const [what,el] of [['Orderruta',q.q('[data-fc-ticket]')],['Demokonto',q.q('[data-fc-account]')],['Kryptokonton',box]])assert.doesNotMatch(el.textContent,split,what);
 });
 
 test('on a phone the header is one row and the toolbar two: the pair select names only the coin, the back link keeps its words for screen readers',async()=>{
@@ -1437,25 +1474,22 @@ test('with no stored version that has an outcome the chart compares with the new
   assert.equal(all.at(-1).cutoff,m.bar(2001).t);assert.equal(select.value,all.at(-2).id,'data t.o.m. the close of the candle before the newest');
 });
 
-test('the account card shows its own measured history, trades, win rate, net, max drawdown and profit factor, with – where a measure is not defined',async()=>{
-  const p=page({time:after(L1.i),settings:{symbols:['BTC'],leverage:10}}),box=p.doc.createElement('section');
+test('the account\'s measured history (net, max drawdown, profit factor, fees) stays in the Kryptokonton summary, with – where a measure is not defined',async()=>{
+  const p=page({time:after(L1.i),settings:{symbols:['BTC'],leverage:10,auto:true}}),box=p.doc.createElement('section');
   p.view.renderSummary(box);
   await p.view.show();await p.view.refreshLive();
-  const card=p.q('[data-fc-account]'),tiles=()=>Object.fromEntries(card.querySelector('.fc-history').querySelectorAll('.fc-tile').map(x=>[x.querySelector('span').textContent,x.querySelector('b').textContent]));
-  assert.ok(card.querySelectorAll('h3').some(h=>h.textContent==='Kontots egen historik · avslutade affärer'));
-  // No closed trade yet: no win rate and no profit factor, nothing to divide by.
-  assert.deepEqual(tiles(),{'Affärer':'0','Vinstandel':'–','Netto':'0,00\xa0$','Max nedgång':'0,0\xa0%','Vinstfaktor':'–'});
-  // One trade, closed at once at the market.
-  const [pos]=account(p).positions;click(p.q(`[data-fc-close="${pos.id}"]`));
-  await until(()=>/^Stängde/.test(p.q('[data-fc-account-msg]').textContent),'the close');
-  const st=accountStats(account(p)),sgn=x=>{const v=Math.round(x*100)/100;return (v>0?'+':v<0?'−':'')+fixed(Math.abs(v),2)+'\xa0$';};
-  assert.equal(st.trades,1);
-  assert.deepEqual(tiles(),{'Affärer':'1','Vinstandel':fixed(st.winRate*100,1)+'\xa0%','Netto':sgn(st.net),'Max nedgång':fixed(st.maxDrawdown*100,1)+'\xa0%',
-    'Vinstfaktor':st.profitFactor===null?'–':fixed(st.profitFactor,2)});
-  assert.ok(card.textContent.includes('Avgifter '+fixed(st.fees,2)+'\xa0$ · funding '+fixed(st.funding,2)+'\xa0$ · likvidationer 0. Uppmätt på kontots egna affärer sedan'));
-  // The Kryptokonton summary has the same measures on one line.
-  assert.ok(box.textContent.includes('Kontots egen historik: netto '+sgn(st.net)+' · max nedgång '+fixed(st.maxDrawdown*100,1)+'\xa0% · vinstfaktor '+
-    (st.profitFactor===null?'–':fixed(st.profitFactor,2))+' · avgifter '+fixed(st.fees,2)+'\xa0$'));
+  const sgn=x=>{const v=Math.round(x*100)/100;return (v>0?'+':v<0?'−':'')+fixed(Math.abs(v),2)+'\xa0$';};
+  const line=st=>'Kontots egen historik: netto '+sgn(st.net)+' · max nedgång '+fixed(st.maxDrawdown*100,1)+'\xa0% · vinstfaktor '+
+    (st.profitFactor===null?'–':fixed(st.profitFactor,2))+' · avgifter '+fixed(st.fees,2)+'\xa0$';
+  // No closed trade yet: no profit factor, nothing to divide by.
+  assert.ok(box.textContent.includes(line(accountStats(account(p)))),box.textContent);assert.match(box.textContent,/vinstfaktor –/);
+  // One trade, closed at once at the market (from the terminal, which closes through the runner).
+  const [pos]=account(p).positions;
+  assert.equal((await p.terminal.log.mounts[0].deps.runner.closePosition(pos.id)).ok,true);
+  const st=accountStats(account(p));assert.equal(st.trades,1);
+  assert.ok(box.textContent.includes(line(st)),box.textContent);
+  const cells=Object.fromEntries(box.querySelectorAll('.fc-sum-grid div').map(d=>[d.querySelector('span').textContent,d.querySelector('b').textContent]));
+  assert.deepEqual([cells['Avslutade affärer'],cells['Vinstandel']],['1',fixed(st.winRate*100,0)+'\xa0%']);
 });
 
 test('"Data t.o.m." on the chart is the page\'s own text, with the date when the newest version is not from today',async()=>{
@@ -1581,4 +1615,787 @@ test('when the rules cannot be evaluated for the newest closed candle the signal
     failing=false;p.rt.at=after(1999);await p.view.refreshLive();
     assert.match(card.textContent,/INGEN SIGNAL|▲ KÖP|▼ SÄLJ/);assert.doesNotMatch(card.textContent,/kunde inte beräknas|Beräknar/);
   }finally{Array.prototype.some=some;}
+});
+
+// ---- Manual trading: the order ticket, SL and TP on the chart, the account terminal -----------------------------
+const TICKET_PREFS='riptide.forecast.ticket.v1';
+// The view's own runner, as the terminal is handed it.
+const runnerOf=p=>p.terminal.log.mounts[0].deps.runner;
+const svPrice=x=>x.toLocaleString('sv-SE',{maximumSignificantDigits:6});
+const sgnMoney=x=>{const v=Math.round(x*100)/100;return (v>0?'+':v<0?'−':'')+fixed(Math.abs(v),2)+'\xa0$';};
+const levText=x=>(Number.isInteger(x)?fixed(x,0):fixed(x,2))+'×';
+const signedPct=x=>{const v=Math.round(x*1000)/10;return (v>0?'+':v<0?'−':'')+fixed(Math.abs(v),1)+'\xa0%';};
+// A pointer event on an element of the fake page (a handle or the canvas).
+function pointer(el,type,e={}){for(const fn of [...(el.listeners.get(type)??[])])fn({preventDefault(){},stopPropagation(){},pointerId:3,pointerType:'mouse',button:0,...e,type});}
+const centre=el=>({x:parseFloat(el.style.left)+parseFloat(el.style.width)/2,y:parseFloat(el.style.top)+parseFloat(el.style.height)/2});
+// The y of a price on the view's chart, through its hitTest (the price scale falls as y grows).
+function priceY(chart,price,x=400){
+  const v=chart.view();let lo=v.plot.top,hi=v.plot.bottom;
+  for(let k=0;k<60;k++){const mid=(lo+hi)/2;if(chart.hitTest(x,mid).price>price)lo=mid;else hi=mid;}
+  return (lo+hi)/2;
+}
+// A manual long on BTC through the ticket, its order confirmed.
+async function boughtBtc(p){
+  const buy=p.q('[data-fc-order="long"]');
+  await until(()=>!buy.disabled,'the preview');
+  click(buy);
+  await until(()=>/^Köpte/.test(p.q('[data-fc-ticket-msg]').textContent),'the order');
+  return account(p).positions.find(x=>x.symbol==='BTC');
+}
+
+test('the ticket previews each side exactly as runner.quoteOrder does, and its leverage reaches Bybit\'s maximum for the coin and the stake',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const r=runnerOf(p),buy=p.q('[data-fc-order="long"]'),stake=p.q('[data-fc-stake]'),lev=p.q('[data-fc-lev]'),slider=p.q('[data-fc-lev-range]');
+  await until(()=>!buy.disabled,'the preview');
+  // A new ticket: a 10 $ stake at Bybit's default 10×, on the chart's coin.
+  assert.deepEqual([stake.value,lev.value],['10','10']);
+  const quote=(side,margin=10,leverage=10)=>r.quoteOrder({symbol:'BTC',side,margin,leverage});
+  const long=quote('long'),short=quote('short'),dp=1;
+  assert.equal(long.ok,true);assert.equal(short.ok,true);
+  // Each side: its value, Bybit's order cost (what it takes from the free cash) and its liquidation price, with the
+  // decimals of Bybit's tick (0,10 $ on BTC, where the chart writes whole dollars), as the chart and the terminal write a
+  // position's.
+  assert.equal(priceDecimals(long.price),0);
+  const est=side=>p.q(`[data-fc-est="${side}"]`).children.map(x=>x.textContent);
+  assert.deepEqual(est('long'),['Värde '+fixed(long.value,2)+'\xa0$','Kostnad '+fixed(long.cost,2)+'\xa0$','Likv. '+fixed(long.liq,dp)]);
+  assert.deepEqual(est('short'),['Värde '+fixed(short.value,2)+'\xa0$','Kostnad '+fixed(short.cost,2)+'\xa0$','Likv. '+fixed(short.liq,dp)]);
+  assert.ok(long.liq<long.price&&short.liq>short.price,'a long liquidates below the price, a short above');
+  assert.ok(Math.abs(long.cost-(long.margin+long.fee+long.reserve))<1e-9&&short.reserve>long.reserve,'the cost holds the reserve, and a short reserves more');
+  const range=(a,b)=>{const [lo,hi]=[a,b].sort((x,y)=>x-y);return fixed(lo,2)===fixed(hi,2)?fixed(lo,2)+'\xa0$':fixed(lo,2)+'–'+fixed(hi,2)+'\xa0$';};
+  assert.equal(long.qty,short.qty);
+  // The shared line: the quantity, the margin and the opening fee; a phone shows the value and the cost there instead of
+  // under each button. Which one shows is the stylesheet's.
+  const qty=long.qty.toLocaleString('sv-SE',{maximumFractionDigits:3})+'\xa0BTC',part=(name,a,b)=>name+'\xa0'+range(a,b);
+  assert.equal(p.q('[data-fc-shared-wide]').textContent,[qty,part('marginal',long.margin,short.margin),part('avgift',long.fee,short.fee)].join(' ·\xa0'));
+  assert.equal(p.q('[data-fc-shared-narrow]').textContent,[qty,part('värde',long.value,short.value),part('kostnad',long.cost,short.cost),part('avgift',long.fee,short.fee)].join(' ·\xa0'));
+  assert.deepEqual([...p.q('[data-fc-est="long"]').children.map(x=>x.getAttribute('class')),p.q('[data-fc-shared-wide]').getAttribute('class'),p.q('[data-fc-shared-narrow]').getAttribute('class')],
+    ['fc-tk-wide','fc-tk-wide',null,'fc-tk-wide','fc-tk-narrow']);
+  assert.equal(p.q('[data-fc-why]').textContent,'');
+  // The slider reaches Bybit's maximum for this stake; the hint names the coin's own maximum (100× in the fixture).
+  assert.deepEqual([slider.getAttribute('min'),slider.getAttribute('max'),slider.value],['1','100','10']);
+  const hint=()=>[p.q('[data-fc-lev-hint-text]').textContent,p.q('[data-fc-lev-hint-full]').textContent,p.q('[data-fc-lev-hint]').getAttribute('title')];
+  assert.deepEqual(hint(),['Bybit max 100×','Bybit max 100×','Bybit max 100×']);
+  // A stake whose position crosses Bybit's first risk tier (2 000 000 $ in the fixture) lowers the maximum for that size:
+  // the hint says it in a few words, which never widen the ticket; its title and screen readers get it whole.
+  enter(stake,'30 000');
+  const top=Math.min(quote('long',30000).maxLeverage,quote('short',30000).maxLeverage);
+  assert.ok(top<100);assert.equal(slider.getAttribute('max'),String(Math.floor(top)));
+  const whole='Bybit max 100× · '+levText(top)+' vid den här storleken';
+  assert.deepEqual(hint(),['Max '+levText(top)+' (storlek)',whole,whole]);
+  assert.deepEqual([p.q('[data-fc-lev-hint-text]').getAttribute('aria-hidden'),p.q('[data-fc-lev-hint-full]').getAttribute('class')],['true','fc-sr']);
+  // The number moves the slider, and the slider writes the number.
+  enter(stake,'10');enter(lev,'25,5');assert.equal(slider.value,'26');assert.equal(slider.getAttribute('aria-valuetext'),'25,50×');
+  slider.value='40';fire(slider,'input');assert.equal(lev.value,'40');
+  // 10, 25 and 50 % of the free cash; Max: all of it less room for the fees to open and to close at this leverage, on the
+  // side that reserves more (a short): both sides can be ordered with it.
+  click(p.q('[data-fc-stake-pct="25"]'));assert.equal(stake.value,'25,00');
+  click(p.q('[data-fc-stake-pct="10"]'));assert.equal(stake.value,'10,00');
+  click(p.q('[data-fc-stake-pct="max"]'));
+  const max=Math.min(quote('long',10,40).maxMargin,quote('short',10,40).maxMargin);
+  assert.equal(stake.value,max.toFixed(2).replace('.',','));assert.ok(max*(1+40*.00055+41*.00055)<=100+1e-9);
+  assert.deepEqual([quote('long',max,40).ok,quote('short',max,40).ok],[true,true],'and Max can be ordered on both sides');
+});
+
+test('right at a risk tier\'s cap a leverage both sides can be ordered at counts as within Bybit\'s maximum: the slider reaches it and the hint names the coin\'s own',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const r=runnerOf(p),slider=p.q('[data-fc-lev-range]'),buy=p.q('[data-fc-order="long"]');
+  await until(()=>!buy.disabled,'the preview');
+  assert.equal((await r.transfer({kind:'in',amount:30000})).ok,true);
+  const quote=(side,margin)=>r.quoteOrder({symbol:'BTC',side,margin,leverage:100});
+  // The fixture's first tier holds 2 000 000 $ at 100×, counted at the mark, which lies above a short's fill. Just past
+  // 2 000 000 / (100 × mark / fill) a short's stake is over the cap before rounding (Bybit's maximum for it is under 100×),
+  // while the position the order opens, rounded down to 0,001 BTC, still fits.
+  const ref=quote('short',10),from=Math.ceil(2e6/(100*ref.mark/ref.fill)*100);
+  let stake=null;
+  for(let c=from;c<from+100&&stake===null;c++){const a=quote('long',c/100),b=quote('short',c/100);if(a.ok&&b.ok&&Math.min(a.maxLeverage,b.maxLeverage)<100)stake=c/100;}
+  assert.ok(stake!==null,'a stake right at the cap from '+from/100);
+  enter(p.q('[data-fc-stake]'),String(stake).replace('.',','));enter(p.q('[data-fc-lev]'),'100');
+  assert.deepEqual([slider.getAttribute('max'),slider.value,p.q('[data-fc-lev-hint-text]').textContent],['100','100','Bybit max 100×']);
+  assert.deepEqual([buy.disabled,p.q('[data-fc-order="short"]').disabled],[false,false]);
+});
+
+test('Max takes the smaller of the two sides\' largest stakes, so Köp and Sälj can both be ordered after it, also on a coin whose small steps let a short need more',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const r=runnerOf(p),buy=p.q('[data-fc-order="long"]'),sell=p.q('[data-fc-order="short"]'),stake=p.q('[data-fc-stake]'),lev=p.q('[data-fc-lev]');
+  enter(p.q('[data-fc-symbol]'),'DOGE');
+  await until(()=>p.q('[data-fc-pair]').textContent.startsWith('DOGE ')&&!buy.disabled&&!sell.disabled,'the DOGE ticket');
+  // At 10× and at DOGE's maximum, 75×: a long may stake 98,96 $ (92,42 $), a short only 98,85 $ (92,33 $), since its fee to
+  // close is reserved on L + 1 dollars of value instead of L − 1.
+  for(const [leverage,expected] of [[10,[98.96,98.85]],[75,[92.42,92.33]]]){
+    enter(lev,String(leverage));
+    const quote=(side,margin)=>r.quoteOrder({symbol:'DOGE',side,margin,leverage});
+    assert.deepEqual([quote('long',10).maxMargin,quote('short',10).maxMargin],expected);
+    click(p.q('[data-fc-stake-pct="max"]'));
+    assert.equal(stake.value,fixed(expected[1],2).replace(/\s/g,''));
+    const long=quote('long',expected[1]),short=quote('short',expected[1]);
+    assert.deepEqual([long.ok,short.ok,buy.disabled,sell.disabled,p.q('[data-fc-why]').textContent],[true,true,false,false,''],short.reasons.join(' · '));
+  }
+  assert.equal(p.q('[data-fc-stake-pct="max"]').getAttribute('aria-label'),'Max: hela tillgängliga saldot med plats för avgifterna att öppna och stänga, för både köp och sälj, inom Bybits största marknadsorder');
+});
+
+test('Max stays within Bybit\'s largest market order, with room for the price to fall before the order, so after a large deposit Köp and Sälj can both be ordered',async()=>{
+  const p=page({time:after(L1.i),runtime:{price:{BTC:60000}}});
+  await p.view.show();await p.view.refreshLive();
+  const r=runnerOf(p),buy=p.q('[data-fc-order="long"]'),sell=p.q('[data-fc-order="short"]'),stake=p.q('[data-fc-stake]'),max=p.q('[data-fc-stake-pct="max"]');
+  const why=()=>p.q('[data-fc-why]').textContent,num=s=>Number(s.replace(/\s/g,'').replace(',','.'));
+  await until(()=>!buy.disabled&&!sell.disabled,'the preview');
+  enter(p.q('[data-fc-lev]'),'10');
+  const quote=(side,margin)=>r.quoteOrder({symbol:'BTC',side,margin,leverage:10});
+  // A normal balance: the free cash with the fees to open and close sets Max, and both sides can be ordered.
+  click(max);
+  let v=num(stake.value);
+  assert.equal(v,Math.min(quote('long',10).maxMargin,quote('short',10).maxMargin));
+  assert.deepEqual([quote('long',v).ok,quote('short',v).ok,buy.disabled,sell.disabled,why()],[true,true,false,false,'']);
+  // 1 000 000 $ free: at 10× the free cash would buy about 165 BTC, more than Bybit's largest market order (150 BTC).
+  assert.equal((await r.setFree(1000000)).ok,true);
+  p.rt.at+=5*SEC;await p.view.refreshLive();
+  const cash=Math.min(quote('long',10).maxMargin,quote('short',10).maxMargin);
+  assert.ok(cash*10/quote('long',10).fill>150,'the free cash alone is more than Bybit takes in one market order');
+  click(max);
+  v=num(stake.value);
+  const long=quote('long',v),short=quote('short',v),room=150*short.fill*.995/10;
+  // The stake that buys 150 BTC at a sell's fill, with 0,5 % left for the price to fall before the order fills.
+  assert.ok(v<=room&&v>room-.02,v+' for '+room);
+  assert.deepEqual([long.ok,short.ok,buy.disabled,sell.disabled,why()],[true,true,false,false,''],[...long.reasons,...short.reasons].join(' · '));
+  assert.ok(long.qty<=150&&short.qty<=150);
+  // The price falls 0,3 % before the order: both sides are still within the largest market order, and the sell goes.
+  p.rt.price={BTC:60000*.997};p.rt.at+=5*SEC;await p.view.refreshLive();
+  assert.deepEqual([quote('long',v).ok,quote('short',v).ok,buy.disabled,sell.disabled],[true,true,false,false]);
+  click(sell);
+  await until(()=>/^Sålde/.test(p.q('[data-fc-ticket-msg]').textContent),'the order');
+  const [pos]=account(p).positions;
+  assert.ok(pos.side==='short'&&pos.units>149&&pos.units<=150,String(pos.units));
+});
+
+test('every reason a side cannot be ordered disables it and says why',async()=>{
+  const why=p=>p.q('[data-fc-why]').textContent,off=p=>[p.q('[data-fc-order="long"]').disabled,p.q('[data-fc-order="short"]').disabled];
+  // Signed out: nothing to trade with, and the switch and chips are off too.
+  const out=page({time:after(L1.i),user:null});
+  await out.view.show();
+  assert.equal(why(out),'Logga in för att handla');assert.deepEqual(off(out),[true,true]);
+  assert.equal(out.q('[data-fc-auto]').disabled,true);assert.ok(out.root.querySelectorAll('[data-fc-stake-pct]').every(b=>b.disabled));
+  // The account not read yet.
+  const p=page({time:after(L1.i)});
+  await p.view.show();
+  assert.equal(why(p),'AI Forecast-kontot laddas');assert.deepEqual(off(p),[true,true]);
+  await p.view.refreshLive();
+  await until(()=>!p.q('[data-fc-order="long"]').disabled,'the preview');
+  const stake=p.q('[data-fc-stake]'),lev=p.q('[data-fc-lev]');
+  // What is typed: no stake, no leverage, a leverage over Bybit's maximum, a stake under Bybit's smallest order.
+  for(const [s,l,text] of [['abc','10','Ange insatsen i $'],['10','','Ange hävstången'],['10','150','Bybits högsta hävstång för den här storleken är 100×'],
+    ['1','10','Under Bybits minsta order (0,001 BTC)']]){
+    enter(stake,s);enter(lev,l);
+    assert.equal(why(p),text);assert.deepEqual(off(p),[true,true],text);
+  }
+  // More than the free cash: both sides, with figures a little apart, as one reason.
+  enter(stake,'500');enter(lev,'10');
+  assert.match(why(p),/^Otillräckligt tillgängligt saldo: [\d,–]+\xa0\$ behövs, 100,00\xa0\$ finns$/);assert.deepEqual(off(p),[true,true]);
+  // A price older than 15 s.
+  enter(stake,'10');assert.deepEqual(off(p),[false,false]);
+  p.rt.at+=20*SEC;enter(stake,'10');
+  assert.equal(why(p),'Färskt pris saknas för BTC');assert.deepEqual(off(p),[true,true]);
+  // A position already open in the coin.
+  p.rt.at+=5*SEC;await p.view.refreshLive();
+  await boughtBtc(p);enter(stake,'10');
+  assert.equal(why(p),'Det finns redan en position i BTC — stäng den först');assert.deepEqual(off(p),[true,true]);
+  // Bybit's limits not at hand (their read fails): the hint says they are on their way and the slider waits.
+  const q=page({time:after(L1.i),runtime:{fail:u=>u.pathname.endsWith('/instruments-info')?'Nätverksfel':null}});
+  await q.view.show();await q.view.refreshLive();
+  await until(()=>/gränser/.test(why(q)),'the missing limits');
+  assert.equal(why(q),'Bybits gränser för BTC saknas eller är för gamla');assert.deepEqual(off(q),[true,true]);
+  assert.deepEqual([q.q('[data-fc-lev-hint-text]').textContent,q.q('[data-fc-lev-hint-full]').textContent],['Bybits gränser hämtas…','Bybits gränser hämtas…']);
+  assert.equal(q.q('[data-fc-lev-range]').disabled,true);
+  // Under the controls one block at a time: the reason replaces the preview of what an order would open.
+  assert.equal(q.q('[data-fc-shared]').hidden,true);assert.equal(q.q('[data-fc-why]').hidden,false);
+});
+
+test('an order is confirmed first by default, the question shows what the preview opens, and exactly that position is opened',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const sell=p.q('[data-fc-order="short"]'),said=p.q('[data-fc-ticket-msg]');
+  await until(()=>!sell.disabled,'the preview');
+  assert.equal(p.q('[data-fc-confirm]').checked,true,'on by default');
+  enter(p.q('[data-fc-stake]'),'20');enter(p.q('[data-fc-lev]'),'25');
+  const want=runnerOf(p).quoteOrder({symbol:'BTC',side:'short',margin:20,leverage:25}),qty=want.qty.toLocaleString('sv-SE',{maximumFractionDigits:3});
+  assert.equal(want.ok,true);
+  // The ticket names what the order takes from the free cash: Bybit's order cost, with the fee to close it reserves.
+  assert.equal(p.q('[data-fc-est="short"] [data-fc-est-cost]').textContent,'Kostnad '+fixed(want.cost,2)+'\xa0$');
+  // Declined: nothing is ordered. The price now and the fill have the decimals of Bybit's tick (0,10 $ on BTC), as the
+  // result line writes the fill; the question breaks the cost down: the margin, the fee to open and the reserved fee to close.
+  p.who.answer=false;click(sell);
+  assert.deepEqual(p.asked,['Sälja '+qty+' BTC (kort) till marknadspris?\nPris nu '+fixed(want.price,1)+' · beräknat fyllnadspris '+fixed(want.fill,1)+'\n'+
+    'Värde '+fixed(want.value,2)+'\xa0$ · 25× · likvidation vid '+fixed(want.liq,1)+'\n'+
+    'Kostnad '+fixed(want.cost,2)+'\xa0$ från tillgängligt saldo: marginal '+fixed(want.margin,2)+'\xa0$ + avgift '+fixed(want.fee,2)+'\xa0$ + reserverad avgift för stängning '+
+    fixed(want.reserve,2)+'\xa0$\nDemokonto: ingen riktig order läggs hos Bybit.']);
+  await turns();assert.deepEqual(account(p).positions,[]);assert.equal(said.textContent,'');
+  // Confirmed: the runner reads Bybit's limits and a fresh price, and opens exactly the previewed position.
+  const cash=account(p).cash;
+  p.who.answer=true;click(sell);
+  assert.equal(said.textContent,'Säljer BTC…');
+  await until(()=>/^Sålde/.test(said.textContent),'the order');
+  const [pos]=account(p).positions;
+  assert.deepEqual([pos.side,pos.units,pos.entry,pos.margin,pos.fees,pos.reserve,pos.liq,pos.leverage,pos.origin,pos.sl,pos.tp],
+    ['short',want.qty,want.fill,want.margin,want.fee,want.reserve,want.liq,25,'manual',null,null]);
+  // What left the free cash is the cost the ticket and the question named.
+  assert.equal(fixed(cash-account(p).cash,2),fixed(want.cost,2));assert.ok(Math.abs(cash-account(p).cash-want.cost)<1e-9);
+  // The fill with all of Bybit's tick decimals (0,10 $ on BTC), as the question, the chart's entry tag and Positioner write it.
+  assert.equal(said.textContent,'Sålde '+qty+' BTC till '+fixed(want.fill,1)+' · 25× · marginal '+fixed(want.margin,2)+'\xa0$');
+  assert.ok(!said.classList.contains('bad'));
+  // The result stays until the stake, the leverage or the coin changes, and since neither side can be ordered now, the
+  // reason stays under it; then the reason alone.
+  assert.deepEqual([p.q('[data-fc-why]').hidden,p.q('[data-fc-why]').textContent,p.q('[data-fc-shared]').hidden],[false,'Det finns redan en position i BTC — stäng den först',true]);
+  enter(p.q('[data-fc-stake]'),'15');
+  assert.equal(said.textContent,'');assert.equal(p.q('[data-fc-why]').textContent,'Det finns redan en position i BTC — stäng den först');assert.equal(p.q('[data-fc-why]').hidden,false);
+});
+
+test('with Bekräfta order off an order goes at once, and the ticket\'s choices are kept per browser: the stake, the leverage per coin, the confirmation',async()=>{
+  const prefs=memoryStorage(),p=page({time:after(L1.i),prefs});
+  await p.view.show();await p.view.refreshLive();
+  const box=p.q('[data-fc-confirm]');
+  enter(box,false);
+  assert.deepEqual(JSON.parse(prefs.getItem(TICKET_PREFS)),{stake:'10',confirm:false,lev:{}});
+  await boughtBtc(p);
+  assert.deepEqual(p.asked,[],'no question');
+  // The stake as typed, and a leverage for each coin.
+  enter(p.q('[data-fc-stake]'),'12,5');enter(p.q('[data-fc-lev]'),'25');
+  enter(p.q('[data-fc-symbol]'),'ETH');
+  assert.equal(p.q('[data-fc-lev]').value,'10','ETH starts at 10×');
+  enter(p.q('[data-fc-lev]'),'5');
+  enter(p.q('[data-fc-symbol]'),'BTC');
+  assert.equal(p.q('[data-fc-lev]').value,'25');
+  assert.deepEqual(JSON.parse(prefs.getItem(TICKET_PREFS)),{stake:'12,5',confirm:false,lev:{BTC:25,ETH:5}});
+  // The view's own choices are kept apart, as before.
+  assert.deepEqual(Object.keys(JSON.parse(prefs.getItem('riptide.forecast.ui.v1'))),['symbol','tf','horizon','band','signals','levels']);
+  // The next visit in this browser starts from them.
+  const again=page({time:after(L1.i),prefs,storage:p.storage,store:p.store,locks:p.locks});
+  assert.deepEqual([again.q('[data-fc-confirm]').checked,again.q('[data-fc-stake]').value,again.q('[data-fc-lev]').value],[false,'12,5','25']);
+  // Stored choices that make no sense fall back to the defaults.
+  const odd=memoryStorage();odd.setItem(TICKET_PREFS,JSON.stringify({stake:{x:1},confirm:'nej',lev:{BTC:-3,ETH:'5',LUNA:9}}));
+  const plain=page({time:after(L1.i),prefs:odd});
+  assert.deepEqual([plain.q('[data-fc-confirm]').checked,plain.q('[data-fc-stake]').value,plain.q('[data-fc-lev]').value],[true,'10','10']);
+});
+
+test('the Auto-handel switch reads and sets the account\'s auto-trading, off by default',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const sw=p.q('[data-fc-auto]'),said=p.q('[data-fc-ticket-msg]');
+  assert.deepEqual([sw.getAttribute('role'),sw.getAttribute('aria-checked'),sw.getAttribute('aria-labelledby'),p.q('#fcAutoCap').textContent,p.q('[data-fc-auto-text]').textContent,sw.disabled],
+    ['switch','false','fcAutoCap','Auto-handel','Av',false]);
+  click(sw);
+  assert.equal(sw.getAttribute('aria-disabled'),'true','busy while it is written');
+  click(sw);
+  await until(()=>sw.getAttribute('aria-checked')==='true','on');
+  await turns();
+  assert.equal(account(p).settings.auto,true,'switched once');assert.equal(p.q('[data-fc-auto-text]').textContent,'På');assert.equal(sw.getAttribute('aria-disabled'),null);
+  assert.equal(said.textContent,'Auto-handel på: nya signaler handlas automatiskt');
+  assert.match(p.q('[data-fc-account]').textContent,/Auto-handel på · signaler på 1h/);
+  click(sw);
+  await until(()=>sw.getAttribute('aria-checked')==='false','off');
+  assert.equal(account(p).settings.auto,false);
+  assert.equal(said.textContent,'Auto-handel av: du handlar manuellt. Öppna signalpositioner följer sina egna regler tills de stängs.');
+  // Signed out it cannot be switched.
+  p.who.user=null;await p.view.refreshLive();
+  assert.equal(sw.disabled,true);
+});
+
+test('the ticket\'s result line goes once the coin\'s position it speaks of has closed, here on its SL, so the ticket shows what an order would open again',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const pos=await boughtBtc(p),said=p.q('[data-fc-ticket-msg]'),r=runnerOf(p);
+  assert.match(said.textContent,/^Köpte /);
+  // Its SL just under the price, then the price falls through it: the runner's live check closes the position.
+  const price=r.quotes().BTC.price,set=await r.setLevels(pos.id,{sl:Math.round(price*.999*10)/10});
+  assert.equal(set.ok,true,set.text);
+  p.rt.price={BTC:price*.99};p.rt.at+=5*SEC;await p.view.refreshLive();
+  await until(()=>!account(p).positions.length,'the stop');
+  assert.equal(account(p).trades.at(-1).reason,'stopp');
+  // Nothing about a position that is gone: the line under the controls says what an order would open, and both sides
+  // can be ordered again (the terminal tells how the position closed).
+  assert.equal(said.textContent,'');
+  assert.deepEqual([p.q('[data-fc-shared]').hidden,p.q('[data-fc-why]').hidden,p.q('[data-fc-order="long"]').disabled,p.q('[data-fc-order="short"]').disabled],
+    [false,true,false,false]);
+  // A line written while the coin has no position stays while none opens; one that opens (another tab's order) makes it
+  // out of date too.
+  const sw=p.q('[data-fc-auto]');
+  click(sw);await until(()=>sw.getAttribute('aria-checked')==='true','on');
+  click(sw);await until(()=>sw.getAttribute('aria-checked')==='false'&&/^Auto-handel av/.test(said.textContent),'off');
+  p.rt.at+=5*SEC;await p.view.refreshLive();
+  assert.match(said.textContent,/^Auto-handel av: du handlar manuellt/);
+  const other=await r.order({symbol:'BTC',side:'short',margin:10,leverage:10});
+  assert.equal(other.ok,true,other.text);await p.view.refreshLive();
+  assert.equal(said.textContent,'');
+});
+
+test('under the controls a result over the reason has one line each and a text alone two, so the ticket keeps its height; a text cut short is whole in its title',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const info=p.q('[data-fc-info]'),said=p.q('[data-fc-ticket-msg]'),why=p.q('[data-fc-why]');
+  // Before an order: what it would open, alone.
+  assert.deepEqual([info.classList.contains('fc-tk-two'),p.q('[data-fc-shared]').hidden,said.getAttribute('title'),why.getAttribute('title')],[false,false,null,null]);
+  // After it: the result, and under it why neither side can be ordered now.
+  await boughtBtc(p);
+  const reason='Det finns redan en position i BTC — stäng den först';
+  assert.deepEqual([info.classList.contains('fc-tk-two'),why.hidden,why.textContent,said.getAttribute('title'),why.getAttribute('title')],[true,false,reason,said.textContent,reason]);
+  // Auto-handel off answers in two sentences over the same reason: still one line each (the stylesheet cuts the answer
+  // short), with the whole answer in its title.
+  const sw=p.q('[data-fc-auto]');
+  click(sw);await until(()=>sw.getAttribute('aria-checked')==='true','on');
+  click(sw);await until(()=>sw.getAttribute('aria-checked')==='false'&&/^Auto-handel av/.test(said.textContent),'off');
+  const off='Auto-handel av: du handlar manuellt. Öppna signalpositioner följer sina egna regler tills de stängs.';
+  assert.deepEqual([said.textContent,said.getAttribute('title'),info.classList.contains('fc-tk-two'),why.hidden],[off,off,true,false]);
+  // A new stake: the answer goes, and the reason alone has both lines.
+  enter(p.q('[data-fc-stake]'),'15');
+  assert.deepEqual([said.textContent,said.getAttribute('title'),info.classList.contains('fc-tk-two'),why.hidden,why.getAttribute('title')],['',null,false,false,reason]);
+});
+
+test('while the view is shown the runner reads the chart\'s coin for the ticket; a switch of coin follows, and a hidden view reads none',async()=>{
+  const p=page({time:after(1998)});
+  const tickers=s=>p.rt.urls.filter(u=>u.pathname.endsWith('/tickers')&&u.searchParams.get('symbol')===s).length;
+  await p.view.show();await p.view.refreshLive();
+  assert.ok(tickers('BTCUSDT')>0);
+  enter(p.q('[data-fc-symbol]'),'SOL');
+  await until(()=>p.q('[data-fc-pair]').textContent==='SOL · USDT-perp · 1h'&&!p.q('[data-fc-order="long"]').disabled,'the SOL ticket');
+  p.rt.urls=[];p.rt.at+=5*SEC;await p.view.refreshLive();
+  assert.ok(tickers('SOLUSDT')>0);assert.equal(tickers('BTCUSDT'),0);
+  p.view.hide();p.who.visible=false;p.rt.urls=[];p.rt.at+=5*SEC;await p.view.refreshLive();
+  assert.equal(p.rt.urls.filter(u=>u.pathname.endsWith('/tickers')).length,0);
+});
+
+test('on the chart a position\'s SL and TP are created, moved and removed by dragging, through runner.setLevels, and they stay after a reload',async()=>{
+  const p=pageWithChart({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const pos=await boughtBtc(p),runner=runnerOf(p),chart=p.ref.chart,msg=p.q('[data-fc-level-msg]');
+  p.draw();
+  const sl=p.q('[data-fc-handle="sl"]'),tp=p.q('[data-fc-handle="tp"]');
+  // No SL or TP yet: both handles lie over the ghost tags beside the entry tag, and take a finger (touch-action none).
+  assert.deepEqual([sl.hidden,tp.hidden,sl.getAttribute('data-state'),tp.getAttribute('data-state')],[false,false,'ghost','ghost']);
+  assert.deepEqual([sl.style.touchAction,sl.getAttribute('aria-hidden'),p.q('[data-fc-canvas]').style.touchAction],['none','true','pan-y']);
+  assert.ok(drawn(p.ctx).includes('+ SL')&&drawn(p.ctx).includes('+ TP'));
+  // A finger drags "+ SL" down: the tag shows the stop and the result if the position closed there now, after fees.
+  const a=centre(sl),touch={pointerType:'touch'};
+  pointer(sl,'pointerdown',{...touch,clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{...touch,clientX:a.x,clientY:a.y+40});
+  const drag=chart.levelState(),dec=priceDecimals(pos.entry),q=runner.quoteLevels(pos.id,{sl:drag.price});
+  assert.equal(q.ok,true,q.reasons.join(' · '));assert.ok(drag.price<pos.entry);
+  assert.equal(drag.text,'SL '+fixed(drag.price,dec)+' · '+sgnMoney(q.slPnl));
+  pointer(sl,'pointerup',{...touch,clientX:a.x,clientY:a.y+40});
+  assert.equal(msg.textContent,'Sparar SL…');
+  await until(()=>/^Nya nivåer/.test(msg.textContent),'the stop');
+  assert.equal(account(p).positions[0].sl,drag.price);
+  assert.equal(msg.textContent,'Nya nivåer för lång BTC: SL '+svPrice(drag.price)+', ingen TP');assert.ok(!msg.classList.contains('bad'));
+  p.draw();assert.equal(sl.getAttribute('data-state'),'level');assert.ok(drawn(p.ctx).includes('SL '+fixed(drag.price,dec)));
+  // A mouse moves the stop by its line.
+  const x=p.slotX(Math.floor(pos.openedAt/HOUR)*HOUR)+2,y=priceY(chart,drag.price),to=y+20;
+  p.hover(x,y);assert.equal(p.q('[data-fc-canvas]').style.cursor,'ns-resize');
+  const canvas=p.q('[data-fc-canvas]');
+  pointer(canvas,'pointerdown',{clientX:x,clientY:y});pointer(canvas,'pointermove',{clientX:x,clientY:to});
+  const moved=chart.levelState().price;assert.ok(moved<drag.price);
+  pointer(canvas,'pointerup',{clientX:x,clientY:to});
+  await until(()=>account(p).positions[0].sl===moved,'the moved stop');
+  // "+ TP" dragged up sets the target.
+  p.draw();const b=centre(tp);
+  pointer(tp,'pointerdown',{clientX:b.x,clientY:b.y});pointer(tp,'pointermove',{clientX:b.x,clientY:b.y-50});
+  const target=chart.levelState().price;assert.ok(target>pos.entry);
+  pointer(tp,'pointerup',{clientX:b.x,clientY:b.y-50});
+  await until(()=>account(p).positions[0].tp===target,'the target');
+  assert.equal(msg.textContent,'Nya nivåer för lång BTC: SL '+svPrice(moved)+', TP '+svPrice(target));
+  // A reload in this browser draws them where they were dropped.
+  const again=pageWithChart({time:p.rt.at,storage:p.storage,store:p.store,locks:p.locks,prefs:p.prefs});
+  await again.view.show();await again.view.refreshLive();again.draw();
+  const tags=drawn(again.ctx).map(t=>t.replace(/^[▲▼] /,''));
+  assert.ok(tags.includes('SL '+fixed(moved,dec))&&tags.includes('TP '+fixed(target,dec)),tags.join(' | '));
+  assert.deepEqual([again.q('[data-fc-handle="sl"]').getAttribute('data-state'),again.q('[data-fc-handle="tp"]').getAttribute('data-state')],['level','level']);
+  // Dragged above the chart the target is removed.
+  p.draw();const c=centre(tp);
+  pointer(tp,'pointerdown',{clientX:c.x,clientY:c.y});pointer(tp,'pointermove',{clientX:c.x,clientY:-30});
+  p.draw();assert.equal(chart.levelState().price,null);assert.equal(p.q('[data-fc-tooltip]').textContent,'Släpp för att ta bort TP');
+  pointer(tp,'pointerup',{clientX:c.x,clientY:-30});
+  await until(()=>account(p).positions[0].tp===null,'no target');
+  assert.equal(msg.textContent,'Nya nivåer för lång BTC: SL '+svPrice(moved)+', ingen TP');
+});
+
+test('a drop in an invalid zone goes back with the reason, Esc cancels, and a level change the runner cannot make goes back with its reason',async()=>{
+  const p=pageWithChart({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const pos=await boughtBtc(p),chart=p.ref.chart,msg=p.q('[data-fc-level-msg]'),tip=p.q('[data-fc-tooltip]');
+  p.draw();
+  const sl=p.q('[data-fc-handle="sl"]'),a=centre(sl);
+  // Above the price a long's stop cannot go: the tag turns red and the runner's reason shows beside it.
+  pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:a.y-60});p.draw();
+  assert.equal(chart.levelState().state,'bad');assert.equal(tip.getAttribute('data-state'),'bad');
+  assert.match(tip.textContent,/^SL för en lång position måste ligga under priset \(.+\) och över likvidationen \(.+\)$/);
+  pointer(sl,'pointerup',{clientX:a.x,clientY:a.y-60});
+  assert.equal(msg.textContent,tip.textContent.replace(/(\d) ([%$])/g,'$1\xa0$2'));assert.ok(msg.classList.contains('bad'));
+  assert.equal(account(p).positions[0].sl,null);assert.equal(chart.levelState(),null);
+  // Esc in the middle of a drag: nothing is saved.
+  p.draw();pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:a.y+30});
+  assert.equal(chart.levelState().state,'drag');
+  pointer(p.q('[data-fc-canvas]'),'keydown',{key:'Escape'});
+  assert.equal(chart.levelState(),null);pointer(sl,'pointerup',{clientX:a.x,clientY:a.y+30});
+  await turns();assert.equal(account(p).positions[0].sl,null);
+  // A ghost tag dragged off the chart has nothing to remove: it goes back without a word.
+  const said=msg.textContent;
+  p.draw();pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:2000});p.draw();
+  assert.equal(chart.levelState().price,null);assert.equal(tip.hidden,true,'nothing to say');
+  pointer(sl,'pointerup',{clientX:a.x,clientY:2000});await turns();
+  assert.equal(msg.textContent,said);assert.equal(account(p).positions[0].sl,null);
+  // Bybit cannot be read: the runner cannot settle the position first, so the old level stays and the reason is said.
+  p.draw();pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:a.y+30});
+  p.rt.fail=u=>u.pathname.endsWith('kline')?'Nätverksfel':null;
+  pointer(sl,'pointerup',{clientX:a.x,clientY:a.y+30});
+  await until(()=>/^Kunde inte/.test(msg.textContent),'the failure');
+  assert.equal(msg.textContent,'Kunde inte ändra SL och TP för BTC: Nätverksfel');assert.ok(msg.classList.contains('bad'));
+  assert.equal(account(p).positions[0].sl,null);assert.equal(chart.levelState(),null);
+  p.draw();assert.equal(sl.getAttribute('data-state'),'ghost','back as it was');assert.equal(pos.id,account(p).positions[0].id);
+});
+
+test('right after an order its SL drags and drops at once, though Bybit stamps the price a moment before the page writes the order',async()=>{
+  // Bybit's clock 0,4 s behind the page's: the price an order fills at, and the next ones read, are older than its position.
+  const p=pageWithChart({time:after(L1.i),runtime:{server:after(L1.i)-400}});
+  await p.view.show();await p.view.refreshLive();
+  const pos=await boughtBtc(p),chart=p.ref.chart,msg=p.q('[data-fc-level-msg]'),tip=p.q('[data-fc-tooltip]');
+  assert.ok(runnerOf(p).quotes().BTC.at<pos.openedAt);
+  p.draw();
+  const sl=p.q('[data-fc-handle="sl"]'),a=centre(sl);
+  pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:a.y+40});p.draw();
+  const drag=chart.levelState();
+  assert.equal(drag.state,'drag',tip.textContent);assert.notEqual(tip.getAttribute('data-state'),'bad');
+  assert.match(drag.text,/^SL [\d\xa0]+ · −\d+,\d\d\xa0\$$/);
+  pointer(sl,'pointerup',{clientX:a.x,clientY:a.y+40});
+  await until(()=>/^Nya nivåer|saknas/.test(msg.textContent),'the stop');
+  assert.equal(msg.textContent,'Nya nivåer för lång BTC: SL '+svPrice(drag.price)+', ingen TP');
+  assert.equal(account(p).positions[0].sl,drag.price);
+});
+
+test('the level message over the chart goes once its position has closed, here on that SL, as the ticket\'s result does',async()=>{
+  const p=pageWithChart({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  await boughtBtc(p);
+  const msg=p.q('[data-fc-level-msg]');
+  p.draw();
+  const sl=p.q('[data-fc-handle="sl"]'),a=centre(sl);
+  pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:a.y+40});pointer(sl,'pointerup',{clientX:a.x,clientY:a.y+40});
+  await until(()=>/^Nya nivåer/.test(msg.textContent),'the stop');
+  const stop=account(p).positions[0].sl;
+  // While the position is open the message stays.
+  p.rt.at+=5*SEC;await p.view.refreshLive();
+  assert.match(msg.textContent,/^Nya nivåer för lång BTC: SL /);
+  // The price falls through the stop: the position closes (the terminal tells how), and the message about its levels goes.
+  p.rt.price={BTC:stop*.995};p.rt.at+=5*SEC;await p.view.refreshLive();
+  await until(()=>!account(p).positions.length,'the close');
+  assert.equal(account(p).trades.at(-1).reason,'stopp');
+  assert.equal(msg.textContent,'');
+});
+
+test('moving a signal position\'s level asks first, since the position then becomes manual and loses its time stop',async()=>{
+  const p=pageWithChart({time:after(L1.i),settings:{symbols:['BTC'],leverage:10,auto:true}});
+  await p.view.show();await p.view.refreshLive();
+  const [pos]=account(p).positions,msg=p.q('[data-fc-level-msg]'),dec=priceDecimals(pos.entry);
+  assert.equal(pos.origin,'signal');
+  p.draw();
+  const tp=p.q('[data-fc-handle="tp"]'),b=centre(tp);
+  assert.equal(tp.getAttribute('data-state'),'level');
+  const drag=to=>{pointer(tp,'pointerdown',{clientX:b.x,clientY:b.y});pointer(tp,'pointermove',{clientX:b.x,clientY:to});const s=p.ref.chart.levelState();pointer(tp,'pointerup',{clientX:b.x,clientY:to});return s;};
+  p.who.answer=false;
+  const first=drag(b.y+10);
+  assert.equal(p.asked.at(-1),'Flytta TP till '+fixed(first.price,dec)+' för signalpositionen lång BTC?\nPositionen hanteras då manuellt: inget tidsstopp och ingen stängning på en motsatt signal.');
+  await turns();
+  assert.deepEqual([account(p).positions[0].tp,account(p).positions[0].origin],[pos.tp,'signal']);assert.equal(msg.textContent,'');
+  p.who.answer=true;p.draw();
+  const second=drag(b.y+10);
+  await until(()=>/^Nya nivåer/.test(msg.textContent),'the change');
+  const now=account(p).positions[0];
+  assert.deepEqual([now.tp,now.origin,now.deadline],[second.price,'manual',null]);
+  assert.match(msg.textContent,/ — signalpositionen hanteras nu manuellt, utan tidsstopp$/);
+});
+
+test('the terminal is mounted once in its section under the chart, updated with every paint and runner change, and destroyed with the view',async()=>{
+  const p=page({time:after(1998)}),{log}=p.terminal,[m]=log.mounts;
+  assert.equal(log.mounts.length,1);assert.equal(m.root,p.q('[data-fc-terminal]'));assert.equal(m.root.getAttribute('aria-label'),'Kontoterminal');
+  // Under the chart and its legend, in the chart column.
+  const column=p.q('.fc-chart').children;assert.equal(column.at(-1),m.root);assert.equal(column.at(-2),p.q('.fc-legend'));
+  // It is handed the view's runner, clock, confirm dialog, UI prefs and a way to announce to screen readers.
+  assert.equal(typeof m.deps.runner.setLevels,'function');assert.equal(m.deps.now(),p.rt.at);
+  assert.equal(m.deps.confirm('Fråga?'),true);assert.deepEqual(p.asked,['Fråga?']);
+  m.deps.prefs.setItem('riptide.forecast.terminal.v1','{"collapsed":true}');
+  assert.equal(p.prefs.getItem('riptide.forecast.terminal.v1'),'{"collapsed":true}');assert.equal(m.deps.prefs.getItem('riptide.forecast.terminal.v1'),'{"collapsed":true}');
+  m.deps.announce('Satte in 50,00 $');
+  const live=p.q('[data-fc-terminal-announce]');assert.deepEqual([live.textContent,live.getAttribute('role'),live.getAttribute('aria-live')],['Satte in 50,00\xa0$','status','polite']);
+  assert.equal(log.updates,0,'nothing painted while hidden');
+  await p.view.show();const shown=log.updates;assert.ok(shown>0);
+  p.rt.at+=5*SEC;await p.view.refreshLive();assert.ok(log.updates>shown,'every refresh');
+  const before=log.updates;await m.deps.runner.setAuto(true);assert.ok(log.updates>before,'every runner change');
+  // Hidden it is not painted.
+  p.view.hide();p.who.visible=false;const hidden=log.updates;p.rt.at+=5*SEC;await p.view.refreshLive();assert.equal(log.updates,hidden);
+  // destroy(): the terminal once, the chart's listeners, and nothing is read or painted after it.
+  p.who.visible=true;await p.view.show();
+  p.view.destroy();p.view.destroy();
+  assert.equal(log.destroys,1);
+  const done=log.updates;p.rt.urls=[];p.rt.at+=5*SEC;await p.view.refreshLive();await p.view.show();
+  assert.equal(log.updates,done);assert.deepEqual(p.rt.urls,[]);
+  assert.equal(p.q('[data-fc-canvas]').listeners.get('pointerdown').length,0);
+  // A terminal that cannot be mounted leaves a note, and the rest of the view works.
+  const bad=page({time:after(1998),extra:{mountTerminal:()=>{throw Error('Testfel');}}});
+  assert.equal(bad.q('[data-fc-terminal]').textContent,'Kontoterminalen kan inte visas här: Testfel');
+  await bad.view.show();assert.equal(bad.q('[data-fc-pill-text]').textContent,'Live');
+});
+
+test('the real account terminal mounts under the chart and shows the money and the positions of the view\'s runner',async()=>{
+  const p=page({time:after(L1.i),terminal:null});
+  await p.view.show();await p.view.refreshLive();
+  const term=p.q('[data-fc-terminal]');
+  assert.match(term.textContent,/Kontoterminal/);assert.match(term.textContent,/Kapital/);assert.match(term.textContent,/Tillgängligt/);
+  await boughtBtc(p);
+  await until(()=>/Manuell/.test(term.textContent),'the position in the terminal');
+  assert.match(term.textContent,/BTC/);
+});
+
+test('the Kryptokonton summary shows the manual status, and its result leaves deposits and withdrawals out',async()=>{
+  const p=page({time:after(L1.i)}),box=p.doc.createElement('section');
+  p.view.renderSummary(box);await p.view.show();await p.view.refreshLive();
+  const r=runnerOf(p),cells=()=>Object.fromEntries(box.querySelectorAll('.fc-sum-grid div').map(d=>[d.querySelector('span').textContent,d.querySelector('b').textContent]));
+  assert.equal(box.querySelector('.fc-sum-state').textContent,'Manuell handel · 0 öppna positioner');
+  assert.ok(box.textContent.includes('Eget demokonto från 100,00\xa0$ för manuell handel med Bybits priser, avgifter och gränser. Auto-handeln är av. Inga riktiga order.'));
+  await r.order({symbol:'BTC',side:'long',margin:10,leverage:10});
+  await r.transfer({kind:'in',amount:50});
+  await p.view.refreshLive();
+  assert.equal(box.querySelector('.fc-sum-state').textContent,'Manuell handel · 1 öppen position');
+  const live=r.live(),c=cells(),fig=terminalModule.terminalFigures(r.account(),live);
+  // Kapital and the result as the terminal shows them, built from the same whole cents: Kapital is the start and the
+  // deposit (150 $) plus the result, to the cent.
+  assert.equal(c['Öppna positioner'],'1');assert.equal(c['Kapital · live'],fixed(fig.equity,2)+'\xa0$');
+  assert.ok(live.equity>140,'the deposit is in the capital');
+  assert.equal(c['Sedan start'],sgnMoney(fig.result)+' · '+signedPct(fig.result/150));
+  assert.equal(Math.round(fig.equity*100)-15000,Math.round(fig.result*100));
+  assert.ok(Math.abs(fig.equity-live.equity)<=.01&&Math.abs(fig.result-live.result)<=.01);
+  // With auto-trading on, signal positions count against the maximum and manual ones are named apart.
+  await r.setAuto(true);
+  assert.equal(cells()['Öppna positioner'],'0 av 3 · 1 manuell');
+});
+
+test('chart levels skip a manual position\'s missing SL or TP, and every line of a position carries its id for dragging',()=>{
+  const t0=Date.UTC(2026,8,1),position={id:'m|BTC|1',symbol:'BTC',side:'long',entry:100.2,sl:null,tp:106,liq:99.4,openedAt:t0+10*HOUR+42000};
+  const levels=chartLevels({symbol:'BTC',tf:'1h',positions:[position],bars:[]});
+  assert.deepEqual(levels.map(l=>[l.kind,l.price,l.from,l.edit]),[['entry',100.2,t0+10*HOUR,'m|BTC|1'],['tp',106,t0+10*HOUR,'m|BTC|1'],['liq',99.4,t0+10*HOUR,'m|BTC|1']]);
+  assert.deepEqual(chartLevels({symbol:'BTC',tf:'1h',positions:[{...position,tp:null,liq:0}],bars:[]}).map(l=>l.kind),['entry']);
+});
+
+test('the ticket\'s controls come in the order a phone draws them, so keyboard focus and a screen reader start at the top: the switches, the stake, the leverage, then the orders',()=>{
+  const p=page({time:after(L1.i)}),all=p.q('[data-fc-ticket]').querySelectorAll('button,input');
+  const order=['[data-fc-auto]','[data-fc-confirm]','[data-fc-stake]','[data-fc-stake-pct="max"]','[data-fc-lev-range]','[data-fc-lev]','[data-fc-order="long"]','[data-fc-order="short"]'].map(s=>all.indexOf(p.q(s)));
+  assert.equal(order[0],0);assert.deepEqual(order,[...order].sort((x,y)=>x-y));assert.equal(order.at(-1),all.length-1);
+});
+
+test('a long at 1× has no liquidation price: the ticket and the question say so, as the terminal and the chart do',async()=>{
+  const p=page({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const buy=p.q('[data-fc-order="long"]');
+  await until(()=>!buy.disabled,'the preview');
+  // 70 $ at 1× buys Bybit's smallest BTC order, 0,001 BTC; a long that cannot lose more than the price can fall has no level.
+  enter(p.q('[data-fc-stake]'),'70');enter(p.q('[data-fc-lev]'),'1');
+  const r=runnerOf(p).quoteOrder({symbol:'BTC',side:'long',margin:70,leverage:1});
+  assert.deepEqual([r.ok,r.qty,r.liq],[true,.001,0]);
+  assert.equal(p.q('[data-fc-est="long"] [data-fc-est-liq]').textContent,'Likv. –');
+  assert.match(p.q('[data-fc-est="short"] [data-fc-est-liq]').textContent,/^Likv\. \d/,'a short has one');
+  p.who.answer=false;click(buy);
+  assert.match(p.asked.at(-1),/\nVärde [\d,]+\xa0\$ · 1× · ingen likvidationsnivå\n/);
+});
+
+test('the Kryptokonton summary writes funding as its effect on the result, as the terminal does: + when it was received, − when it was paid',async()=>{
+  // A closed manual short that received 0,035 $ of funding.
+  const t0=after(1998)-HOUR,a=newForecastAccount(t0);
+  a.trades.push({id:'m|BTC|'+(t0+1000),symbol:'BTC',side:'short',signalId:null,tf:null,entry:60000,exit:59900,units:.001,margin:6,leverage:10,openedAt:t0+1000,
+    closedAt:t0+2000,reason:'manuell',pnl:.05,fees:.066,funding:-.035,equityAfter:100.05,origin:'manual'});
+  a.cash=100.05;a.fees=.066;a.funding=-.035;
+  const p=page({time:after(1998),runner:{...idle(),account:()=>a,status:()=>({state:'manual',text:'Manuell handel · 0 öppna positioner',notes:[]})}}),box=p.doc.createElement('section');
+  p.view.renderSummary(box);
+  assert.match(box.textContent,/ · avgifter 0,07\xa0\$ · funding \+0,04\xa0\$/);
+  a.funding=.035;a.trades[0].funding=.035;p.view.renderSummary(box);
+  assert.match(box.textContent,/ · funding −0,04\xa0\$/);
+});
+
+test('a manual position\'s SL and TP are tagged on the chart as they are set, on Bybit\'s tick, finer than the chart\'s whole dollars on BTC; its entry and liquidation with the tick\'s decimals',async()=>{
+  const p=pageWithChart({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const pos=await boughtBtc(p),runner=runnerOf(p);
+  assert.equal(priceDecimals(pos.entry),0,'the chart writes BTC in whole dollars');
+  // On BTC's 0,10 $ tick: 1 % under the entry and 2 % over it, each with a tenth.
+  const sl=Math.floor(pos.entry*.99)+.3,tp=Math.floor(pos.entry*1.02)+.7;
+  const r=await runner.setLevels(pos.id,{sl,tp});
+  assert.equal(r.ok,true,r.text);
+  await p.view.refreshLive();p.draw();
+  const tags=drawn(p.ctx).map(t=>t.replace(/^[▲▼] /,''));
+  assert.ok(tags.includes('SL '+fixed(sl,1))&&tags.includes('TP '+fixed(tp,1)),tags.join(' | '));
+  // The fill as the order's result line and the terminal write it ('Köpte 0,001 BTC till 60 123,4'), and the liquidation so too.
+  assert.ok(tags.includes('Entry '+fixed(pos.entry,1))&&tags.includes('Likv. '+fixed(pos.liq,1)),tags.join(' | '));
+});
+
+test('where Bybit\'s tick is coarser than the chart\'s precision (PEPE) the ticket\'s and the question\'s prices and the chart\'s entry have the tick\'s decimals, the figure of the result line',async()=>{
+  const p=pageWithChart({time:after(L1.i),runtime:{price:{PEPE:.0000043048}}});
+  await p.view.show();await p.view.refreshLive();
+  enter(p.q('[data-fc-symbol]'),'PEPE');
+  const sell=p.q('[data-fc-order="short"]'),said=p.q('[data-fc-ticket-msg]');
+  await until(()=>p.q('[data-fc-pair]').textContent.startsWith('PEPE ')&&p.q('[data-fc-pill-text]').textContent==='Live'&&!sell.disabled,'the PEPE ticket');
+  const want=runnerOf(p).quoteOrder({symbol:'PEPE',side:'short',margin:10,leverage:10});
+  assert.equal(want.ok,true,want.reasons.join(' · '));
+  assert.equal(priceDecimals(want.price),10,'the chart writes PEPE with ten decimals');
+  // Bybit's tick is 0,000001 $ per 1000 PEPE: nine decimals per token, also for the liquidation under the button.
+  assert.equal(p.q('[data-fc-est="short"] [data-fc-est-liq]').textContent,'Likv. '+fixed(want.liq,9));
+  p.who.answer=false;click(sell);
+  assert.ok(p.asked.at(-1).includes('\nPris nu '+fixed(want.price,9)+' · beräknat fyllnadspris '+fixed(want.fill,9)+'\n'),p.asked.at(-1));
+  assert.ok(p.asked.at(-1).includes(' · 10× · likvidation vid '+fixed(want.liq,9)+'\n'),p.asked.at(-1));
+  p.who.answer=true;click(sell);
+  await until(()=>/^Sålde/.test(said.textContent),'the order');
+  const [pos]=account(p).positions,entry=fixed(pos.entry,9);
+  assert.match(said.textContent,new RegExp(' PEPE till '+entry+' · '));
+  p.draw();
+  const tags=drawn(p.ctx).map(t=>t.replace(/^[▲▼] /,''));
+  assert.ok(tags.includes('Entry '+entry),tags.join(' | '));
+});
+
+test('once Bybit\'s tick is known a coin\'s price reads alike everywhere: the header and the chart\'s last price have its decimals, and on PEPE a stop or a target, its drag tag and the question have nine, never the chart\'s ten',async()=>{
+  const p=pageWithChart({time:after(L1.i),runtime:{price:{PEPE:.0000043048}}}),runner=()=>runnerOf(p);
+  await p.view.show();await p.view.refreshLive();
+  await until(()=>runner().limits('BTC'),'BTC\'s limits');await p.view.refreshLive();p.draw();
+  // BTC: the tick's tenth, as Positioner's Pris and the order's question write the price now; the chart's last-price tag too.
+  const head=p.q('[data-fc-last]').textContent;
+  assert.match(head,/^\d\d\xa0\d{3},\d$/);assert.ok(drawn(p.ctx).includes(head),drawn(p.ctx).join(' | '));
+  // PEPE: nine decimals per token, where the chart writes such a price with ten.
+  enter(p.q('[data-fc-symbol]'),'PEPE');
+  const sell=p.q('[data-fc-order="short"]');
+  await until(()=>p.q('[data-fc-pair]').textContent.startsWith('PEPE ')&&p.q('[data-fc-pill-text]').textContent==='Live'&&!sell.disabled,'the PEPE ticket');
+  await p.view.refreshLive();p.draw();
+  const pepe=p.q('[data-fc-last]').textContent;
+  assert.match(pepe,/^0,\d{9}$/);assert.ok(drawn(p.ctx).includes(pepe),drawn(p.ctx).join(' | '));
+  p.who.answer=true;click(sell);
+  await until(()=>/^Sålde/.test(p.q('[data-fc-ticket-msg]').textContent),'the order');
+  const [pos]=account(p).positions;
+  p.draw();
+  // "+ SL" dragged up by a finger to about 0,0000045 (between the price and the liquidation): its tag and the question
+  // before it is set.
+  const sl=p.q('[data-fc-handle="sl"]'),a=centre(sl),touch={pointerType:'touch'},to=a.y+priceY(p.ref.chart,.0000045)-priceY(p.ref.chart,pos.entry);
+  pointer(sl,'pointerdown',{...touch,clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{...touch,clientX:a.x,clientY:to});
+  const drag=p.ref.chart.levelState();
+  assert.ok(Math.abs(drag.price-.0000045)<.00000005,String(drag.price));assert.match(drag.text,/^SL 0,\d{9} · −\d+,\d\d\xa0\$$/);
+  p.who.answer=false;pointer(sl,'pointerup',{...touch,clientX:a.x,clientY:to});
+  assert.equal(p.asked.at(-1).split('\n')[0],'Sätta SL för kort PEPE till '+fixed(drag.price,9)+'?');
+  // Set on Bybit's tick, the levels' tags have the tick's nine decimals.
+  const r=await runner().setLevels(pos.id,{sl:.0000045,tp:.0000041});
+  assert.equal(r.ok,true,r.text);
+  await p.view.refreshLive();p.draw();
+  const tags=drawn(p.ctx).map(t=>t.replace(/^[▲▼] /,''));
+  assert.ok(tags.includes('SL '+fixed(.0000045,9))&&tags.includes('TP '+fixed(.0000041,9)),tags.join(' | '));
+});
+
+test('a level moved by a finger is asked about first while Bekräfta order is on (a swipe meant to scroll can start on a handle); a mouse is not asked, and the result leaves with the coin',async()=>{
+  const p=pageWithChart({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  const pos=await boughtBtc(p),runner=runnerOf(p),chart=p.ref.chart,msg=p.q('[data-fc-level-msg]'),dec=priceDecimals(pos.entry);
+  p.draw();
+  const sl=p.q('[data-fc-handle="sl"]'),a=centre(sl),touch={pointerType:'touch'},asked=p.asked.length;
+  const swipe=(dy,e=touch)=>{const s=centre(sl);pointer(sl,'pointerdown',{...e,clientX:s.x,clientY:s.y});pointer(sl,'pointermove',{...e,clientX:s.x,clientY:s.y+dy});
+    const d=chart.levelState();pointer(sl,'pointerup',{...e,clientX:s.x,clientY:s.y+dy});return d;};
+  // Declined: nothing changes, and the stop goes back.
+  p.who.answer=false;
+  const first=swipe(40),q=runner.quoteLevels(pos.id,{sl:first.price});
+  assert.deepEqual(p.asked.slice(asked),['Sätta SL för lång BTC till '+fixed(first.price,dec)+'?\nResultat om positionen stängs där nu, efter avgifter: '+sgnMoney(q.slPnl)+'.']);
+  await turns();assert.equal(account(p).positions[0].sl,null);assert.equal(msg.textContent,'');assert.equal(chart.levelState(),null);
+  // Confirmed: it is set.
+  p.who.answer=true;p.draw();
+  const second=swipe(40);
+  await until(()=>/^Nya nivåer/.test(msg.textContent),'the stop');
+  assert.equal(account(p).positions[0].sl,second.price);assert.equal(p.asked.length,asked+2);
+  // A mouse is never asked, and with Bekräfta order off a finger's move goes at once, as an order does.
+  p.draw();const third=swipe(20,{pointerType:'mouse'});
+  await until(()=>account(p).positions[0].sl===third.price,'the mouse');
+  enter(p.q('[data-fc-confirm]'),false);p.draw();
+  const fourth=swipe(15);
+  await until(()=>account(p).positions[0].sl===fourth.price,'the finger');
+  assert.equal(p.asked.length,asked+2,'no more questions');
+  // The result belongs to BTC's chart: a switch of coin clears it.
+  assert.match(msg.textContent,/^Nya nivåer för lång BTC/);
+  enter(p.q('[data-fc-symbol]'),'ETH');
+  assert.equal(msg.textContent,'');
+});
+
+test('with auto-trading off, unreliable data pauses nothing, and the view never says it does: banner, pill, card, summary, signal card and chart',async()=>{
+  const p=page({time:after(L1.i-1)}),box=p.doc.createElement('section');
+  await p.view.show();await p.view.refreshLive();p.view.renderSummary(box);
+  assert.equal(account(p).settings.auto,false);
+  p.rt.fail=u=>u.pathname.endsWith('/kline')?'Nätverksfel':null;
+  p.rt.at=after(L1.i);await p.view.refreshLive();
+  for(let k=0;k<3;k++){p.rt.at+=5*SEC;await p.view.refreshLive();}
+  const banner=p.q('[data-fc-banner]');
+  assert.equal(banner.hidden,false);
+  assert.equal(banner.textContent,'BTC 1h: Data saknas · Demokontot: Manuell handel · 0 öppna positioner');
+  assert.equal(p.q('[data-fc-pill]').getAttribute('title'),'Data saknas');
+  p.draw();
+  for(const t of [banner.textContent,p.q('[data-fc-pill]').getAttribute('title'),p.q('[data-fc-account]').textContent,box.textContent,p.q('[data-fc-signal]').textContent,...drawn(p.ctx)])
+    assert.doesNotMatch(t,/paus/,t);
+  assert.match(p.q('[data-fc-account]').textContent,/Data opålitlig för BTC: Data saknas — /);
+});
+
+test('the stylesheet puts the ticket beside the header on wide screens and under it on narrow ones, gives a finger the level handles, and keeps a phone\'s chart on its first screen',()=>{
+  const css=source('../forecast.css');
+  assert.match(css,/\.fc-top\{display:flex;align-items:flex-start;flex-wrap:wrap\}/);
+  assert.match(css,/\.fc-ticket\{flex:0 0 auto;display:grid;/);
+  assert.match(/\.fc-handle\{([^}]*)\}/.exec(css)?.[1]??'',/touch-action:none/);
+  // The chart takes the height the terminal leaves; on a short screen the column scrolls instead of squeezing it.
+  assert.match(css,/\.fc-canvas-wrap\{position:relative;flex:1 1 auto;min-height:280px;/);assert.match(css,/\.fc-terminal\{flex:none;min-width:0\}/);
+  assert.match(/\.fc-chart\{([^}]*)\}/.exec(css)?.[1]??'',/overflow-y:auto/);
+  const narrow=/@media \(max-width:900px\)\{([\s\S]*?)\n\}/.exec(css)?.[1]??'';
+  assert.match(narrow,/\.fc-top\{display:block\}/);assert.match(narrow,/\.fc-chart\{padding:10px 12px 8px;overflow:visible\}/);
+  // The switches come first on narrow screens too, where they are drawn first: the order of the markup.
+  assert.match(narrow,/\.fc-ticket\{grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\);grid-template-areas:"auto conf" "stake lev" "long short" "info info";/);
+  const phone=/@media \(max-width:560px\)\{([\s\S]*?)\n\}/.exec(css)?.[1]??'';
+  assert.match(phone,/\.fc-ticket\{grid-template-areas:"auto conf" "stake stake" "lev lev" "long short" "info info";/);
+  // The ticket is 15 px taller than it was (two lines kept under the controls): measured at 390 × 844 the chart ends at 838.
+  assert.match(phone,/\.fc-canvas-wrap\{order:1;height:max\(250px,min\(58vh,calc\(100dvh - 590px\)\)\)\}/);
+  assert.match(phone,/\.fc-terminal\{order:4\}/);
+  // Buy and sell in darker fills of the chart's up and down colours, so white text keeps its contrast.
+  assert.match(css,/\.fc-tk-long \.fc-tk-btn\{background:#0f7f7a;border-color:#14a7a0\}/);assert.match(css,/\.fc-tk-short \.fc-tk-btn\{background:#c23a2f;border-color:#e2483c\}/);
+});
+
+test('the ticket keeps its size whatever the coin, the stake or the message: whole figures that wrap only between them on a phone, three lines per side and two under the controls on wider screens, and a hint that never widens it',()=>{
+  const css=source('../forecast.css'),rule=sel=>new RegExp('(?:^|\\n)'+sel.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\{([^}]*)\\}').exec(css)?.[1]??'';
+  // Wider screens: value, cost and liquidation under each button, three lines kept; two lines under the controls, never
+  // more: a text alone takes up to two, a result with the reason under it one each, cut short with an ellipsis.
+  assert.match(rule('.fc-tk-est'),/min-height:4\.05em/);assert.match(rule('.fc-tk-est span'),/display:block;white-space:nowrap/);
+  assert.match(rule('.fc-tk-info'),/height:2\.8em;overflow:hidden;font-size:11px;line-height:1\.4/);assert.doesNotMatch(rule('.fc-tk-info'),/min-height/);
+  assert.equal(rule('.fc-tk-info>:is(.fc-tk-msg,.fc-tk-why):not([hidden]):not(:empty)'),'display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden');
+  assert.equal(rule('.fc-tk-info.fc-tk-two>:is(.fc-tk-msg,.fc-tk-why):not([hidden]):not(:empty)'),'-webkit-line-clamp:1');
+  // A part of the shared line never breaks inside; one version of the line shows.
+  assert.match(rule('.fc-tk-shared span span'),/white-space:nowrap/);assert.match(rule('.fc-tk-narrow'),/display:none/);
+  // The hint never adds its text's width to the ticket.
+  assert.match(rule('.fc-tk-hint'),/contain:inline-size/);assert.match(rule('.fc-tk-hint'),/text-overflow:ellipsis/);
+  // Phones: only the liquidation under each button (no figure there can run into the other side's), the phone's shared line.
+  const phone=/@media \(max-width:560px\)\{([\s\S]*?)\n\}/.exec(css)?.[1]??'';
+  assert.match(phone,/\.fc-tk-est \.fc-tk-wide,\.fc-tk-shared \.fc-tk-wide\{display:none\}/);assert.match(phone,/\.fc-tk-shared \.fc-tk-narrow\{display:inline\}/);
+  assert.doesNotMatch(phone,/\.fc-tk-est span\{display:inline\}/);
+  assert.match(phone,/\.fc-tk-lev>\.fc-tk-hint\{align-self:start;max-height:2\.2em;font-size:9\.5px;line-height:1\.1\}/);
+  // A level change's result sits on the phone's time axis, where it covers no level line.
+  assert.match(phone,/\.fc-level-msg\{left:6px;bottom:3px;/);
+  // After an order the ticket itself holds focus, with a ring for keyboard users.
+  assert.match(css,/#aiForecast \.fc-ticket:focus-visible\{outline:2px solid var\(--fc-accent\)/);
+});
+
+test('the ticket, the level messages and the card use no confidence wording, and what they show is text, never markup',async()=>{
+  const p=pageWithChart({time:after(L1.i)});
+  await p.view.show();await p.view.refreshLive();
+  await boughtBtc(p);p.draw();
+  const sl=p.q('[data-fc-handle="sl"]'),a=centre(sl);
+  pointer(sl,'pointerdown',{clientX:a.x,clientY:a.y});pointer(sl,'pointermove',{clientX:a.x,clientY:a.y+40});pointer(sl,'pointerup',{clientX:a.x,clientY:a.y+40});
+  await until(()=>/^Nya nivåer/.test(p.q('[data-fc-level-msg]').textContent),'the stop');
+  const all=p.root.innerHTML+' '+p.asked.join(' ');
+  for(const word of NO_CONFIDENCE)assert.doesNotMatch(all,new RegExp(word,'i'),word);
+  // A runner's answer with markup in it is shown as text.
+  const evil='<img src=x onerror="alert(1)">',fake={...idle(),quoteOrder:()=>({ok:false,reasons:[evil]}),order:async()=>({ok:false,text:evil}),setAuto:async()=>({ok:false,text:evil}),
+    account:()=>newForecastAccount(after(1998)-HOUR),status:()=>({state:'manual',text:'Manuell handel'})};
+  const q=page({time:after(1998),runner:fake});
+  await q.view.show();
+  assert.equal(q.q('[data-fc-why]').textContent,evil);
+  click(q.q('[data-fc-auto]'));await until(()=>q.q('[data-fc-ticket-msg]').textContent===evil,'the answer');
+  assert.equal(q.root.querySelector('img'),null);
 });

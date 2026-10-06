@@ -1,16 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createForecastRunner,RUNNER} from '../forecast-runner.js';
-import {ACCOUNT,accountKey,newForecastAccount,openPosition,markProcessed,sizePosition,setPaused,updateSettings} from '../forecast-account.js';
+import {ACCOUNT,accountKey,newForecastAccount as plainAccount,openPosition,markProcessed,sizePosition,setPaused,updateSettings,previewOrder,previewLevels,
+  validateForecastAccount} from '../forecast-account.js';
 import {createForecastStore,memoryBackend,localStorageBackend,signalRecord,verifyRecord,hashOf} from '../forecast-store.js';
 import {fetchKlines,fetchHistory,splitForming,fetchPositionRisk} from '../forecast-market.js';
 import {fetchMomentumQuotes} from '../crypto-momentum-live.js';
 import {fetchContract,createContractCache,LIMIT_TTL} from '../bybit-contracts.js';
 import {TF,SYMBOLS,CHART_TFS,SIGNAL_PARAMS,MODEL} from '../forecast-config.js';
 import {evaluateBar,requiredLookback,signalsInRange,aggregateClosed} from '../forecast-model.js';
-import {scriptMarket,fakeBybit,limitsFor,memoryStorage,tabLocks,urlKinds,START,STEP,HOUR,FUND,SCALE,MAX_LEVERAGE,FUNDING_RATE} from './forecast-fixtures.mjs';
+import {scriptMarket,fakeBybit,limitsFor,memoryStorage,tabLocks,urlKinds,START,STEP,HOUR,DAY,FUND,SCALE,MAX_LEVERAGE,FUNDING_RATE} from './forecast-fixtures.mjs';
 
 const SEC=1000,MIN=60000,SLIP=ACCOUNT.slip;
+// Most tests here are about trading the signals: their accounts have auto-trading on (a new account has it off).
+const newForecastAccount=(t,settings={})=>plainAccount(t,{auto:true,...settings});
 const m=scriptMarket(),[L1,L2,L3]=m.longs,[S1]=m.shorts;
 // A moment after bar i closed on Bybit's clock.
 const after=(i,ms=2*SEC)=>m.closeOf(i)+ms;
@@ -128,6 +131,8 @@ test('fixture knobs: price override, shocks, holes, lag, clock skew and failures
 
 test('a scripted session: signals are stored once, fresh signals open at Bybit\'s maximum leverage in coin order, max open positions and one per coin hold, and liquidation, funding and targets settle',async()=>{
   const {rt,runner,storage,store}=harness({time:after(L1.i-3)});
+  // Switching auto-trading on creates the account.
+  assert.equal((await runner.setAuto(true)).ok,true);
   const first=await runner.tick();
   // A new 100 $ account trading every coin, decided up to the newest closed candle.
   let a=saved(storage);
@@ -628,11 +633,12 @@ test('reset archives the account under before-reset and starts a new 100 $ accou
   assert.equal((await bad.runner.tick()).text,'AI Forecast-kontot kan inte läsas');
   const reset=await bad.runner.reset();
   assert.equal(bad.storage.getItem(accountKey('u1')+':before-reset:'+bad.rt.at),'{trasig');
-  assert.deepEqual(reset.settings,newForecastAccount(bad.rt.at).settings);
+  assert.deepEqual(reset.settings,plainAccount(bad.rt.at).settings);
 });
 
 test('a reload continues from the saved account without trading again or changing stored signals',async()=>{
   const h=harness({time:after(L1.i-1)});
+  await h.runner.setAuto(true);
   await h.runner.tick();
   h.rt.at=after(L1.i);await h.runner.tick();
   const before=saved(h.storage),records=JSON.stringify(await Promise.all(SYMBOLS.map(s=>signalsOf(h.store,s))));
@@ -661,6 +667,7 @@ test('two tabs ticking together never open the same signal twice and write only 
   storage.setItem=(k,v)=>{assert.ok(locks.held.includes(k),'written outside the lock: '+k);write(k,v);};
   const store=createForecastStore(memoryBackend()),counted={...store,async putSignal(r){const res=await store.putSignal(r);puts.push(res.stored?'stored':res.identical?'identical':'conflict');return res;}};
   const h=harness({time:after(L1.i-1),storage,locks,store:counted,runtime:{delay:2}}),other=h.tab();
+  await h.runner.setAuto(true);
   await Promise.all([h.runner.tick(),other.tick()]);
   h.rt.at=after(L1.i);
   await Promise.all([h.runner.tick(),other.tick()]);
@@ -682,6 +689,7 @@ test('two tabs ticking together never open the same signal twice and write only 
   const shared=memoryStorage(),records=createForecastStore(memoryBackend()),rt={at:after(L1.i-1),urls:[],market:m,delay:1};
   const tab=()=>createForecastRunner({grab:fakeBybit(rt),storage:shared,store:records,now:()=>rt.at,getUser:()=>'u1',isActive:()=>true});
   const [x,y]=[tab(),tab()];
+  await x.setAuto(true);
   await Promise.all([x.tick(),y.tick()]);
   rt.at=after(L1.i);await Promise.all([x.tick(),y.tick()]);
   assert.equal(opens(saved(shared)).length,3);
@@ -813,8 +821,8 @@ test('tick never throws: missing locks, broken storage, unreadable or newer acco
   assert.throws(()=>createForecastRunner({storage:memoryStorage()}),{message:'AI Forecast saknar anslutning till Bybit'});
   assert.throws(()=>createForecastRunner({grab:fakeBybit(rt),storage:{}}),{message:'AI Forecast saknar lagring'});
   // A numeric user id from the login works as a string everywhere.
-  const numeric=memoryStorage(),records=createForecastStore(memoryBackend());
-  await make({storage:numeric,store:records,getUser:()=>42}).tick();
+  const numeric=memoryStorage(),records=createForecastStore(memoryBackend()),r42=make({storage:numeric,store:records,getUser:()=>42});
+  await r42.setAuto(true);await r42.tick();
   assert.equal(JSON.parse(numeric.getItem('riptide.forecast.v1:42')).positions.length,3);
   assert.equal((await signalsOf(records,'BTC','42'))[0].uid,'42');
   // An unreadable or newer account is never overwritten.
@@ -827,7 +835,9 @@ test('tick never throws: missing locks, broken storage, unreadable or newer acco
   }
   // A grab that throws synchronously, a stale proxy answer and onChange that throws.
   let calls=0;
-  st=await make({grab:()=>{throw Error('Ingen anslutning');},onChange:()=>{calls++;throw Error('UI-fel');}}).tick();
+  const thrower=make({grab:()=>{throw Error('Ingen anslutning');},onChange:()=>{calls++;throw Error('UI-fel');}});
+  await thrower.setAuto(true);calls=0;
+  st=await thrower.tick();
   assert.equal(calls,1);
   assert.equal(st.state,'unreliable');assert.equal(st.data.BTC.text,'Data saknas — Ingen anslutning');
   st=await make({grab:fakeBybit({...rt,server:t-3*MIN})}).tick();
@@ -859,7 +869,7 @@ test('signed out or away from the crypto page nothing is read; a new user gets t
   st=await h.runner.tick();
   assert.deepEqual([st.state,st.text],['inactive','Vilar — handlar när kryptosidan är öppen']);
   assert.equal(h.rt.urls.length,0);assert.equal(h.storage.length,0,'no account is created away from the crypto page');
-  h.who.active=true;await h.runner.tick();
+  h.who.active=true;await h.runner.setAuto(true);await h.runner.tick();
   h.who.active=false;
   assert.deepEqual([h.runner.status().state,h.runner.status().text],['inactive','Vilar — handlar när kryptosidan är öppen']);
   h.who.active=true;
@@ -867,6 +877,7 @@ test('signed out or away from the crypto page nothing is read; a new user gets t
   // Another user on the same browser: separate account key, no positions, nothing of the first user's state.
   h.who.user='anna b@x.se';h.rt.urls=[];
   assert.deepEqual(h.runner.evaluations(),{});assert.deepEqual(h.runner.quotes(),{});
+  await h.runner.setAuto(true);
   await h.runner.tick();
   assert.ok(h.storage.getItem('riptide.forecast.v1:anna%20b%40x.se')!==null);
   assert.equal(saved(h.storage,'anna b@x.se').positions.length,3,'the fresh signal is traded by this account too');
@@ -1261,7 +1272,9 @@ test('a read of Bybit\'s limits that stalls in the page\'s shared cache keeps no
   assert.equal(closed.ok,true,closed.text);
   for(let i=L1.i+1;i<=L2.i;i++){h.rt.at=after(i);await ticks(tab,2);}
   assert.deepEqual(saved(h.storage).positions.map(p=>[p.symbol,p.signalId.split('|')[4]]),[['ETH',String(L1.t)],['BTC',String(L2.t)]]);
-  assert.deepEqual(loads,['BTC','ETH'],'the stalled shared cache is not asked for BTC again');
+  // The stalled shared cache is not asked for BTC again; the held ETH's limits are read there again as they expire.
+  assert.deepEqual(loads.slice(0,2),['BTC','ETH']);
+  assert.ok(loads.length>2&&loads.slice(2).every(s=>s==='ETH'),loads.join(' '));
 });
 
 // Long positions in `symbols` from the signal of bar E = L2 − maxHold, so their time stop is L2's close.
@@ -1352,4 +1365,795 @@ test('a full archive says plainly that new signals cannot be saved and new trade
   room=true;h.rt.at=after(L3.i);st=await tab.tick();
   assert.deepEqual([st.state,st.archiveFull],['trading',false]);
   assert.deepEqual((await signalsOf(h.store,'BTC')).map(r=>r.barTime),[L1.t,L3.t]);
+});
+
+// ---- Manual trading: auto-trading off, the user's orders, stop and target, deposits and withdrawals -----------------
+
+const money2=x=>x.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:2});
+const svPrice=x=>x.toLocaleString('sv-SE',{maximumSignificantDigits:6});
+const sv=(x,d)=>x.toLocaleString('sv-SE',{maximumFractionDigits:d});
+const turn=()=>new Promise(resolve=>setImmediate(resolve));
+// The quiet range after the scripted legs: no signals, prices near 61 000 $ for BTC.
+const Q=m.end+30;
+
+test('auto-trading off (a new account): signals are stored and shown, nothing is traded on them, and the status says manual trading',async()=>{
+  const {rt,runner,storage,store}=harness({time:after(L1.i-1)});
+  let st=await runner.tick();
+  assert.deepEqual([st.state,st.text,st.auto,st.open,st.manual],['manual','Manuell handel · 0 öppna positioner',false,0,0]);
+  assert.equal(saved(storage).settings.auto,false);
+  rt.at=after(L1.i);rt.urls=[];
+  st=await runner.tick();
+  const a=saved(storage);
+  // Every coin's breakout is stored and its candle decided, but no position opened and no refusal logged; no price or limits read.
+  assert.deepEqual([a.positions,a.log],[[],[]]);
+  for(const s of SYMBOLS){assert.deepEqual((await signalsOf(store,s)).map(r=>[r.barTime,r.origin]),[[L1.t,'live']],s);assert.equal(a.processed[s],L1.t);}
+  assert.deepEqual(urlKinds(rt.urls),['kline:60']);
+  assert.deepEqual([st.last.side,st.last.fresh,st.last.opened,st.last.reason],['long',true,null,'Auto-handel av — signalen handlas inte']);
+  assert.equal(runner.evaluations().BTC.evaluation.side,'long');
+  // Unreliable data does not stop manual trading; the coins are still named for the page's warnings.
+  rt.at=after(L1.i+1);rt.holes=new Set([`BTC:60:${m.bar(L1.i-5).t}`]);
+  st=await runner.tick();
+  assert.deepEqual([st.state,st.text,st.unreliable],['manual','Manuell handel · 0 öppna positioner',['BTC']]);
+  // An archive that cannot store a signal makes no wait for a trade.
+  const full=createForecastStore(localStorageBackend(memoryStorage(),undefined,{maxChars:10}));
+  const t2=harness({time:after(L1.i-1),store:full}),r2=t2.tab();
+  await r2.tick();t2.rt.at=after(L1.i);st=await r2.tick();
+  assert.deepEqual([st.state,st.waiting,st.archiveFull,st.text],['manual',{},true,'Manuell handel · 0 öppna positioner · prognosarkivet är fullt, nya signaler sparas inte']);
+  assert.equal(saved(t2.storage).processed.BTC,L1.t);
+});
+
+test('auto-trading off: a held signal position keeps its own rules — no close on an opposite signal, but its stop, target and time stop',async()=>{
+  const t0=after(S1.i-3),h=harness({time:t0}),barTime=m.bar(S1.i-3).t,quote=await quoteAt(h.rt,'BTC');
+  const signal={id:`s|u1|BTC|1h|${barTime}|${MODEL.signal}`,symbol:'BTC',tf:'1h',side:'long',entry:quote.price,sl:quote.price*.9,tp:quote.price*1.2,barTime,confirmedAt:barTime+HOUR};
+  const a=openPosition(plainAccount(t0-HOUR,{symbols:['BTC'],leverage:10}),{signal,symbol:'BTC',quote,contract:limitsFor('BTC',t0),now:t0,tfMs:HOUR,dataReliable:true}).account;
+  h.storage.setItem(accountKey('u1'),JSON.stringify(markProcessed(a,'BTC',barTime)));
+  const long=a.positions[0];
+  // The short signal arrives: stored, but the long stays.
+  h.rt.at=after(S1.i);
+  let st=await h.runner.tick();
+  let b=saved(h.storage);
+  assert.deepEqual([b.positions.map(p=>[p.id,p.origin]),b.trades,b.processed.BTC],[[[long.id,'signal']],[],S1.t]);
+  assert.deepEqual([st.state,st.text,st.last.reason],['manual','Manuell handel · 1 öppen position','Auto-handel av — signalen handlas inte']);
+  assert.equal((await signalsOf(h.store,'BTC')).at(-1).side,'short');
+  // Its 20-candle time stop still ends it, at the deadline candle's open.
+  h.rt.at=long.deadline+2*HOUR;
+  await ticks(h.runner,2);
+  b=saved(h.storage);
+  assert.deepEqual(b.trades.map(t=>[t.reason,t.closedAt,t.origin]),[['tid',long.deadline,'signal']]);
+});
+
+test('auto-trading on: a manual position is never closed by a signal or a time stop, and a signal in its coin is refused',async()=>{
+  const t0=after(S1.i-3),h=harness({time:t0,settings:{symbols:['BTC','ETH'],leverage:10}});
+  await h.runner.tick();
+  const res=await h.runner.order({symbol:'BTC',side:'long',margin:20,leverage:10});
+  assert.equal(res.ok,true,res.text);
+  // The short breakout: ETH opens short; BTC's signal is refused because the manual long holds the coin, and the long stays.
+  h.rt.at=after(S1.i);
+  let st=await h.runner.tick(),a=saved(h.storage);
+  assert.deepEqual(a.positions.map(p=>[p.symbol,p.side,p.origin]),[['BTC','long','manual'],['ETH','short','signal']]);
+  assert.deepEqual(a.log.filter(e=>e.kind==='avvisad').map(e=>[e.symbol,e.text]),[['BTC','Det finns redan en position i BTC']]);
+  assert.equal(st.text,'Handlar · 1 av 3 positioner · 1 manuell · nästa beslut '+hhmm(S1.close+HOUR));
+  assert.deepEqual([st.state,st.open,st.manual],['trading',2,1]);
+  // More than a day later (beyond any signal's 20 candles) the signal position has ended by its own rules; the manual one is still open.
+  for(const k of [6,12,18,24,30]){h.rt.at=after(S1.i+k);await ticks(h.runner,2);}
+  a=saved(h.storage);
+  assert.deepEqual(a.positions.map(p=>[p.symbol,p.origin,p.deadline]),[['BTC','manual',null]]);
+  assert.ok(a.trades.some(t=>t.symbol==='ETH'&&['tid','mål','stopp'].includes(t.reason)));
+  assert.ok(!a.trades.some(t=>t.symbol==='BTC'));assert.ok(h.rt.at-a.positions[0].openedAt>20*HOUR);
+});
+
+test('order(): Bybit\'s limits and a fresh price are read, then exactly what the account previews is opened and written before the answer',async()=>{
+  const h=harness({time:after(Q)}),r=h.runner;
+  await r.tick();
+  const before=saved(h.storage);
+  h.rt.urls=[];
+  const res=await r.order({symbol:'BTC',side:'long',margin:10,leverage:50,sl:60500,tp:62000});
+  const quote=await quoteAt(h.rt,'BTC'),p=previewOrder(before,{symbol:'BTC',side:'long',margin:10,leverage:50,sl:60500,tp:62000,quote,contract:limitsFor('BTC',h.rt.at),now:h.rt.at});
+  assert.equal(res.ok,true,res.text);assert.equal(p.ok,true);
+  const pos=res.position;
+  assert.deepEqual([pos.units,pos.entry,pos.margin,pos.fees,pos.liq,pos.leverage,pos.sl,pos.tp,pos.origin,pos.openedAt],[p.qty,p.fill,p.margin,p.fee,p.liq,50,60500,62000,'manual',h.rt.at]);
+  assert.deepEqual(res.preview,p);
+  assert.equal(res.text,'Köpte '+sv(p.qty,3)+' BTC till '+svPrice(p.fill)+' · 50× · marginal '+money2(p.margin)+' $ · SL '+svPrice(60500)+' · TP '+svPrice(62000));
+  const a=saved(h.storage);
+  assert.deepEqual(a.positions,[pos]);
+  assert.equal(a.log.at(-1).text,'Öppnade lång '+sv(p.qty,3)+' BTC till '+svPrice(p.fill)+' · 50× · marginal '+money2(p.margin)+' $ · SL '+svPrice(60500)+' · TP '+svPrice(62000)+' (manuell)');
+  assert.deepEqual(urlKinds(h.rt.urls),['instruments-info','risk-limit','tickers']);
+  assert.equal(r.status().text,'Manuell handel · 1 öppen position');
+  // A short in another coin: 'Sålde'. The limits read stay cached for ten minutes.
+  h.rt.urls=[];h.rt.at+=10*SEC;
+  const eth=await r.order({symbol:'ETH',side:'short',margin:15,leverage:20});
+  assert.equal(eth.ok,true,eth.text);assert.match(eth.text,/^Sålde \d+,\d+ ETH till [\d ,]+ · 20× · marginal \d+,\d\d \$$/);
+  h.rt.urls=[];h.rt.at+=10*SEC;
+  await r.order({symbol:'SOL',side:'long',margin:10,leverage:5});
+  h.rt.urls=[];h.rt.at+=10*SEC;
+  assert.equal((await r.order({symbol:'BTC',side:'short',margin:10,leverage:5})).ok,false);
+  assert.deepEqual(h.rt.urls,[],'a coin already held is refused before any read');
+  assert.equal(r.status().text,'Manuell handel · 3 öppna positioner');
+  // The positions are guarded from the next tick on, and survive a reload.
+  h.rt.at+=5*SEC;await r.tick();
+  const reload=h.tab();
+  assert.deepEqual(reload.account().positions.map(x=>[x.symbol,x.side,x.origin]),[['BTC','long','manual'],['ETH','short','manual'],['SOL','long','manual']]);
+});
+
+test('order() never rejects: signed out, invalid requests, missing limits or price, and the account\'s own refusals come back as reasons, and nothing is written',async()=>{
+  const h=harness({time:after(Q)}),r=h.runner;
+  await r.tick();
+  const raw=()=>h.storage.getItem(accountKey('u1')),before=raw();
+  const no=(text,preview=null)=>({ok:false,text,position:null,preview});
+  h.who.user=null;
+  assert.deepEqual(await r.order({symbol:'BTC',side:'long',margin:10,leverage:10}),no('Logga in för att handla'));
+  h.who.user='u1';
+  assert.deepEqual(await r.order({symbol:'LUNA',side:'long',margin:10,leverage:10}),no('Okänt par'));
+  assert.deepEqual(await r.order({symbol:'BTC',side:'köp',margin:10,leverage:10}),no('Välj köp (lång) eller sälj (kort)'));
+  assert.deepEqual(await r.order(null),no('Okänt par'));
+  h.rt.fail=u=>/instruments-info|risk-limit/.test(u.pathname)?'Nätverksfel':null;
+  assert.deepEqual(await r.order({symbol:'BTC',side:'long',margin:10,leverage:10}),no('Bybits gränser för BTC saknas just nu — försök igen om en stund'));
+  h.rt.fail=u=>u.pathname.endsWith('/tickers')?'Nätverksfel':null;
+  h.rt.at+=61*SEC;
+  assert.deepEqual(await r.order({symbol:'BTC',side:'long',margin:10,leverage:10}),no('Färskt pris saknas för BTC: Nätverksfel'));
+  h.rt.fail=null;
+  const small=await r.order({symbol:'BTC',side:'long',margin:5,leverage:10});
+  assert.deepEqual([small.ok,small.text,small.position,small.preview.reasons],[false,'Under Bybits minsta order (0,001 BTC)',null,['Under Bybits minsta order (0,001 BTC)']]);
+  const much=await r.order({symbol:'BTC',side:'long',margin:200,leverage:10});
+  assert.equal(much.ok,false);assert.match(much.text,/^Otillräckligt tillgängligt saldo: \d+,\d\d \$ behövs, 100,00 \$ finns$/);
+  // Bybit answering without its order filters: the limits load, but no order can be checked against them.
+  h.rt.lots={ETH:null};
+  const unfiltered=await r.order({symbol:'ETH',side:'long',margin:10,leverage:10});
+  assert.deepEqual([unfiltered.ok,unfiltered.text,unfiltered.preview.filters],[false,'Bybits ordergränser för ETH saknas',null]);
+  h.rt.lots=null;
+  assert.equal(raw(),before,'nothing written');
+  // A switch of user while the order is on its way: nothing is written to either account.
+  const good=fakeBybit(h.rt);
+  const t=h.tab({grab:async(u,o)=>{const res=await good(u,o);if(u.includes('/tickers'))h.who.user='u2';return res;}});
+  assert.deepEqual(await t.order({symbol:'BTC',side:'long',margin:10,leverage:10}),no('Kontot byttes medan ordern lades'));
+  assert.equal(raw(),before);assert.equal(h.storage.getItem(accountKey('u2')),null);
+});
+
+test('two tabs ordering the same coin at once open it once; the other is told the coin is taken',async()=>{
+  const storage=memoryStorage(),locks=tabLocks(),write=storage.setItem.bind(storage);
+  storage.setItem=(k,v)=>{assert.ok(locks.held.includes(k),'written outside the lock: '+k);write(k,v);};
+  const h=harness({time:after(Q),storage,locks,runtime:{delay:2}}),other=h.tab();
+  await h.runner.tick();
+  const [x,y]=await Promise.all([h.runner.order({symbol:'BTC',side:'long',margin:10,leverage:10}),other.order({symbol:'BTC',side:'short',margin:10,leverage:10})]);
+  assert.deepEqual([x.ok,y.ok].sort(),[false,true]);
+  assert.equal((x.ok?y:x).text,'Det finns redan en position i BTC — stäng den först');
+  const a=saved(storage);
+  assert.equal(a.positions.length,1);assert.equal(a.log.filter(e=>e.kind==='öppnad').length,1);
+});
+
+test('a manual position is guarded like any other: funding, liquidation, and its stop and target, live and replayed',async()=>{
+  const h=harness({time:after(Q)}),r=h.runner;
+  await r.tick();
+  const q=await quoteAt(h.rt,'BTC');
+  const res=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10,sl:q.price*.99,tp:q.price*1.01});
+  const p=res.position;
+  // Across a funding time: charged on the mark at that candle's open.
+  const F=(Math.floor(h.rt.at/FUND)+1)*FUND;
+  h.rt.at=F+2*SEC;await r.tick();
+  let a=saved(h.storage);
+  near(a.positions[0].funding,p.units*m.sub((F-START)/STEP).o*SCALE.BTC*FUNDING_RATE);
+  // The price falls through the stop: the forming candle's replay books it at the stop, marked manual.
+  h.rt.price={BTC:p.sl*.999};h.rt.at+=5*SEC;
+  await r.tick();
+  a=saved(h.storage);
+  assert.deepEqual(a.trades.map(t=>[t.reason,t.origin,t.closedAt]),[['stopp','manual',h.rt.at]]);near(a.trades[0].exit,p.sl*(1-SLIP));
+  assert.match(a.log.at(-1).text,/^Stopp: lång BTC −\d+,\d\d \$ \(manuell\)$/);
+  // A target reached while the page slept is found in the replay.
+  delete h.rt.price;
+  const q2=await quoteAt(h.rt,'BTC'),res2=await r.order({symbol:'BTC',side:'short',margin:20,leverage:10,tp:q2.price*.995});
+  assert.equal(res2.ok,true,res2.text);
+  const S=(Math.floor(h.rt.at/STEP)+2)*STEP;
+  h.rt.shocks=[{symbol:'BTC',at:S,factor:.99}];h.rt.at=S+STEP+2*SEC;
+  await r.tick();
+  a=saved(h.storage);
+  const t=a.trades.at(-1);
+  assert.deepEqual([t.reason,t.side,t.origin,t.closedAt],['mål','short','manual',S]);near(t.exit,res2.position.tp*(1+SLIP));
+});
+
+// A manual BTC long at 10× opened in the quiet range, its stop 1 % below the price; the page then ticks once.
+async function manualLong(over={}){
+  const h=harness({time:after(Q),...over});
+  await h.runner.tick();
+  const q=await quoteAt(h.rt,'BTC'),res=await h.runner.order({symbol:'BTC',side:'long',margin:20,leverage:10,sl:q.price*.99});
+  assert.equal(res.ok,true,res.text);
+  h.rt.at+=5*SEC;await h.runner.tick();
+  return {...h,p:res.position,price:q.price};
+}
+
+test('setLevels(): the position is settled with its old levels up to now, then the new ones apply from now on, written before the answer',async()=>{
+  const h=await manualLong(),{p}=h;
+  h.rt.at+=3*MIN;h.rt.urls=[];
+  const q=await quoteAt(h.rt,'BTC'),sl=q.price*.995,tp=q.price*1.02;
+  const res=await h.runner.setLevels(p.id,{sl,tp});
+  const a=saved(h.storage),pos=a.positions[0],want=previewLevels(a,p.id,{sl,tp},{quote:q,contract:limitsFor('BTC',h.rt.at),now:h.rt.at});
+  assert.deepEqual([res.ok,res.trade,pos.sl,pos.tp,pos.levelsAt,pos.fundingThrough],[true,null,want.sl,want.tp,h.rt.at,h.rt.at]);
+  assert.deepEqual(res.position,pos);
+  assert.equal(res.text,'Nya nivåer för lång BTC: SL '+svPrice(want.sl)+', TP '+svPrice(want.tp));
+  assert.deepEqual(a.log.at(-1),{t:h.rt.at,kind:'ändrad',symbol:'BTC',signalId:null,text:'Nya nivåer för lång BTC: SL '+svPrice(want.sl)+', TP '+svPrice(want.tp)+' (manuell)'});
+  // The settlement read the position's history, its minutes and a fresh price; the tick size came from Bybit's limits.
+  assert.deepEqual(urlKinds(h.rt.urls),['funding/history','instruments-info','kline:1','kline:5','mark-price-kline:1','mark-price-kline:5','tickers']);
+  // Removing a level needs no limits; unchanged levels change nothing.
+  h.rt.at+=10*SEC;
+  assert.deepEqual([(await h.runner.setLevels(p.id,{tp:null})).text,saved(h.storage).positions[0].tp],['Nya nivåer för lång BTC: SL '+svPrice(want.sl)+', ingen TP',null]);
+  h.rt.at+=10*SEC;
+  const same=await h.runner.setLevels(p.id,{sl:want.sl});
+  assert.deepEqual([same.ok,same.text],[true,'SL och TP är oförändrade']);
+  // Persisted: a reload shows them, and the next tick keeps them.
+  h.rt.at+=5*SEC;await h.runner.tick();
+  assert.deepEqual([h.tab().account().positions[0].sl,h.tab().account().positions[0].tp],[want.sl,null]);
+});
+
+test('right after an order its SL can be previewed and set, though Bybit stamps every price a moment before the page writes the order',async()=>{
+  // Bybit's clock 0,4 s behind the page's: the ticker an order fills at, and every ticker read just after, is stamped before
+  // the position's opening.
+  const h=harness({time:after(Q),runtime:{server:after(Q)-400}}),r=h.runner;
+  await r.tick();
+  const res=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10});
+  assert.equal(res.ok,true,res.text);
+  const p=res.position,q=r.quotes().BTC;
+  assert.ok(q.at<p.openedAt,'the price the order filled at is older than its position');
+  // The chart's drag and the terminal preview on that price at once.
+  const ql=r.quoteLevels(p.id,{sl:q.price*.99});
+  assert.deepEqual([ql.ok,ql.reasons],[true,[]]);
+  // The change itself reads a new price, stamped the same way, and goes through.
+  const set=await r.setLevels(p.id,{sl:q.price*.99});
+  assert.equal(set.ok,true,set.text);
+  assert.equal(saved(h.storage).positions[0].sl,ql.sl);
+});
+
+test('setLevels() never rejects: on a refused level, missing history or price, or a signed-out user, the old levels stay and the reason is given',async()=>{
+  const h=await manualLong(),{p}=h,sl=()=>saved(h.storage).positions[0].sl;
+  const no=(text,more={})=>({ok:false,text,position:null,trade:null,...more});
+  h.who.user=null;
+  assert.deepEqual(await h.runner.setLevels(p.id,{sl:1}),no('Logga in för att ändra SL och TP'));
+  h.who.user='u1';
+  for(const [levels,text] of [[{},'Ange SL eller TP'],[null,'Ange SL eller TP'],[{sl:1,stop:2},'Ange SL eller TP'],[{sl:-1},'Ange SL som ett pris över 0'],[{tp:'x'},'Ange TP som ett pris över 0']])
+    assert.deepEqual(await h.runner.setLevels(p.id,levels),no(text),JSON.stringify(levels));
+  assert.deepEqual(await h.runner.setLevels('m|okänd',{sl:1}),no('Positionen är redan stängd'));
+  // A level Bybit would refuse: refused; the settlement up to now is kept, the old level too.
+  h.rt.at+=MIN;
+  const q=await quoteAt(h.rt,'BTC'),bad=await h.runner.setLevels(p.id,{sl:q.price*1.001});
+  assert.equal(bad.ok,false);assert.match(bad.text,/^SL för en lång position måste ligga under priset \([\d\u00a0,]+\) och över likvidationen \([\d\u00a0,]+\)$/);
+  assert.deepEqual([sl(),saved(h.storage).positions[0].fundingThrough,bad.position.sl],[p.sl,h.rt.at,p.sl]);
+  // The history cannot be read: nothing changes.
+  h.rt.at+=MIN;h.rt.fail=u=>u.pathname.endsWith('/mark-price-kline')?'Nätverksfel':null;
+  const before=h.storage.getItem(accountKey('u1'));
+  assert.deepEqual(await h.runner.setLevels(p.id,{sl:q.price*.98}),no('Kunde inte ändra SL och TP för BTC: Nätverksfel'));
+  assert.equal(h.storage.getItem(accountKey('u1')),before);
+  // Bybit's limits cannot be read (its risk tiers fail): a new price level waits for them; removing a level does not.
+  h.rt.fail=u=>u.pathname.endsWith('/risk-limit')?'Nätverksfel':null;h.rt.at+=11*MIN;
+  assert.deepEqual(await h.runner.setLevels(p.id,{sl:q.price*.98}),no('Bybits prissteg för BTC saknas just nu — försök igen om en stund'));
+  const removed=await h.runner.setLevels(p.id,{sl:null});assert.equal(removed.ok,true,removed.text);assert.equal(sl(),null);
+  // Bybit's newest candle stays missing: three reads, then a clear failure.
+  h.rt.fail=null;h.rt.at=(Math.floor(h.rt.at/STEP)+1)*STEP+SEC;h.rt.lag=20*SEC;h.rt.urls=[];
+  assert.deepEqual(await h.runner.setLevels(p.id,{sl:q.price*.98}),no('Kunde inte ändra SL och TP för BTC: Bybits senaste 5-minuterspriser saknas ännu, försök igen om en stund'));
+  assert.equal(h.rt.urls.filter(u=>u.pathname.endsWith('/mark-price-kline')&&u.searchParams.get('interval')==='5').length,3);
+  assert.equal(sl(),null);
+});
+
+test('a change of levels or a close in the moment after a 5-minute mark waits for Bybit to publish the new candle, then goes through',async()=>{
+  const fives=rt=>rt.urls.filter(u=>u.pathname.endsWith('/mark-price-kline')&&u.searchParams.get('interval')==='5').length;
+  // 0,3 s after the next 5-minute mark Bybit has not published the new step's candle yet.
+  const mark=h=>{h.rt.at=(Math.floor(h.rt.at/STEP)+1)*STEP+300;h.rt.lag=20*SEC;h.rt.urls=[];};
+  // It does a moment later: this timer fires only once the runner yields to the event loop, which reads made one after
+  // another never do, so only a runner that waits sees the candle.
+  const publish=h=>setTimeout(()=>{h.rt.lag=0;},0);
+  const h=await manualLong(),tab=h.tab({timeouts:{soon:20}});
+  mark(h);
+  const q=await quoteAt(h.rt,'BTC');
+  publish(h);
+  const set=await tab.setLevels(h.p.id,{sl:q.price*.98});
+  assert.equal(set.ok,true,set.text);
+  assert.equal(fives(h.rt),2,'read again once Bybit had published it');
+  assert.deepEqual([saved(h.storage).positions[0].sl,saved(h.storage).positions[0].levelsAt],[set.position.sl,h.rt.at]);
+  const c=await manualLong(),other=c.tab({timeouts:{soon:20}});
+  mark(c);publish(c);
+  const closed=await other.closePosition(c.p.id);
+  assert.equal(closed.ok,true,closed.text);
+  assert.deepEqual([closed.trade.reason,closed.trade.closedAt,saved(c.storage).positions.length,fives(c.rt)],['manuell',c.rt.at,0,2]);
+});
+
+test('setLevels(): an old stop reached before the change is booked and the change is refused; after a change only the new level counts',async()=>{
+  // The page sleeps after 10:00; at the step after it BTC gaps below the old stop and stays there.
+  const h=await manualLong(),{p}=h,S=(Math.floor(h.rt.at/STEP)+2)*STEP,factor=p.sl/(m.sub((S-START)/STEP).o*SCALE.BTC)*.998;
+  h.rt.shocks=[{symbol:'BTC',at:S,factor}];h.rt.at=S+2*MIN;
+  const late=await h.runner.setLevels(p.id,{sl:p.sl*.98});
+  const a=saved(h.storage),t=a.trades[0];
+  assert.deepEqual([t.reason,t.closedAt,t.origin],['stopp',S,'manual']);near(t.exit,m.sub((S-START)/STEP).o*factor*SCALE.BTC*(1-SLIP));
+  assert.deepEqual([late.ok,late.trade,late.position],[false,t,null]);
+  assert.equal(late.text,'Stopp hann före ändringen: lång BTC (manuell) '+(t.pnl<0?'−':'+')+money2(Math.abs(t.pnl))+' $');
+  // Another position: a dip between the old and the new stop before the change does not count; one after the change does.
+  const g=await manualLong(),{p:q}=g,D=(Math.floor(g.rt.at/STEP)+2)*STEP,open=t=>m.sub((t-START)/STEP).o*SCALE.BTC;
+  const newSl=Number((q.sl*1.005).toFixed(1)),dip=(q.sl+newSl)/2;
+  g.rt.shocks=[{symbol:'BTC',at:D,factor:dip/open(D)},{symbol:'BTC',at:D+STEP,factor:open(D)/dip}];
+  g.rt.at=D+STEP+2*MIN;
+  const moved=await g.runner.setLevels(q.id,{sl:newSl});
+  assert.equal(moved.ok,true,moved.text);assert.deepEqual([moved.position.sl,moved.position.levelsAt],[newSl,g.rt.at]);
+  assert.deepEqual(saved(g.storage).trades,[]);
+  // Later the price gaps to between the two stops again, at a step after the change: the new stop is booked there.
+  const E=(Math.floor(g.rt.at/STEP)+2)*STEP;
+  g.rt.shocks=[...g.rt.shocks,{symbol:'BTC',at:E,factor:dip/open(E)}];g.rt.at=E+STEP+2*SEC;
+  await g.runner.tick();
+  const done=saved(g.storage).trades;
+  assert.deepEqual(done.map(x=>[x.reason,x.closedAt]),[['stopp',E]]);near(done[0].exit,dip*(1-SLIP));
+  assert.ok(done[0].exit>q.sl,'the old stop was never reached');
+});
+
+test('setLevels() on a signal position makes it manual: it then outlives its time stop, and two tabs agree on it',async()=>{
+  const R=Q,t0=after(R),h=harness({time:t0,runtime:{delay:1}}),quote=await quoteAt(h.rt,'BTC');
+  const signal={id:`s|u1|BTC|1h|${m.bar(R).t}|${MODEL.signal}`,symbol:'BTC',tf:'1h',side:'long',entry:quote.price,sl:quote.price*.95,tp:quote.price*1.05,barTime:m.bar(R).t,confirmedAt:m.closeOf(R)};
+  const acc=openPosition(newForecastAccount(t0-HOUR,{symbols:['BTC'],leverage:10}),{signal,symbol:'BTC',quote,contract:limitsFor('BTC',t0),now:t0,tfMs:HOUR,dataReliable:true}).account;
+  h.storage.setItem(accountKey('u1'),JSON.stringify(markProcessed(acc,'BTC',m.bar(R).t)));
+  const p=acc.positions[0],other=h.tab();
+  h.rt.at+=MIN;
+  // One tab changes the target while the other ticks.
+  const [res]=await Promise.all([h.runner.setLevels(p.id,{tp:quote.price*1.1}),other.tick()]);
+  assert.equal(res.ok,true,res.text);
+  // The signal's own stop lies off Bybit's tick and reads as the chart's tag writes it (whole dollars on BTC); the new
+  // target lies on the tick.
+  assert.equal(res.text,'Nya nivåer för lång BTC: SL '+sv(p.sl,0)+', TP '+svPrice(res.position.tp)+' — signalpositionen hanteras nu manuellt, utan tidsstopp');
+  assert.deepEqual([res.position.origin,res.position.deadline,res.position.signalId],['manual',null,p.signalId]);
+  // Past the signal's deadline both tabs keep it open.
+  h.rt.at=p.deadline+2*HOUR;
+  await Promise.all([h.runner.tick(),other.tick()]);
+  const a=saved(h.storage);
+  assert.deepEqual([a.positions.map(x=>[x.id,x.origin]),a.trades],[[[p.id,'manual']],[]]);
+  assert.deepEqual(other.account().positions[0].tp,res.position.tp);
+});
+
+test('setAuto() switches signal trading on and off under the lock and never rejects; switched off, waits for entries end',async()=>{
+  const h=harness({time:after(L1.i-1),settings:{symbols:['BTC'],leverage:10,auto:false}}),r=h.runner;
+  h.who.user=null;
+  assert.deepEqual(await r.setAuto(true),{ok:false,text:'Logga in för att ändra auto-handeln',account:null});
+  h.who.user='u1';
+  await r.tick();
+  assert.deepEqual([(await r.setAuto('ja')).ok,(await r.setAuto('ja')).text],[false,'Ogiltigt läge för auto-handel']);
+  const on=await r.setAuto(true);
+  assert.deepEqual([on.ok,on.text,on.account.settings.auto,saved(h.storage).settings.auto],[true,'Auto-handel på: nya signaler handlas automatiskt',true,true]);
+  // A fresh signal waits for a price; switching auto-trading off ends the wait, and nothing opens later.
+  h.rt.at=after(L1.i);h.rt.fail=u=>u.pathname.endsWith('/tickers')?'Nätverksfel':null;
+  let st=await r.tick();
+  assert.deepEqual(st.waiting,{BTC:'Nätverksfel'});
+  const off=await r.setAuto(false);
+  assert.deepEqual([off.ok,off.text],[true,'Auto-handel av: du handlar manuellt. Öppna signalpositioner följer sina egna regler tills de stängs.']);
+  st=r.status();
+  assert.deepEqual([st.state,st.waiting,st.auto],['manual',{},false]);
+  h.rt.fail=null;h.rt.at=after(L1.i,20*SEC);st=await r.tick();
+  assert.deepEqual([saved(h.storage).positions,st.state],[[],'manual']);
+  // Switched on while a candle is read: the candle is read again and its signal traded.
+  const p=harness({time:after(L1.i-1),settings:{symbols:['BTC'],leverage:10,auto:false}});
+  let flipped=null;
+  const store=createForecastStore(memoryBackend()),hooked={...store,async putSignal(x){const res=await store.putSignal(x);flipped??=p.runner.setAuto(true);await flipped;return res;}};
+  const tab=p.tab({store:hooked});
+  await tab.tick();
+  p.rt.at=after(L1.i);
+  st=await tab.tick();
+  assert.deepEqual([saved(p.storage).settings.auto,saved(p.storage).positions,saved(p.storage).processed.BTC],[true,[],m.bar(L1.i-1).t]);
+  assert.deepEqual(st.waiting,{BTC:'auto-handeln slogs på under tiden'});
+  p.rt.at=after(L1.i,20*SEC);st=await tab.tick();
+  assert.deepEqual([saved(p.storage).positions.length,st.waiting,st.state],[1,{},'trading']);
+});
+
+test('transfer() and setFree() book deposits and withdrawals under the lock, never reject, and say what happened; a reset archives them',async()=>{
+  const storage=memoryStorage(),locks=tabLocks(),write=storage.setItem.bind(storage);
+  storage.setItem=(k,v)=>{assert.ok(locks.held.includes(accountKey('u1')),'written outside the lock: '+k);write(k,v);};
+  const h=harness({time:after(Q),storage,locks}),r=h.runner,other=h.tab();
+  h.who.user=null;
+  assert.deepEqual(await r.transfer({kind:'in',amount:5}),{ok:false,text:'Logga in för att ändra saldot',account:null});
+  assert.deepEqual(await r.setFree(5),{ok:false,text:'Logga in för att ändra saldot',account:null});
+  h.who.user='u1';
+  // Two tabs deposit at once: both are booked.
+  const [x,y]=await Promise.all([r.transfer({kind:'in',amount:50}),other.transfer({kind:'in',amount:25.5})]);
+  assert.deepEqual([x.ok,y.ok],[true,true]);
+  assert.deepEqual([x.text,y.text],['Satte in 50,00 $ · tillgängligt 150,00 $','Satte in 25,50 $ · tillgängligt 175,50 $']);
+  let a=saved(storage);
+  assert.deepEqual([a.cash,a.transfers.map(t=>[t.kind,t.amount,t.cashAfter])],[175.5,[['in',50,150],['in',25.5,175.5]]]);
+  const out=await r.transfer({kind:'out',amount:.5});
+  assert.deepEqual([out.ok,out.text,out.account.cash],[true,'Tog ut 0,50 $ · tillgängligt 175,00 $',175]);
+  for(const [req,text] of [[{kind:'out',amount:500},'Det går bara att ta ut tillgängligt saldo (högst 175,00 $), inte marginalen i öppna positioner'],
+    [{kind:'in',amount:0},'Ange ett belopp över 0 $'],[{kind:'gåva',amount:5},'Välj insättning eller uttag'],[null,'Välj insättning eller uttag'],
+    [{kind:'in',amount:1.234},'Ange beloppet i hela cent']]){
+    const res=await r.transfer(req);
+    assert.deepEqual([res.ok,res.text,res.account?.cash],[false,text,175],JSON.stringify(req));
+  }
+  assert.deepEqual([(await r.setFree(100)).text,(await r.setFree(130)).text],['Tog ut 75,00 $ · tillgängligt 100,00 $','Satte in 30,00 $ · tillgängligt 130,00 $']);
+  assert.deepEqual([(await r.setFree(130)).ok,(await r.setFree(130)).text],[false,'Tillgängligt saldo är redan 130,00 $']);
+  a=saved(storage);
+  assert.deepEqual(a.log.map(e=>e.text),['Insättning 50,00 $','Insättning 25,50 $','Uttag 0,50 $','Uttag 75,00 $','Insättning 30,00 $']);
+  // The result since the start leaves them out.
+  h.rt.at+=5*SEC;await r.tick();
+  assert.deepEqual([r.live().equity,r.live().netTransfers,r.live().result],[130,30,0]);
+  // A reset archives the account with its transfers and starts again at 100 $ without any.
+  const raw=storage.getItem(accountKey('u1'));
+  const fresh=await r.reset();
+  assert.equal(storage.getItem(accountKey('u1')+':before-reset:'+h.rt.at),raw);
+  assert.equal(JSON.parse(raw).transfers.length,5);
+  assert.deepEqual([fresh.cash,fresh.transfers,fresh.settings.auto],[100,[],false]);
+});
+
+test('quoteOrder() and quoteLevels() preview on the quote and limits the runner holds; watch() keeps a coin\'s price and limits fresh',async()=>{
+  const h=harness({time:after(Q)}),r=h.runner,params={symbol:'ETH',side:'long',margin:10,leverage:20};
+  const none=reason=>({ok:false,reasons:[reason],symbol:null,side:null,leverage:null,price:null,mark:null,fill:null,qty:null,value:null,margin:null,fee:null,reserve:null,cost:null,
+    liq:null,maxLeverage:null,minMargin:null,maxMargin:null,sl:null,tp:null,riskId:null,maintenance:null,deduction:null,filters:null});
+  h.who.user=null;
+  assert.deepEqual(r.quoteOrder(params),none('Logga in för att handla'));
+  h.who.user='u1';
+  assert.deepEqual(r.quoteOrder(params),none('AI Forecast-kontot laddas'));
+  await r.tick();
+  // Nothing held for ETH yet: the preview says so, and starts reading its limits.
+  h.rt.urls=[];
+  assert.deepEqual(r.quoteOrder(params).reasons,['Färskt pris saknas för ETH','Bybits gränser för ETH saknas eller är för gamla']);
+  for(let k=0;k<20&&!r.limits('ETH');k++)await turn();
+  assert.deepEqual(r.limits('ETH'),limitsFor('ETH',h.rt.at));assert.deepEqual(urlKinds(h.rt.urls),['instruments-info','risk-limit']);
+  // Watching ETH reads its price now and on every tick.
+  h.rt.urls=[];
+  assert.equal(r.watch('ETH'),'ETH');
+  for(let k=0;k<20&&!r.quotes().ETH;k++)await turn();
+  assert.deepEqual(urlKinds(h.rt.urls),['tickers']);
+  const q=r.quoteOrder(params),want=previewOrder(r.account(),{...params,quote:r.quotes().ETH,contract:r.limits('ETH'),now:h.rt.at});
+  assert.deepEqual(q,want);assert.equal(q.ok,true);
+  h.rt.at+=5*SEC;h.rt.urls=[];await r.tick();
+  assert.deepEqual(urlKinds(h.rt.urls),['tickers']);assert.equal(r.quotes().ETH.at,h.rt.at);
+  // Not watched any more: no reads, and the preview goes stale with the price.
+  assert.equal(r.watch(null),null);
+  h.rt.at+=20*SEC;h.rt.urls=[];await r.tick();
+  assert.deepEqual(h.rt.urls,[]);assert.deepEqual(r.quoteOrder(params).reasons,['Färskt pris saknas för ETH']);
+  assert.equal(r.watch('LUNA'),null);
+  // quoteLevels on a held position: what setLevels would accept, on the runner's quote.
+  r.watch('BTC');await r.tick();
+  const res=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10});
+  const p=res.position,price=r.quotes().BTC.price;
+  const ql=r.quoteLevels(p.id,{sl:price*.99});
+  assert.deepEqual(ql,previewLevels(r.account(),p.id,{sl:price*.99},{quote:r.quotes().BTC,contract:r.limits('BTC'),now:h.rt.at}));
+  assert.equal(ql.ok,true);assert.ok(ql.slPnl<0);
+  assert.deepEqual(r.quoteLevels(p.id,{sl:price*1.01}).ok,false);
+  assert.deepEqual(r.quoteLevels('m|okänd',{sl:1}).reasons,['Positionen är redan stängd']);
+  h.who.user=null;
+  assert.deepEqual(r.quoteLevels(p.id,{sl:1}).reasons,['Logga in för att ändra SL och TP']);
+});
+
+test('the ticks keep Bybit\'s limits of every held coin fresh, so after a reload the page has their tick without a preview or a watch',async()=>{
+  // An ETH position from an earlier page session: the reloaded page's runner has read nothing of ETH yet.
+  const h=harness({time:after(Q)});await h.runner.tick();
+  const o=await h.runner.order({symbol:'ETH',side:'long',margin:10,leverage:10});
+  assert.equal(o.ok,true,o.text);
+  const r=h.tab();h.rt.at+=5*SEC;h.rt.urls=[];
+  assert.equal(r.limits('ETH'),null);
+  await r.tick();
+  for(let k=0;k<20&&!r.limits('ETH');k++)await turn();
+  assert.deepEqual(r.limits('ETH'),limitsFor('ETH',h.rt.at));
+  assert.ok(['instruments-info','risk-limit'].every(x=>urlKinds(h.rt.urls).includes(x)),urlKinds(h.rt.urls).join(' '));
+  // Read again once they have expired; a coin neither held nor watched is never read.
+  h.rt.at+=LIMIT_TTL+SEC;
+  assert.equal(r.limits('ETH'),null);
+  await r.tick();
+  for(let k=0;k<20&&!r.limits('ETH');k++)await turn();
+  assert.equal(r.limits('ETH')?.at,h.rt.at);
+  assert.equal(r.limits('SOL'),null);
+  assert.ok(!h.rt.urls.some(u=>/instruments-info|risk-limit/.test(u.pathname)&&u.searchParams.get('symbol')==='SOLUSDT'));
+});
+
+test('a version 1 account in storage is read as version 2 and written back so under the lock; it trades on as before',async()=>{
+  const h=harness({time:after(L1.i)});
+  // The released format: what version 1 stored for a 10× BTC long, written by hand from a version 2 account.
+  const quote=await quoteAt(h.rt,'BTC'),t0=h.rt.at,barTime=m.bar(L1.i).t;
+  const signal={id:`s|u1|BTC|1h|${barTime}|${MODEL.signal}`,symbol:'BTC',tf:'1h',side:'long',entry:quote.price,sl:quote.price*.9,tp:quote.price*1.2,barTime,confirmedAt:barTime+HOUR};
+  const v2=markProcessed(openPosition(plainAccount(t0-HOUR,{symbols:['BTC'],leverage:10}),{signal,symbol:'BTC',quote,contract:limitsFor('BTC',t0),now:t0,tfMs:HOUR,dataReliable:true}).account,'BTC',m.bar(L1.i).t);
+  const {transfers,...rest}=v2,{auto,...settings}=rest.settings;
+  const v1={...rest,version:'ai-forecast-account-v1',settings,positions:rest.positions.map(({origin,levelsAt,...p})=>p)};
+  assert.equal(validateForecastAccount(v1),v1);
+  h.storage.setItem(accountKey('u1'),JSON.stringify(v1));
+  // Shown at once, as version 2; written as version 2 by the first tick.
+  assert.deepEqual([h.runner.account().version,h.runner.account().settings.auto,h.runner.account().positions[0].origin],['ai-forecast-account-v2',false,'signal']);
+  h.rt.at+=5*SEC;
+  const st=await h.runner.tick();
+  const a=saved(h.storage);
+  assert.deepEqual([a.version,a.settings.auto,a.positions.map(p=>[p.origin,p.levelsAt]),a.transfers],['ai-forecast-account-v2',false,[['signal',t0]],[]]);
+  assert.equal(a.positions[0].fundingThrough,h.rt.at,'and settled as before');
+  assert.deepEqual([st.state,st.text],['manual','Manuell handel · 1 öppen position']);
+});
+
+test('status: manual trading counts every open position; with auto-trading on the manual ones are named apart; protection problems show either way',async()=>{
+  const h=await manualLong();
+  assert.deepEqual([h.runner.status().state,h.runner.status().text,h.runner.status().manual],['manual','Manuell handel · 1 öppen position',1]);
+  await h.runner.order({symbol:'ETH',side:'short',margin:10,leverage:10});
+  assert.equal(h.runner.status().text,'Manuell handel · 2 öppna positioner');
+  // A failing protection check shows in manual mode too.
+  h.rt.fail=u=>u.pathname.endsWith('/mark-price-kline')?'Nätverksfel':null;h.rt.at+=5*SEC;
+  let st=await h.runner.tick();
+  assert.deepEqual([st.state,st.text],['waiting','Väntar på skyddskontroll för BTC: Nätverksfel']);
+  h.rt.fail=null;h.rt.at+=5*SEC;await ticks(h.runner,2);
+  await h.runner.setAuto(true);
+  st=h.runner.status();
+  assert.deepEqual([st.state,st.auto,st.open,st.manual],['trading',true,2,2]);
+  assert.match(st.text,/^Handlar · 0 av 3 positioner · 2 manuella · nästa beslut \d\d:\d\d$/);
+});
+
+// ---- Fixes after the engine review ---------------------------------------------------------------------------------
+
+test('a mark wick through the liquidation in the minute of a change of the stop, while the page was closed, still liquidates; a last price there does not hit the new stop',async()=>{
+  for(const [kind,change] of [['mark',false],['mark',true],['last',true]]){
+    const h=harness({time:after(Q,5*SEC)});await h.runner.tick();
+    const step=Math.floor(h.rt.at/STEP)*STEP,o=await h.runner.order({symbol:'BTC',side:'long',margin:20,leverage:50}),p=o.position;
+    assert.equal(o.ok,true,o.text);
+    h.rt.at=step+2*MIN+30*SEC;await h.runner.tick();
+    const sl=Math.round((await quoteAt(h.rt,'BTC')).price*.996);
+    if(change){const lv=await h.runner.setLevels(p.id,{sl});assert.equal(lv.ok,true,lv.text);}
+    // At 2:45 the price dips for a few seconds, between two live quotes: on the mark through the liquidation level, or on
+    // the last price under the new stop (above the liquidation). Then the page sleeps for a few minutes.
+    h.rt.wicks=[{symbol:'BTC',at:step+2*MIN,kind,l:kind==='mark'?p.liq*.999:sl*.999}];
+    for(const s of [3*MIN+5*SEC,6*MIN+5*SEC,6*MIN+10*SEC]){h.rt.at=step+s;await h.runner.tick();}
+    const a=saved(h.storage),label=kind+' '+change;
+    if(kind==='mark')assert.deepEqual(a.trades.map(t=>[t.reason,t.closedAt-step]),[['likvidation',3*MIN]],label);
+    else assert.deepEqual([a.positions.map(x=>x.sl),a.trades],[[sl],[]],label);
+  }
+});
+
+test('after an absence of five months the positions are settled window by window: funding and a stop on day 100 at their candles, then a close works',async()=>{
+  // A 1× SOL long without levels and a 1× BTC long (0,001 BTC) with its stop 15 % under the price; then the page stays closed for 150
+  // days, and on day 100 BTC drops 20 % at once.
+  const h=harness({time:after(Q)}),r=h.runner;await r.tick();
+  const sol=(await r.order({symbol:'SOL',side:'long',margin:20,leverage:1})).position;
+  const btc=(await r.order({symbol:'BTC',side:'long',margin:70,leverage:1,sl:Math.round((await quoteAt(h.rt,'BTC')).price*.85)})).position;
+  const D=Math.floor((btc.openedAt+100*DAY)/STEP)*STEP,cash=saved(h.storage).cash;
+  h.rt.shocks=[{symbol:'BTC',at:D,factor:.8}];h.rt.at=sol.openedAt+150*DAY;h.rt.urls=[];
+  let st=await r.tick();
+  // Each turn reads one window of about 69 days for one position, a bounded number of requests.
+  assert.equal(st.state,'waiting');
+  assert.match(st.text,/^Väntar på skyddskontroll för (BTC|SOL): lång frånvaro, historiken läses ikapp \(klar t\.o\.m\. \d{1,2} \S+ 20\d\d\)$/);
+  assert.ok(h.rt.urls.length<80,String(h.rt.urls.length));
+  assert.deepEqual([r.live().equity,r.live().reason.startsWith('Väntar på funding- och likvidationskontroll för')],[null,true]);
+  for(let k=0;k<8&&st.state!=='manual';k++){h.rt.at+=5*SEC;st=await r.tick();}
+  const a=saved(h.storage),t=a.trades[0],held=a.positions[0];
+  assert.deepEqual([st.state,st.protection,a.trades.length,a.positions.map(x=>x.symbol)],['manual','',1,['SOL']]);
+  // The stop: at the open of the candle that gapped through it.
+  assert.deepEqual([t.symbol,t.reason,t.closedAt],['BTC','stopp',D]);near(t.exit,m.sub((D-START)/STEP).o*.8*SCALE.BTC*(1-SLIP));
+  // Every 8-hour funding of the 150 days, on the mark at its candle's open, paid from the free cash.
+  let paid=0,n=0;for(let f=Math.ceil(sol.openedAt/FUND)*FUND;f<=held.fundingThrough;f+=FUND){paid+=sol.units*m.sub((f-START)/STEP).o*SCALE.SOL*FUNDING_RATE;n++;}
+  assert.ok(n>=449,String(n));near(held.funding,paid);
+  near(a.cash,cash+btc.margin+btc.reserve+btc.fees+t.pnl-paid);
+  assert.notEqual(r.live().equity,null);
+  const closed=await r.closePosition(sol.id);
+  assert.equal(closed.ok,true,closed.text);assert.match(closed.text,/^Stängde lång SOL \(manuell\) till /);
+  // Closed or changed straight after the absence, without the ticks: every window is settled first.
+  for(const act of ['close','levels']){
+    const g=harness({time:after(Q)});await g.runner.tick();
+    const p=(await g.runner.order({symbol:'SOL',side:'long',margin:20,leverage:1})).position;
+    g.rt.at=p.openedAt+150*DAY;
+    const res=act==='close'?await g.runner.closePosition(p.id):await g.runner.setLevels(p.id,{tp:Math.round((await quoteAt(g.rt,'SOL')).price*1.5)});
+    assert.equal(res.ok,true,act+': '+res.text);
+    const x=act==='close'?res.trade:saved(g.storage).positions[0];
+    let due=0;for(let f=Math.ceil(p.openedAt/FUND)*FUND;f<=g.rt.at;f+=FUND)due+=p.units*m.sub((f-START)/STEP).o*SCALE.SOL*FUNDING_RATE;
+    near(x.funding,due);
+    if(act==='levels')assert.equal(x.fundingThrough,g.rt.at);
+  }
+});
+
+test('Bybit\'s limits that would expire while an order or a change of levels is on its way are read again first, so neither is refused for them',async()=>{
+  const h=harness({time:after(Q)}),good=fakeBybit(h.rt);let slow=false;
+  // The price read takes 3 seconds.
+  const r=h.tab({grab:async(u,o)=>{const res=await good(u,o);if(slow&&u.includes('/tickers'))h.rt.at+=3*SEC;return res;}});
+  await r.tick();
+  // A preview loads ETH's limits; 9 minutes 58 seconds later the order comes.
+  r.quoteOrder({symbol:'ETH',side:'long',margin:10,leverage:10});
+  for(let k=0;k<20&&!r.limits('ETH');k++)await turn();
+  h.rt.at=r.limits('ETH').at+LIMIT_TTL-2*SEC;h.rt.urls=[];slow=true;
+  const eth=await r.order({symbol:'ETH',side:'long',margin:10,leverage:10});
+  assert.equal(eth.ok,true,eth.text);
+  assert.deepEqual(urlKinds(h.rt.urls),['instruments-info','risk-limit','tickers']);
+  // A change of levels whose history and price reads take 3 seconds, 9 minutes 57 seconds after BTC's limits were read.
+  slow=false;h.rt.at=Math.floor(h.rt.at/STEP)*STEP+STEP+150*SEC;
+  const btc=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10}),sl=Math.round(btc.position.entry*.99);
+  h.rt.at=r.limits('BTC').at+LIMIT_TTL-3*SEC;slow=true;h.rt.urls=[];
+  const lv=await r.setLevels(btc.position.id,{sl});
+  assert.deepEqual([lv.ok,lv.position?.sl],[true,sl],lv.text);
+  assert.equal(h.rt.urls.filter(u=>u.pathname.endsWith('/mark-price-kline')&&u.searchParams.get('interval')==='5').length,1);
+});
+
+test('previews say why the account cannot be read instead of that it is loading',async()=>{
+  const t0=after(Q);
+  for(const [raw,text] of [[JSON.stringify({...plainAccount(t0-HOUR),version:'ai-forecast-account-v3'}),'AI Forecast-kontot har en annan version (ai-forecast-account-v3). Ladda om sidan.'],
+    ['{trasig','AI Forecast-kontot kan inte läsas']]){
+    const h=harness({time:t0});h.storage.setItem(accountKey('u1'),raw);
+    const st=await h.runner.tick();
+    assert.deepEqual([st.state,st.text],['error',text]);
+    assert.deepEqual(h.runner.quoteOrder({symbol:'BTC',side:'long',margin:10,leverage:10}).reasons,[text]);
+    assert.deepEqual(h.runner.quoteLevels('m|BTC|1',{sl:1}).reasons,[text]);
+  }
+  // Signed in, nothing stored yet and nothing failed: it is loading.
+  assert.deepEqual(harness({time:t0}).runner.quoteOrder({symbol:'BTC',side:'long',margin:10,leverage:10}).reasons,['AI Forecast-kontot laddas']);
+});
+
+test('a change of levels overtaken by the old stop says so, also when a tick booked the stop just before',async()=>{
+  for(const tickFirst of [true,false]){
+    const h=await manualLong(),{p}=h;
+    h.rt.price={BTC:p.sl*.998};h.rt.at+=5*SEC;
+    if(tickFirst){await h.runner.tick();assert.deepEqual(saved(h.storage).trades.map(t=>t.reason),['stopp']);h.rt.at+=SEC;}
+    const res=await h.runner.setLevels(p.id,{sl:Math.round(p.sl*.99)}),t=saved(h.storage).trades[0];
+    assert.deepEqual([res.ok,res.text,res.trade],[false,'Stopp hann före ändringen: lång BTC (manuell) '+(t.pnl<0?'−':'+')+money2(Math.abs(t.pnl))+' $',t],String(tickFirst));
+  }
+  // One the user closed, or one that was never there, is closed.
+  const h=await manualLong(),c=await h.runner.closePosition(h.p.id);
+  assert.equal(c.ok,true,c.text);
+  assert.deepEqual(await h.runner.setLevels(h.p.id,{sl:1}),{ok:false,text:'Positionen är redan stängd',position:null,trade:c.trade});
+  assert.deepEqual(await h.runner.setLevels('m|BTC|okänd',{sl:1}),{ok:false,text:'Positionen är redan stängd',position:null,trade:null});
+});
+
+test('auto-trading off: a fresh signal whose record could not be stored is stored on a later try, with no wait for a trade',async()=>{
+  const base=createForecastStore(memoryBackend());let failures=0;
+  const store={...base,async putSignal(x){if(x.symbol==='BTC'&&failures<1){failures++;throw Error('IndexedDB tillfälligt fel');}return base.putSignal(x);}};
+  const h=harness({time:after(L1.i-1),store});
+  await h.runner.tick();
+  h.rt.at=after(L1.i);
+  let st=await h.runner.tick();
+  // BTC's candle stays open for its record; the other coins' are decided. Manual trading has nothing to wait for.
+  assert.deepEqual([st.state,st.text,st.waiting,saved(h.storage).processed.BTC,saved(h.storage).processed.ETH],
+    ['manual','Manuell handel · 0 öppna positioner',{},m.bar(L1.i-1).t,L1.t]);
+  assert.deepEqual(await signalsOf(base,'BTC'),[]);
+  h.rt.at=after(L1.i,20*SEC);st=await h.runner.tick();
+  assert.deepEqual((await signalsOf(base,'BTC')).map(r=>[r.barTime,r.origin]),[[L1.t,'live']]);
+  assert.deepEqual([st.state,st.waiting,saved(h.storage).processed.BTC,saved(h.storage).positions],['manual',{},L1.t,[]]);
+  // A full archive is not retried: the candle is decided at once.
+  const full=createForecastStore(localStorageBackend(memoryStorage(),undefined,{maxChars:10})),g=harness({time:after(L1.i-1),store:full});
+  await g.runner.tick();g.rt.at=after(L1.i);await g.runner.tick();
+  assert.equal(saved(g.storage).processed.BTC,L1.t);
+});
+
+test('order() and setLevels() carry out what was asked when they were called, whatever the caller does with its object meanwhile',async()=>{
+  const h=harness({time:after(Q)});await h.runner.tick();
+  const form={symbol:'BTC',side:'long',margin:10,leverage:10},pending=h.runner.order(form);
+  // The ticket keeps changing while the order is on its way.
+  Object.assign(form,{side:'short',margin:60,leverage:50,symbol:'ETH'});
+  const res=await pending,p=res.position;
+  assert.deepEqual([res.ok,p?.symbol,p?.side,p?.leverage],[true,'BTC','long',10],res.text);assert.ok(p.margin<=10);
+  h.rt.at+=5*SEC;await h.runner.tick();
+  const levels={sl:Math.round(p.entry*.99)},set=h.runner.setLevels(p.id,levels);
+  levels.sl=1;levels.tp=2;
+  const done=await set;
+  assert.deepEqual([done.ok,done.position?.sl,done.position?.tp],[true,Math.round(p.entry*.99),null],done.text);
+});
+
+test('the runner\'s order and level texts give prices with the decimals of Bybit\'s tick, also from 100 000 $ on',async()=>{
+  const h=harness({time:after(Q),runtime:{price:{BTC:123456.7}}}),r=h.runner;
+  await r.tick();
+  const res=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10,sl:120000.1,tp:130000.3});
+  assert.equal(res.text,'Köpte 0,001 BTC till '+sv(123518.4,1)+' · 10× · marginal '+money2(res.position.margin)+' $ · SL '+sv(120000.1,1)+' · TP '+sv(130000.3,1));
+  h.rt.at+=5*SEC;await r.tick();h.rt.at+=10*SEC;
+  assert.equal((await r.setLevels(res.position.id,{sl:119999.9})).text,'Nya nivåer för lång BTC: SL '+sv(119999.9,1)+', TP '+sv(130000.3,1));
+});
+
+test('the runner writes a fill and an exit with all of Bybit\'s tick decimals, as Positioner and Historik do, and a stop or a target as the chart\'s tag does',async()=>{
+  const fx=(x,d)=>x.toLocaleString('sv-SE',{minimumFractionDigits:d,maximumFractionDigits:d}),pnl=x=>(x<0?'−':'+')+money2(Math.abs(x))+' $';
+  // BTC at 60 000 $ fills a buy at 60 030,0; Stäng's answer has the exit's tenth, also from 100 000 $ on.
+  const h=harness({time:after(Q),runtime:{price:{BTC:60000,SOL:120,PEPE:.0000043512}}}),r=h.runner;
+  await r.tick();
+  const btc=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10,sl:59000});
+  assert.equal(btc.text,'Köpte 0,003 BTC till '+fx(60030,1)+' · 10× · marginal '+money2(btc.position.margin)+' $ · SL '+fx(59000,0));
+  h.rt.price={...h.rt.price,BTC:123456.7};h.rt.at+=5*SEC;await r.tick();
+  const closed=await r.closePosition(btc.position.id);
+  assert.equal(closed.ok,true,closed.text);
+  assert.equal(closed.text,'Stängde lång BTC (manuell) till '+fx(closed.trade.exit,1)+' · '+pnl(closed.trade.pnl));
+  assert.equal(fx(closed.trade.exit,1),fx(123456.7*(1-SLIP),1));
+  // SOL's target at 120,8 reads 120,80 (a tick of 0,01 $), as the chart's tag writes it.
+  const sol=await r.order({symbol:'SOL',side:'long',margin:10,leverage:10});
+  assert.equal(sol.ok,true,sol.text);h.rt.at+=5*SEC;await r.tick();
+  assert.equal((await r.setLevels(sol.position.id,{tp:120.8})).text,'Nya nivåer för lång SOL: ingen SL, TP 120,80');
+  // PEPE: nine decimals per token, in the order's answer and in Stäng's.
+  const pepe=await r.order({symbol:'PEPE',side:'short',margin:10,leverage:10});
+  assert.equal(pepe.ok,true,pepe.text);
+  assert.match(pepe.text,new RegExp('^Sålde [\\d\\s]+ PEPE till '+fx(.0000043512*(1-SLIP),9)+' · 10× · '));
+  h.rt.at+=5*SEC;await r.tick();
+  const out=await r.closePosition(pepe.position.id);
+  assert.equal(out.text,'Stängde kort PEPE (manuell) till '+fx(out.trade.exit,9)+' · '+pnl(out.trade.pnl));
+});
+
+test('auto-trading switched off in another tab while a candle is decided: the held signal position is not closed on the signal and nothing opens',async()=>{
+  for(const flip of [true,false]){
+    const t0=flip?after(S1.i-3):after(L1.i-1),decided=flip?after(S1.i):after(L1.i),h=harness({time:t0});
+    if(flip){
+      const barTime=m.bar(S1.i-3).t,quote=await quoteAt(h.rt,'BTC');
+      const signal={id:`s|u1|BTC|1h|${barTime}|${MODEL.signal}`,symbol:'BTC',tf:'1h',side:'long',entry:quote.price,sl:quote.price*.9,tp:quote.price*1.2,barTime,confirmedAt:barTime+HOUR};
+      const acc=openPosition(newForecastAccount(t0-HOUR,{symbols:['BTC'],leverage:10}),{signal,symbol:'BTC',quote,contract:limitsFor('BTC',t0),now:t0,tfMs:HOUR,dataReliable:true}).account;
+      h.storage.setItem(accountKey('u1'),JSON.stringify(markProcessed(acc,'BTC',barTime)));
+    }else h.storage.setItem(accountKey('u1'),JSON.stringify(newForecastAccount(t0-HOUR,{symbols:['BTC'],leverage:10})));
+    // The other tab switches auto-trading off while this one reads the hourly candles.
+    const other=h.tab(),good=fakeBybit(h.rt);let off=null;
+    const r=h.tab({grab:async(u,o)=>{const res=await good(u,o);if(u.includes('interval=60')&&h.rt.at>=decided){off??=other.setAuto(false);await off;}return res;}});
+    if(!flip)await r.tick();
+    h.rt.at=decided;
+    const st=await r.tick(),a=saved(h.storage);
+    assert.deepEqual([a.settings.auto,a.positions.map(p=>[p.side,p.origin]),a.trades],[false,flip?[['long','signal']]:[],[]],String(flip));
+    assert.deepEqual([st.last.side,st.last.opened,st.last.closed,st.last.reason],[flip?'short':'long',null,null,'Auto-handel av — signalen handlas inte'],String(flip));
+  }
+});
+
+test('auto-trading on: manual positions take no signal slot, so a fresh signal opens while they fill max open positions',async()=>{
+  const h=harness({time:after(L1.i-1),settings:{symbols:['BTC'],leverage:10,maxOpen:1}}),r=h.runner;
+  await r.tick();
+  assert.equal((await r.order({symbol:'ETH',side:'short',margin:10,leverage:10})).ok,true);
+  h.rt.at=after(L1.i);
+  const st=await r.tick(),a=saved(h.storage);
+  assert.deepEqual(a.positions.map(p=>[p.symbol,p.origin]),[['ETH','manual'],['BTC','signal']]);
+  assert.deepEqual([st.state,st.waiting],['trading',{}]);assert.match(st.text,/^Handlar · 1 av 1 positioner · 1 manuell · nästa beslut /);
+  // Bybit's limits pass their 10 minutes between loading and the decision: the signal waits for new ones, unrefused, as it
+  // does with free slots.
+  const c=harness({time:after(L1.i-1),settings:{symbols:['BTC'],leverage:10,maxOpen:1}});
+  let loads=0;
+  const aging={get:()=>null,async load(s){if(s!=='BTC')return limitsFor(s,c.rt.at);loads++;return limitsFor(s,loads===1?c.rt.at-LIMIT_TTL+SEC:c.rt.at);}};
+  const ticking=fakeBybit(c.rt),late=c.tab({contracts:aging,grab:async(u,o)=>{const res=await ticking(u,o);if(loads===1&&u.includes('/tickers')&&u.includes('BTCUSDT'))c.rt.at+=2*SEC;return res;}});
+  await late.tick();
+  assert.equal((await late.order({symbol:'ETH',side:'short',margin:10,leverage:10})).ok,true);
+  c.rt.at=after(L1.i);
+  const waits=await late.tick();
+  assert.deepEqual([saved(c.storage).positions.map(p=>p.symbol),saved(c.storage).log.filter(e=>e.kind==='avvisad'),waits.waiting],[['ETH'],[],{BTC:'Bybits hävstångsgräns saknas för BTC'}]);
+  c.rt.at+=RUNNER.retry;await late.tick();
+  assert.deepEqual([saved(c.storage).positions.map(p=>[p.symbol,p.origin]),loads],[[['ETH','manual'],['BTC','signal']],2]);
+});
+
+test('a failing price read for the watched coin that is not held is no protection problem: the preview says the price is missing',async()=>{
+  const h=harness({time:after(Q)}),r=h.runner;
+  await r.tick();
+  assert.equal((await r.order({symbol:'BTC',side:'long',margin:20,leverage:10})).ok,true);
+  r.watch('ETH');
+  h.rt.fail=u=>u.pathname.endsWith('/tickers')&&u.searchParams.get('symbol')==='ETHUSDT'?'Nätverksfel':null;
+  h.rt.at+=20*SEC;
+  const st=await r.tick();
+  assert.deepEqual([st.state,st.protection,st.text],['manual','','Manuell handel · 1 öppen position']);
+  assert.equal(r.quoteOrder({symbol:'ETH',side:'long',margin:10,leverage:10}).reasons[0],'Färskt pris saknas för ETH');
+  // The held coin's failing price read is one.
+  h.rt.fail=u=>u.pathname.endsWith('/tickers')&&u.searchParams.get('symbol')==='BTCUSDT'?'Nätverksfel':null;h.rt.at+=5*SEC;
+  assert.match((await r.tick()).protection,/^pris för BTC: Nätverksfel/);
+});
+
+test('an opposite signal does not close a signal position at market while a long absence is still being settled, and does once it is',async()=>{
+  // A market with 152 quiet days before its legs. A long signal position opened on day 1, whose holding time has not run
+  // out by the short signal on day 162 (a stored position may say so), and the page closed all that time.
+  const M=scriptMarket({start:START-152*DAY,quiet:152*24}),[S]=M.shorts,i0=24,t0=M.closeOf(i0)+2*SEC;
+  const h=harness({time:t0,runtime:{market:M}}),quote=await quoteAt(h.rt,'BTC'),barTime=M.bar(i0).t;
+  const signal={id:`s|u1|BTC|1h|${barTime}|${MODEL.signal}`,symbol:'BTC',tf:'1h',side:'long',entry:quote.price,sl:quote.price*.5,tp:quote.price*10,barTime,confirmedAt:barTime+HOUR};
+  const opened=openPosition(newForecastAccount(t0-HOUR,{symbols:['BTC'],leverage:10,positionPct:.2,riskPct:1}),{signal,symbol:'BTC',quote,contract:limitsFor('BTC',t0),now:t0,tfMs:HOUR,dataReliable:true});
+  const stored=markProcessed(opened.account,'BTC',M.bar(S.i-1).t);stored.positions[0].deadline=M.closeOf(S.i)+30*DAY;
+  h.storage.setItem(accountKey('u1'),JSON.stringify(validateForecastAccount(stored)));
+  // The first tick settles one window of the absence; the signal finds the next one unsettled and waits.
+  h.rt.at=M.closeOf(S.i)+2*SEC;
+  let st=await h.runner.tick(),a=saved(h.storage);
+  assert.deepEqual([a.trades,a.positions.length,st.waiting],[[],1,{BTC:'historiken för BTC läses ikapp efter en lång frånvaro'}]);
+  // Caught up a few ticks later, the signal closes it at market, with the funding of all 161 days paid.
+  for(let k=0;k<12&&!saved(h.storage).trades.length;k++){h.rt.at+=5*SEC;st=await h.runner.tick();}
+  a=saved(h.storage);
+  const t=a.trades[0],p=opened.position;
+  assert.deepEqual([t.reason,t.closedAt],['signal',h.rt.at]);
+  let due=0;for(let f=Math.ceil(p.openedAt/FUND)*FUND;f<=t.closedAt;f+=FUND)due+=p.units*M.sub((f-M.start)/STEP).o*SCALE.BTC*FUNDING_RATE;
+  near(t.funding,due);assert.ok(due>0);
+});
+
+test('a change of levels whose Bybit limits age past their 10 minutes on the way reads them again instead of refusing the level',async()=>{
+  const h=harness({time:after(Q)});let loads=0,jumps=0;
+  // The shared cache hands out limits read 7 1/2 minutes earlier the first time, fresh ones after.
+  const aging={get:()=>null,async load(s){loads++;return limitsFor(s,loads===1?h.rt.at-7.5*MIN:h.rt.at);}};
+  const good=fakeBybit(h.rt),r=h.tab({contracts:aging,grab:async(u,o)=>{const res=await good(u,o);if(jumps&&u.includes('/funding/history')){jumps--;h.rt.at+=100*SEC;}return res;}});
+  await r.tick();
+  h.rt.at=Math.floor(h.rt.at/STEP)*STEP+STEP+3*MIN+55*SEC;
+  const o=await r.order({symbol:'BTC',side:'long',margin:20,leverage:10});
+  assert.deepEqual([o.ok,loads],[true,1],o.text);
+  // Five seconds later the stop is set. Its history read takes 100 s and a 5-minute step begins meanwhile, so it is read
+  // again, another 100 s: at the write the limits are almost 11 minutes old.
+  h.rt.at+=5*SEC;jumps=2;h.rt.urls=[];
+  const sl=Math.round(o.position.entry*.99),lv=await r.setLevels(o.position.id,{sl});
+  assert.deepEqual([lv.ok,lv.position?.sl,loads],[true,sl,2],lv.text);
+  assert.equal(h.rt.urls.filter(u=>u.pathname.endsWith('/mark-price-kline')&&u.searchParams.get('interval')==='5').length,3);
+});
+
+test('after a change of levels a mark minute Bybit has not published yet is waited for quietly, like any newest minute',async()=>{
+  const h=await manualLong(),{p}=h;
+  // In a later step the stop moves up at 1:50; at 2:05 Bybit's 1:00 minute is late and the 2:00 minute is not out yet.
+  const S=Math.floor(h.rt.at/STEP)*STEP+STEP;h.rt.at=S+MIN+50*SEC;
+  await h.runner.tick();
+  const lv=await h.runner.setLevels(p.id,{sl:Math.round(p.sl*1.002)});
+  assert.equal(lv.ok,true,lv.text);
+  h.rt.holes=new Set([`BTC:1:${S+MIN}`,`BTC:1:${S+2*MIN}`]);h.rt.at=S+2*MIN+5*SEC;
+  let st=await h.runner.tick();
+  assert.deepEqual([st.state,st.protection,saved(h.storage).positions[0].fundingThrough],['manual','',lv.position.fundingThrough]);
+  h.rt.holes=null;h.rt.at+=5*SEC;st=await h.runner.tick();
+  assert.deepEqual([st.state,st.protection,saved(h.storage).positions[0].fundingThrough],['manual','',h.rt.at]);
 });
