@@ -61,17 +61,17 @@ test('trading floor suppresses signal popups and sound without replaying them on
 });
 
 test('authentication swaps landing/panel, resumes once, and invalidates pending work on logout',()=>{
-  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0,floors=0,forecasts=0;
+  const nodes=new Map(),classes=new Set();let refreshes=0,routes=0,floors=0,forecasts=0,hubs=0,multiviews=0;
   const auth={anvandare:null},state={modeVersion:5,refreshPending:true};
   const ctx=context(['authRitaOm'],{
     AUTH:auth,STATE:state,document:{body:{classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key)}}},
     $:key=>{if(!nodes.has(key))nodes.set(key,{...element(),style:{}});return nodes.get(key);},
-    summaryRoute:()=>routes++,floorRoute:()=>floors++,forecastRoute:()=>forecasts++,renderDemo:noop,refresh:()=>refreshes++
+    summaryRoute:()=>routes++,floorRoute:()=>floors++,forecastRoute:()=>forecasts++,hubRoute:()=>hubs++,multiviewRoute:()=>multiviews++,renderDemo:noop,refresh:()=>refreshes++
   });
   ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,false);assert.equal(refreshes,0);
   auth.anvandare={email:'member@example.com'};ctx.authRitaOm();assert.ok(!classes.has('landing'));assert.equal(nodes.get('#landingPage').hidden,true);assert.equal(refreshes,1);
   ctx.authRitaOm();assert.equal(refreshes,1);
-  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);assert.equal(floors,4);assert.equal(forecasts,4);
+  auth.anvandare=null;ctx.authRitaOm();assert.ok(classes.has('landing'));assert.equal(state.modeVersion,6);assert.equal(state.refreshPending,false);assert.equal(routes,4);assert.equal(floors,4);assert.equal(forecasts,4);assert.equal(hubs,4);assert.equal(multiviews,4);
 });
 
 test('AI Forecast suppresses signal popups and sound like the trading floor, and has its own account tab',()=>{
@@ -93,6 +93,47 @@ test('AI Forecast suppresses signal popups and sound like the trading floor, and
   assert.deepEqual(buttons.map(b=>[b.classList.on,b.attrs['aria-pressed']]),views.map(v=>[v==='forecast',String(v==='forecast')]));
   tabs.setCryptoAccountView('okänd');
   assert.deepEqual(views.filter(v=>!panels[v].hidden),['standard']);
+});
+
+test('the start page shows once per tab after login, on #hub, and never in an extra window',()=>{
+  const nodes=new Map(),classes=new Set(),store=new Map();
+  const auth={anvandare:{email:'member@example.com'}},location={hash:'',search:''};
+  const ctx=context(['hubDone','hubRoute'],{
+    AUTH:auth,location,HUB_DONE:'done',window:{},
+    windowNumber:()=>Number(new URLSearchParams(location.search).get('w'))||1,
+    sessionStorage:{getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v)},
+    document:{body:{classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key),contains:key=>classes.has(key)}}},
+    $:key=>{if(!nodes.has(key))nodes.set(key,{...element(),focus:noop});return nodes.get(key);}
+  });
+  ctx.hubRoute();assert.ok(classes.has('hub'));assert.equal(nodes.get('#hubPage').hidden,false);assert.equal(nodes.get('#hubEmail').textContent,'member@example.com');
+  ctx.hubDone(true);ctx.hubRoute();assert.ok(!classes.has('hub'),'Forecast chosen: the dashboard shows');
+  location.hash='#hub';ctx.hubRoute();assert.ok(classes.has('hub'),'the Hem button brings it back');
+  location.hash='#multiview';ctx.hubRoute();assert.ok(!classes.has('hub'));
+  store.clear();location.hash='';location.search='?w=2';ctx.hubRoute();assert.ok(!classes.has('hub'),'an extra window skips it');
+  auth.anvandare=null;location.hash='#hub';location.search='';ctx.hubRoute();assert.ok(!classes.has('hub'),'logged out: the landing page instead');
+});
+
+test('AI Forecast moves into Multiview when its panel is on and back to its own place otherwise',()=>{
+  const classes=new Set(),location={hash:'#multiview'};
+  const body={children:[]};
+  const place=(el,parent)=>{if(el.parentNode)el.parentNode.children.splice(el.parentNode.children.indexOf(el),1);el.parentNode=parent;parent.children.push(el);};
+  const floor={id:'floor'},view={id:'forecast',hidden:true,parentNode:null};
+  const slot={children:[],appendChild:el=>place(el,slot)};
+  floor.after=el=>place(el,body);
+  Object.defineProperty(view,'previousElementSibling',{get:()=>view.parentNode===body?floor:null});
+  let shown=0,hidden=0,mode='nq',panel=true;
+  const ctx=context(['forecastShown','forecastRoute'],{
+    AUTH:{anvandare:{uid:'u'}},location,STATE:{get lage(){return mode;}},tillLage:m=>{mode=m;},forecastMount:noop,
+    forecastView:{show:()=>shown++,hide:()=>hidden++},multiView:{shows:k=>k==='forecast'&&panel},
+    document:{body:{classList:{toggle:(key,on)=>on?classes.add(key):classes.delete(key)}}},
+    $:key=>({'#aiForecast':view,'#tradingFloor':floor,'#multiview [data-mv-slot="forecast"]':slot,'#forecastTitle':{focus:noop}})[key]
+  });
+  ctx.forecastRoute();
+  assert.equal(view.parentNode,slot);assert.equal(view.hidden,false);assert.equal(shown,1);assert.equal(mode,'krypto');assert.ok(!classes.has('forecast'),'Multiview keeps its own layout');
+  panel=false;ctx.forecastRoute();assert.equal(view.parentNode,body);assert.equal(view.hidden,true);assert.equal(hidden,1);
+  location.hash='#forecast';ctx.forecastRoute();assert.equal(view.parentNode,body);assert.equal(view.hidden,false);assert.ok(classes.has('forecast'));
+  location.hash='';ctx.forecastRoute();assert.equal(view.hidden,true);
+  context(['visaAktivering'],{location:{hash:'#multiview'}}).visaAktivering({});
 });
 
 test('login always signs into an existing account even if a legacy signup mode is supplied',async()=>{

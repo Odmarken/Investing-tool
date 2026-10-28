@@ -18,8 +18,8 @@
 import { createServer } from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { extname, join, normalize, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import worker from './worker.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -160,7 +160,7 @@ async function serveInit(req, res){
   }
 }
 
-const server = createServer((req, res) => {
+function handler(req, res){
   const path = new URL(req.url, 'http://x').pathname;
   const p = path === '/feed' ? '/' : path.startsWith('/feed/') ? path.slice(5) : null;
   const job = path === '/proxy' ? serveProxy(req, res)
@@ -168,7 +168,7 @@ const server = createServer((req, res) => {
             : p !== null ? serveWorker(req, res, p)
             : serveStatic(req, res);
   job.catch(e => { if(!res.headersSent) res.writeHead(500, {'content-type':'text/plain; charset=utf-8'}); res.end('500 — ' + e.message); });
-});
+}
 
 /* ---------- demoflöde: låtsas-TradingView så hela kedjan går att prova ---------- */
 const DEMO = { NQ: { px: 23150, vol: 0.0022 }, GC: { px: 3385, vol: 0.0016 } };
@@ -217,19 +217,39 @@ async function lokalCron(){
   }catch(e){ console.log('  demokonto: fel — ' + (e && e.message)); }
 }
 
-server.listen(PORT, HOST, async () => {
-  console.log(`\nRiptide kör:     http://localhost:${PORT}/`);
-  console.log(`Lokal proxy:     http://localhost:${PORT}/proxy?url=…   (sidan använder den av sig själv)`);
-  console.log(`Lokal feed:      http://localhost:${PORT}/feed/status`);
-  console.log(`FEED_KEY:        ${FEED_KEY}${process.env.FEED_KEY ? '' : '  (standard — sätt FEED_KEY för eget värde)'}`);
-  if(DEMO_MODE){
-    console.log('');
-    console.log('  ⚠ DEMOFLÖDE: staplarna nedan är påhittade, inte marknadsdata.');
-    await seedDemo();
-    console.log('  Lägg in http://localhost:' + PORT + '/feed under ⚙ Inställningar för att se hela kedjan.');
-  }
-  console.log('Demokonto:       http://localhost:' + PORT + '/feed/konto   (räknas om var 5:e minut)');
-  console.log('Avsluta med Ctrl+C.\n');
-  lokalCron();
-  setInterval(lokalCron, 300000).unref?.();
-});
+/* Startar servern. Desktop-appen (electron/main.js) startar den utan cron och
+   utan utskrifter; körd direkt (npm start) gör den som förut. Löftet avvisas
+   med EADDRINUSE när porten redan är tagen. */
+export function startDevServer({ port = PORT, host = HOST, cron = true, quiet = false } = {}){
+  const server = createServer(handler);
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, async () => {
+      server.off('error', reject);
+      if(!quiet){
+        console.log(`\nRiptide kör:     http://localhost:${port}/`);
+        console.log(`Lokal proxy:     http://localhost:${port}/proxy?url=…   (sidan använder den av sig själv)`);
+        console.log(`Lokal feed:      http://localhost:${port}/feed/status`);
+        console.log(`FEED_KEY:        ${FEED_KEY}${process.env.FEED_KEY ? '' : '  (standard — sätt FEED_KEY för eget värde)'}`);
+      }
+      if(DEMO_MODE){
+        console.log('');
+        console.log('  ⚠ DEMOFLÖDE: staplarna nedan är påhittade, inte marknadsdata.');
+        await seedDemo();
+        console.log('  Lägg in http://localhost:' + port + '/feed under ⚙ Inställningar för att se hela kedjan.');
+      }
+      if(!quiet){
+        console.log('Demokonto:       http://localhost:' + port + '/feed/konto   (räknas om var 5:e minut)');
+        console.log('Avsluta med Ctrl+C.\n');
+      }
+      if(cron){
+        lokalCron();
+        setInterval(lokalCron, 300000).unref?.();
+      }
+      resolve(server);
+    });
+  });
+}
+
+const direkt = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href.toLowerCase() === import.meta.url.toLowerCase();
+if(direkt) startDevServer().catch(e => { console.error('Kunde inte starta: ' + e.message); process.exit(1); });

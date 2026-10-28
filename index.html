@@ -695,6 +695,8 @@ footer b{color:var(--muted)}
 <link rel="stylesheet" href="./forecast.css">
 <link rel="stylesheet" href="./forecast-terminal.css">
 <link rel="stylesheet" href="./landing.css">
+<link rel="stylesheet" href="./hub.css">
+<link rel="stylesheet" href="./multiview.css">
 </head>
 <body class="landing">
 
@@ -723,6 +725,30 @@ footer b{color:var(--muted)}
   </section>
   <div class="landing-footer"><span>RIPTIDE INVESTMENTS</span><button type="button" id="landingMotion" class="landing-motion" aria-pressed="false">Pause motion</button></div>
 </main>
+<main id="hubPage" hidden aria-labelledby="hubTitle">
+  <div class="landing-art" aria-hidden="true"><div class="landing-grid"></div><div class="landing-glow"></div><div class="landing-shade"></div></div>
+  <nav class="landing-nav" aria-label="Riptide"><div class="landing-brand"><span class="landing-mark">RI</span>RIPTIDE</div>
+    <span class="hub-user"><span id="hubEmail"></span><button type="button" id="hubLogout">Logga ut</button></span></nav>
+  <section class="hub-hero">
+    <div class="landing-eyebrow"><i></i>Välj vy</div>
+    <h1 id="hubTitle" tabindex="-1">Vart vill du <span>idag?</span></h1>
+    <div class="hub-cards">
+      <a class="hub-card" href="#" id="hubForecast">
+        <span class="hub-icon" aria-hidden="true">◭</span><span class="hub-arrow" aria-hidden="true">↗</span>
+        <b>Forecast</b>
+        <p>Allt du byggt: signalerna, AI Forecast, trading floor, summary och kontona.</p>
+        <ul><li>Signaler</li><li>AI Forecast</li><li>Trading floor</li><li>Summary</li></ul>
+      </a>
+      <a class="hub-card" href="#multiview" id="hubMultiview">
+        <span class="hub-icon" aria-hidden="true">⊞</span><span class="hub-arrow" aria-hidden="true">↗</span>
+        <b>Multiview</b>
+        <p>AI Forecast, kontot, nyheterna och Pablo scanning i samma fönster. Dubbelfönster när du har två skärmar.</p>
+        <ul><li>AI Forecast</li><li>Pablo scanning</li><li>Nyheter</li><li>⧉ Två fönster</li></ul>
+      </a>
+    </div>
+    <p class="hub-foot" id="hubFoot"></p>
+  </section>
+</main>
 
 <header class="topbar">
   <div class="tb-row">
@@ -740,6 +766,7 @@ footer b{color:var(--muted)}
       <div class="c"><b id="clkSe">--:--:--</b><i>Stockholm</i></div>
       <div class="c"><b id="clkNy">--:--:--</b><i>New York</i></div>
     </div>
+    <a class="btn" id="btnHub" href="#hub" aria-label="Till startsidan: Forecast eller Multiview">⌂ Hem</a>
     <button class="btn primary" id="btnRefresh">↻ Uppdatera</button>
     <a class="btn" id="btnSummary" href="#summary" aria-label="Öppna kryptokontots summary">◉ Summary</a>
     <a class="btn" id="btnFloor" href="#floor" aria-label="Öppna trading floor">▦ Trading floor</a>
@@ -753,6 +780,7 @@ footer b{color:var(--muted)}
 <main id="accountSummary" hidden aria-labelledby="summaryTitle"></main>
 <main id="tradingFloor" hidden aria-labelledby="floorTitle"></main>
 <main id="aiForecast" hidden aria-labelledby="forecastTitle"></main>
+<main id="multiview" hidden aria-labelledby="multiviewTitle"></main>
 
 <div class="banner warn" id="bnDemo">
   <span>⚠</span>
@@ -1076,6 +1104,10 @@ import { mountCryptoAI } from './crypto-ai-ui.js';
 import { mountMomentum } from './crypto-momentum-ui.js';
 import { mountFloor } from './trading-floor-ui.js';
 import { mountForecast } from './forecast-ui.js';
+import { mountMultiview, windowNumber } from './multiview.js';
+import { mountChat } from './claude-chat.js';
+import { connectSketch } from './claude-sketch.js';
+import { buildSources } from './news-crawler-core.js';
 import { createFloorCloud } from './trading-floor-cloud.js';
 import { CONTRACTS, createContractCache, maxLeverageFor, isolatedLevel } from './bybit-contracts.js';
 const bybitContracts = createContractCache((url,options) => grab(url,options));
@@ -1084,6 +1116,7 @@ let cryptoAI;
 let momentumDemo;
 let floorView = null;
 let forecastView = null;
+let multiView = null;
 const {
   clamp, last, nz, fmt, fmtSigned, pct, timeIn, nyParts, sessionState,
   ema, rsi, atr, dayKeyNY, minutesNY, sessionVWAP, swings, buildContext,
@@ -3290,8 +3323,10 @@ function authRitaOm(){
   document.body.classList.toggle('landing', !inne);
   $('#landingPage').hidden = inne;
   if(inne) $('#authModal').classList.remove('show');
+  hubRoute();
   summaryRoute();
   floorRoute();
+  multiviewRoute();
   forecastRoute();
   const knapp = $('#btnAuth');
   if(knapp){
@@ -3581,20 +3616,89 @@ function forecastMount(){
   forecastView = mountForecast($('#aiForecast'), {
     getUser: () => AUTH.anvandare?.uid || null,
     isActive: () => STATE.lage === 'krypto' && !!AUTH.anvandare,
-    isVisible: () => location.hash === '#forecast' && !!AUTH.anvandare,
+    isVisible: forecastShown,
     grab: (url,options) => grab(url,options),
-    contracts: bybitContracts
+    contracts: bybitContracts,
+    // Claude ritar vart marknaden kan gå (bara i desktop-appen).
+    sketch: connectSketch(),
+    // Pablo, chatten till höger i grafen: frågan går med grafens candles, signal, prognos och positioner.
+    // ✕ döljer den, ✦ Rita låter Claude rita i grafen.
+    mountAsk: (el, { context, close, draw }) => mountChat(el, { context, key: 'riptide.chart-chat.v1.w' + windowNumber(),
+      onClose: close, onDraw: draw,
+      title: 'Pablo', sub: 'om grafen', ctxLabel: 'Skicka med grafen',
+      hint: 'Fråga om grafen: trenden, nivåerna, signalen eller prognosen. Pablo får se candles, signal, prognos och dina positioner i paret när du skickar, och kan söka på webben.' })
   });
 }
+/* AI Forecast syns på #forecast, och i Multiview när den panelen är på. */
+function forecastShown(){
+  if(!AUTH.anvandare) return false;
+  return location.hash === '#forecast' || (location.hash === '#multiview' && !!multiView?.shows('forecast'));
+}
 function forecastRoute(){
-  const open = location.hash === '#forecast' && !!AUTH.anvandare;
-  document.body.classList.toggle('forecast', open);
-  $('#aiForecast').hidden = !open;
+  const own = location.hash === '#forecast' && !!AUTH.anvandare;
+  const open = forecastShown();
+  document.body.classList.toggle('forecast', own);
+  // I Multiview bor vyn i dess ruta; annars på sin vanliga plats.
+  const el = $('#aiForecast');
+  const slot = location.hash === '#multiview' && open ? $('#multiview [data-mv-slot="forecast"]') : null;
+  if(slot){ if(el.parentNode !== slot) slot.appendChild(el); }
+  else if(el.previousElementSibling !== $('#tradingFloor')) $('#tradingFloor').after(el);
+  el.hidden = !open;
   if(open){
     if(STATE.lage !== 'krypto') tillLage('krypto');
     forecastMount();
-    void forecastView.show(); $('#forecastTitle').focus();
+    void forecastView.show();
+    if(own) $('#forecastTitle').focus();
   }else forecastView?.hide();
+}
+
+/* Multiview på #multiview: AI Forecast, kontot, nyheterna och Pablo scanning (multiview.js). */
+function multiviewMount(){
+  if(multiView || !$('#multiview')) return;
+  multiView = mountMultiview($('#multiview'), {
+    getSources: () => buildSources({ krypto: CFG.feedsKrypto || KRYPTO_FEEDS, feeds: CFG.feeds, feedsSe: CFG.feedsSe }),
+    fetchFeed: async (url, source) => parseFeed(await grab(url, {timeout:12000, budget:20000}), source.name),
+    isVisible: () => location.hash === '#multiview' && !!AUTH.anvandare,
+    onLayout: forecastRoute,
+    // Konto-panelen läser AI Forecast-kontot ur vyns runner, som startas här om AI Forecast inte visats än.
+    forecastAccount: () => { forecastMount(); return forecastView?.accountSnapshot?.() ?? null; },
+    kryptoAccount: () => KRYPTO
+  });
+}
+function multiviewRoute(){
+  const open = location.hash === '#multiview' && !!AUTH.anvandare;
+  document.body.classList.toggle('multiview', open);
+  $('#multiview').hidden = !open;
+  if(open){
+    if(STATE.lage !== 'krypto') tillLage('krypto');
+    multiviewMount();
+    multiView.show();
+  }else multiView?.hide();
+}
+
+/* Startsidan efter inloggningen: Forecast (allt som fanns förut) eller Multiview.
+   Den visas på #hub, och en gång per flik när sidan öppnas utan adress.
+   Extra fönster (?w=2) går direkt till Multiview. */
+const HUB_DONE = 'riptide.hub.done';
+function hubDone(set){
+  try{
+    if(set) sessionStorage.setItem(HUB_DONE, '1');
+    return sessionStorage.getItem(HUB_DONE) === '1';
+  }catch(e){ return !!set; }
+}
+function hubRoute(){
+  const inne = !!AUTH.anvandare;
+  const open = inne && (location.hash === '#hub' || (!location.hash && windowNumber() === 1 && !hubDone()));
+  const was = document.body.classList.contains('hub');
+  document.body.classList.toggle('hub', open);
+  $('#hubPage').hidden = !open;
+  if(open){
+    $('#hubEmail').textContent = AUTH.anvandare.email || '';
+    $('#hubFoot').textContent = window.riptideDesktop
+      ? 'DESKTOP-APP · PABLO I GRAFEN GÅR VIA DIN CLAUDE CODE-INLOGGNING'
+      : 'WEBBLÄSARE · PABLO I GRAFEN FINNS I DESKTOP-APPEN (RIPTIDE.EXE)';
+    if(!was) $('#hubTitle').focus();
+  }
 }
 
 function krLadda(){
@@ -3897,7 +4001,7 @@ function spelaLjud(){
 }
 
 function visaAktivering(s){
-  if(location.hash === '#floor' || location.hash === '#forecast') return;
+  if(location.hash === '#floor' || location.hash === '#forecast' || location.hash === '#multiview') return;
   let box = $('#aktivRuta');
   if(!box){ box = document.createElement('div'); box.id = 'aktivRuta'; document.body.appendChild(box); }
   const d = INSTR[s.inst] ? INSTR[s.inst].dec : 2, st = kryptoStorlek(s);
@@ -3938,7 +4042,7 @@ function bevakaAktiveringar(){
   for(const x of aktiva){
     if(AKTIVA_SEDDA.has(x.id)) continue;
     AKTIVA_SEDDA.add(x.id);
-    if(location.hash === '#floor' || location.hash === '#forecast' || STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // inga signalrutor eller ljud på trading floor eller AI Forecast
+    if(location.hash === '#floor' || location.hash === '#forecast' || location.hash === '#multiview' || STATE.lage !== 'krypto' || grupp(INSTR[x.inst]) !== 'crypto') continue;   // inga signalrutor eller ljud på trading floor, AI Forecast eller Multiview
     visaAktivering(x);
     if(!larmat){ spelaLjud(); larmat = true; }
   }
@@ -4771,9 +4875,18 @@ function wire(){
     $('#landingMotion').setAttribute('aria-pressed', String(paused));
     $('#landingMotion').textContent = paused ? 'Resume motion' : 'Pause motion';
   };
+  window.addEventListener('hashchange', hubRoute);
   window.addEventListener('hashchange', summaryRoute);
   window.addEventListener('hashchange', floorRoute);
+  window.addEventListener('hashchange', multiviewRoute);   // före forecastRoute: Multiviews ruta ska finnas när vyn flyttas dit
   window.addEventListener('hashchange', forecastRoute);
+  $('#hubForecast').onclick = e => {
+    e.preventDefault();
+    hubDone(true);
+    if(location.hash) location.hash = ''; else hubRoute();
+  };
+  $('#hubMultiview').onclick = () => hubDone(true);
+  $('#hubLogout').onclick = () => $('#btnAuth').click();
   $('#cryptoSelective').onchange = e => {
     CFG.cryptoSelective = e.target.value === 'selective';
     saveCfg(); renderSignals(); renderKrypto();
@@ -4913,8 +5026,10 @@ window.RIPTIDE = {
 loadCfg();
 useLocalProxy();
 wire();
+hubRoute();
 summaryRoute();
 floorRoute();
+multiviewRoute();
 forecastRoute();
 liveLadda();
 demoLadda();

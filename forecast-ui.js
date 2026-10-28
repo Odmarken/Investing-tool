@@ -22,6 +22,7 @@ import {ACCOUNT,SETTING_LIMITS,accountStats,stepDecimals,levelDecimals} from './
 import {walkForwardSteps,DEV_END} from './forecast-backtest.js';
 import {createContractCache,roundPrice} from './bybit-contracts.js';
 import {mountTerminal,terminalFigures} from './forecast-terminal.js';
+import {sketchPrompt,createSketchReader} from './claude-sketch.js';
 
 const PREFS='riptide.forecast.ui.v1',HISTORY=2000,HORIZONS=Object.freeze([5,10,20]),BACKFILL=Object.freeze([20,10,5]);
 // The order ticket's choices per browser: the stake as typed, the leverage per coin and whether an order is confirmed
@@ -232,7 +233,8 @@ function skeleton(){
     <label class="fc-field fc-symbol"><span>Par</span><select data-fc-symbol>${SYMBOLS.map(s=>`<option value="${s}">${s}</option>`).join('')}</select></label>
     <div class="fc-group fc-tf"><span class="fc-cap" id="fcTfCap">Tidsram</span><div class="fc-seg" role="group" aria-labelledby="fcTfCap">${CHART_TFS.map(k=>`<button type="button" data-fc-tf="${k}" aria-pressed="false">${TF[k].label}</button>`).join('')}</div></div>
     <div class="fc-group fc-horizon"><span class="fc-cap" id="fcHCap">Prognos</span><div class="fc-seg" role="group" aria-labelledby="fcHCap">${HORIZONS.map(h=>`<button type="button" data-fc-horizon="${h}" aria-pressed="false" aria-label="${h} candles">${h}</button>`).join('')}</div></div>
-    <div class="fc-seg fc-toggles" role="group" aria-label="Visa i grafen"><button type="button" data-fc-toggle="band" aria-pressed="true">Band</button><button type="button" data-fc-toggle="signals" aria-pressed="true">Signaler</button><button type="button" data-fc-toggle="levels" aria-pressed="true">Nivåer</button></div>
+    <div class="fc-seg fc-toggles" role="group" aria-label="Visa i grafen"><button type="button" data-fc-toggle="forecast" aria-pressed="true" title="AI Forecasts prognos-candles och band">Prognos</button><button type="button" data-fc-toggle="band" aria-pressed="true">Band</button><button type="button" data-fc-toggle="signals" aria-pressed="true">Signaler</button><button type="button" data-fc-toggle="levels" aria-pressed="true">Nivåer</button><button type="button" data-fc-toggle="ask" aria-pressed="true" aria-controls="fcAsk" title="Visa eller dölj Pablo" hidden>✦ Pablo</button></div>
+    <div class="fc-seg fc-sketch" data-fc-sketchbar hidden><button type="button" data-fc-sketch title="Pablo ritar vart marknaden kan gå">✦ Rita</button><button type="button" data-fc-sketch-clear aria-label="Ta bort Pablos ritning" title="Ta bort Pablos ritning" hidden>✕</button></div>
     <div class="fc-seg fc-zoom" role="group" aria-label="Zoom"><button type="button" data-fc-zoom="out" aria-label="Zooma ut" title="Zooma ut">−</button><button type="button" data-fc-zoom="in" aria-label="Zooma in" title="Zooma in">+</button><button type="button" data-fc-zoom="reset" aria-label="Återställ vyn" title="Återställ vyn (dubbelklick i grafen)">⌂</button></div>
   </div>
   <div class="fc-grid">
@@ -244,7 +246,7 @@ function skeleton(){
       <div class="fc-canvas-wrap" data-fc-canvas-wrap><canvas data-fc-canvas tabindex="0" role="img" aria-label="Candlestick-diagram"></canvas>
         <div class="fc-handle" data-fc-handle="sl" aria-hidden="true" hidden></div><div class="fc-handle" data-fc-handle="tp" aria-hidden="true" hidden></div>
         <div class="fc-tooltip" data-fc-tooltip hidden></div><p class="fc-chart-note" data-fc-chart-note hidden></p>
-        <p class="fc-level-msg" data-fc-level-msg role="status" aria-live="polite"></p></div>
+        <p class="fc-level-msg" data-fc-level-msg role="status" aria-live="polite"></p><aside class="fc-ask" id="fcAsk" data-fc-ask aria-label="Fråga Pablo om grafen" hidden></aside></div>
       <ul class="fc-legend" aria-label="Teckenförklaring">${swatch('body',C.up,'Stigande')}${swatch('body',C.down,'Fallande')}${swatch('body',C.fcFill,'Prognos (scenario)')}${swatch('band',C.band50,'50\xa0%/80\xa0%-band (spridning)')}${swatch('dash',C.median,'Median')}${swatch('outline',C.fcOutline,'Jämförd prognos (kontur)')}
         <li><span class="fc-tri" style="--c:${C.up}" aria-hidden="true">▲</span>Köp <span class="fc-tri" style="--c:${C.down}" aria-hidden="true">▼</span>Sälj</li>
         <li><i class="fc-sw line" style="--c:${C.entry}" aria-hidden="true"></i>Entry <i class="fc-sw dash" style="--c:${C.sl}" aria-hidden="true"></i>SL <i class="fc-sw dash" style="--c:${C.tp}" aria-hidden="true"></i>TP <i class="fc-sw dot" style="--c:${C.liq}" aria-hidden="true"></i>Likv.</li></ul>
@@ -334,7 +336,7 @@ export function mountForecast(root,deps={}){
   const readPref=key=>{try{const v=JSON.parse(prefStore()?.getItem(key)??'null');return v&&typeof v==='object'&&!Array.isArray(v)?v:{};}catch{return {};}};
   const saved=readPref(PREFS);
   const view={symbol:SYMBOLS.includes(saved.symbol)?saved.symbol:'BTC',tf:CHART_TFS.includes(saved.tf)?saved.tf:'1h',
-    horizon:HORIZONS.includes(saved.horizon)?saved.horizon:10,band:saved.band!==false,signals:saved.signals!==false,levels:saved.levels!==false};
+    horizon:HORIZONS.includes(saved.horizon)?saved.horizon:10,forecast:saved.forecast!==false,band:saved.band!==false,signals:saved.signals!==false,levels:saved.levels!==false,ask:saved.ask!==false};
   const savePrefs=()=>{try{prefStore()?.setItem(PREFS,JSON.stringify(view));}catch{/* the choices are optional */}};
   // The ticket's own choices: the stake as typed, a leverage per coin, and whether an order is confirmed first (on by default).
   const keptTicket=readPref(TICKET);
@@ -361,7 +363,7 @@ export function mountForecast(root,deps={}){
     shared:q('[data-fc-shared]'),sharedWide:q('[data-fc-shared-wide]'),sharedNarrow:q('[data-fc-shared-narrow]'),
     why:q('[data-fc-why]'),ticketMsg:q('[data-fc-ticket-msg]'),info:q('[data-fc-info]'),
     confirmBox:q('[data-fc-confirm]'),ticket:q('[data-fc-ticket]'),levelMsg:q('[data-fc-level-msg]'),terminal:q('[data-fc-terminal]'),
-    terminalAnnounce:q('[data-fc-terminal-announce]')};
+    terminalAnnounce:q('[data-fc-terminal-announce]'),ask:q('[data-fc-ask]')};
   el.stake.value=ticket.stake;el.confirmBox.checked=ticket.confirm;
 
   // polling: the chart read in flight ({at}); pass: the archive pass in flight ({my,user}); kept: the series
@@ -407,6 +409,18 @@ export function mountForecast(root,deps={}){
     terminal=mount(el.terminal,{runner,now,confirm,prefs:prefStorage,announce:text=>{el.terminalAnnounce.textContent=bind(text);}});
   }catch(e){terminal=null;el.terminal.textContent='Kontoterminalen kan inte visas här: '+reasonOf(e);}
   const updateTerminal=()=>{try{terminal?.update?.();}catch{/* the terminal shows its own problems */}};
+  // The chart chat on the chart's right (deps.mountAsk, given by the page): a question to Claude about the chart, with
+  // chartContext() as its material. Without it the toolbar has no Claude button. close hides it, draw asks for a sketch.
+  let ask=null;
+  if(typeof deps.mountAsk==='function')try{
+    ask=deps.mountAsk(el.ask,{context:chartContext,close:()=>{view.ask=false;savePrefs();render();},
+      draw:typeof deps.sketch==='function'?text=>drawSketch(text):null})??null;
+    q('[data-fc-toggle="ask"]').hidden=false;
+  }catch(e){ask=null;}
+  // Claude's sketch of the coming candles (deps.sketch(prompt,onDelta) → {done,cancel}, the desktop app's): {symbol,tf,
+  // candles,pending,job}, drawn in the chart as it streams in. Without deps.sketch the toolbar has no Rita button.
+  let sketch=null;
+  if(typeof deps.sketch==='function')q('[data-fc-sketchbar]').hidden=false;
 
   // Re-renders a region only when its HTML changed, and keeps keyboard focus on the same control.
   function patch(node,html){
@@ -752,6 +766,10 @@ export function mountForecast(root,deps={}){
     for(const b of root.querySelectorAll('[data-fc-tf]'))b.setAttribute('aria-pressed',String(b.getAttribute('data-fc-tf')===view.tf));
     for(const b of root.querySelectorAll('[data-fc-horizon]'))b.setAttribute('aria-pressed',String(+b.getAttribute('data-fc-horizon')===view.horizon));
     for(const b of root.querySelectorAll('[data-fc-toggle]'))b.setAttribute('aria-pressed',String(!!view[b.getAttribute('data-fc-toggle')]));
+    if(ask){const open=view.ask;el.ask.hidden=!open;el.wrap.classList.toggle('fc-asking',open);if(open)ask.show?.();}
+    const draw=q('[data-fc-sketch]');
+    if(draw){const busy=!!sketch?.pending;draw.textContent=busy?'Ritar… stoppa':'✦ Rita';draw.setAttribute('aria-pressed',String(busy));
+      q('[data-fc-sketch-clear]').hidden=!sketch||busy;}
     // Newest first: the versions kept in memory (the compared one always among them), then older ones on request.
     const t=now(),latest=forecasts.at(-1),cmp=compareRecord(),list=[...forecasts].reverse();
     patch(el.compare,list.length?list.map(r=>`<option value="${esc(r.id)}"${r===cmp?' selected':''}>${esc(versionText(r,t)+(r===latest?' · senaste':''))}</option>`).join('')+
@@ -786,14 +804,16 @@ export function mountForecast(root,deps={}){
       l.kind==='sl'||l.kind==='tp'?{...l,text:l.label+' '+fixed(l.price,levelDecimals(l.price,tick))}:l;
     const levels=chartLevels({symbol:s.symbol,tf:s.tf,positions,signals,bars:st.bars}).filter(l=>!same(l)).map(exact);
     // The version kept from when the chart opened is drawn only where its outcome is known; one the user picked also ahead.
-    chart.setData({symbol:s.symbol,tf:s.tf,dec:decimals(),tick,bars:st.bars,forming:st.forming,latest,compare:compareRecord(),
+    chart.setData({symbol:s.symbol,tf:s.tf,dec:decimals(),tick,bars:st.bars,forming:st.forming,
+      // Prognos off hides AI Forecast's candles, band and compared version; Claude's sketch is its own.
+      latest:view.forecast?latest:null,compare:view.forecast?compareRecord():null,claude:sketch,
       compareAhead:!!byId(choice),horizon:view.horizon,signals,levels,picked:pick,edit,
       showBand:view.band,showSignals:view.signals,showLevels:view.levels,
       status:{reliable:status.reliable,text:status.reliable?status.text:chartStatus().text,state:status.state},
       // 'Data t.o.m.' as the version list and the Prognos card write it: with the date and year when not today's.
       dataEnd:latest?dataEnd(latest,now()):null,
       // Without any version the chart says why there is none (too short a history, a gap), as the Prognos card does.
-      note:forecasts.length?null:forecastNote||null});
+      note:!view.forecast||forecasts.length?null:forecastNote||null});
   }
   function paintSignal(){
     const s=series;if(!s){patch(el.signal,'');return;}
@@ -1325,6 +1345,41 @@ export function mountForecast(root,deps={}){
     if(coin){fillLeverage();if(!ordering)ticketMsg('',false);levelMsg('',false);if(visible)watch(symbol);}
     if(visible)void load();
   }
+  // Asks Claude for the coming candles (as many as the forecast length) and draws them as they arrive. question: what the
+  // user wrote in the chart chat, if anything; the question and Claude's reason are written there. A second press while
+  // Claude draws stops it.
+  function drawSketch(question){
+    if(typeof deps.sketch!=='function')return;
+    if(sketch?.pending){sketch.job?.cancel();return;}
+    const s=series,last=lastCandle();
+    if(!s||!last){levelMsg('Pablo kan rita när grafen har candles.',true);return;}
+    const T=TF[s.tf],n=view.horizon,dec=decimals(),start=last.t+T.ms,base=last.c;
+    const reader=createSketchReader({base,start,tfMs:T.ms,n});
+    const prompt=sketchPrompt({context:chartContext()?.text??'',n,symbol:s.symbol,tf:T.label,price:+base.toFixed(dec),question,
+      from:new Date(start).toISOString().slice(0,16).replace('T',' ')});
+    const mine={symbol:s.symbol,tf:s.tf,candles:reader.candles,pending:true,job:null};
+    sketch=mine;
+    ask?.post?.('user',question||`✦ Rita vart ${s.symbol} kan gå de ${n} kommande candlarna (${T.label})`);
+    let job;
+    try{job=deps.sketch(prompt,delta=>{if(sketch!==mine)return;const had=reader.candles.length;reader.feed(delta);if(reader.candles.length!==had)paintChart();});}
+    catch(e){sketch=null;levelMsg('Pablo kunde inte rita: '+reasonOf(e),true);render();return;}
+    mine.job=job;render();
+    Promise.resolve(job?.done).then(text=>{
+      if(sketch!==mine)return;
+      // A reply that came all at once (no stream) is read in full here.
+      if(!reader.candles.length&&text)reader.feed(text);
+      reader.end();
+      mine.pending=false;
+      if(!reader.candles.length){sketch=null;levelMsg('Pablo svarade utan candles att rita.',true);}
+      ask?.post?.('claude',reader.note||'Här är min gissning.',reader.candles.length?`ritade ${reader.candles.length} candles i grafen`:'');
+    },e=>{
+      if(sketch!==mine)return;
+      reader.end();mine.pending=false;
+      const msg=reasonOf(e);
+      if(!reader.candles.length)sketch=null;
+      if(!/avbruten/i.test(msg))levelMsg('Pablo kunde inte rita: '+msg,true);
+    }).finally(()=>{if(visible)render();});
+  }
   function zoom(mode){
     if(!chart)return;
     if(mode==='reset'){chart.resetView();return;}
@@ -1339,7 +1394,9 @@ export function mountForecast(root,deps={}){
     let b;
     if((b=hit('[data-fc-tf]'))){switchSeries(view.symbol,attr(b,'data-fc-tf'));render();}
     else if((b=hit('[data-fc-horizon]'))){const h=+attr(b,'data-fc-horizon');if(HORIZONS.includes(h)){view.horizon=h;savePrefs();render();}}
-    else if((b=hit('[data-fc-toggle]'))){const k=attr(b,'data-fc-toggle');if(['band','signals','levels'].includes(k)){view[k]=!view[k];savePrefs();render();}}
+    else if((b=hit('[data-fc-toggle]'))){const k=attr(b,'data-fc-toggle');if(['forecast','band','signals','levels','ask'].includes(k)){view[k]=!view[k];savePrefs();render();}}
+    else if(hit('[data-fc-sketch]'))drawSketch('');
+    else if(hit('[data-fc-sketch-clear]')){sketch?.job?.cancel();sketch=null;render();}
     else if((b=hit('[data-fc-zoom]')))zoom(attr(b,'data-fc-zoom'));
     else if((b=hit('[data-fc-chip]'))){choice=attr(b,'data-fc-chip');render();}
     else if((b=hit('[data-fc-sig]')))togglePick(attr(b,'data-fc-sig'));
@@ -1364,6 +1421,18 @@ export function mountForecast(root,deps={}){
     else{if(t===el.range)el.lev.value=String(t.value);rememberLeverage();}
     if(!ordering)ticketMsg('',false);
     paintTicket();
+  });
+  // Another window's coin, timeframe and chart choices (Multiview's Dubbelfönster shows the chart in one window and the
+  // ticket and the cards in the other): this view follows them, so both windows show the same coin. Saving the same
+  // choices back changes nothing, so no event returns.
+  listen(globalThis,'storage',e=>{
+    if(e.key!==PREFS||!e.newValue||e.storageArea!==prefStore())return;
+    let p;try{p=JSON.parse(e.newValue);}catch{return;}
+    if(!p||typeof p!=='object')return;
+    if(HORIZONS.includes(p.horizon))view.horizon=p.horizon;
+    for(const k of ['forecast','band','signals','levels'])if(typeof p[k]==='boolean')view[k]=p[k];
+    switchSeries(SYMBOLS.includes(p.symbol)?p.symbol:view.symbol,CHART_TFS.includes(p.tf)?p.tf:view.tf);
+    render();
   });
   listen(el.form,'submit',e=>{e.preventDefault?.();void saveSettings();});
   listen(el.form,'input',()=>{dirty=true;});
@@ -1403,6 +1472,41 @@ export function mountForecast(root,deps={}){
     for(const [target,type,fn] of listeners)target.removeEventListener?.(type,fn);
     listeners.length=0;summaryEl=null;
     clearTimeout(levelTimer);clearTimeout(flash);
+    sketch?.job?.cancel();sketch=null;
   }
-  return {show,hide,refreshLive,renderSummary,destroy};
+  // What the chart shows, as text for a question to Claude about it: the coin and timeframe, the data status, the latest
+  // closed candles and the forming one, the signal evaluation, the newest forecast and the account's positions in the coin.
+  // Times in UTC, prices with the chart's decimals.
+  function chartContext(){
+    const s=series;if(!s)return null;
+    const st=s.state(),T=TF[s.tf],bars=st.bars.slice(-60),dec=decimals(),t=now();
+    const p=x=>finite(x)?x.toFixed(dec):'–',time=x=>new Date(x).toISOString().slice(0,16).replace('T',' ');
+    const ohlc=b=>`${time(b.t)} ${p(b.o)} ${p(b.h)} ${p(b.l)} ${p(b.c)}${finite(b.v)?' '+Math.round(b.v):''}`;
+    const lines=[`AI Forecast-grafen: ${s.symbol}USDT perpetual på Bybit, tidsram ${T.label}, nu ${time(t)} UTC. Datastatus: ${chartStatus().text}.`];
+    if(bars.length)lines.push(`Senaste ${bars.length} stängda candles (start UTC, open high low close volym):`,...bars.map(ohlc));
+    if(st.forming)lines.push('Pågående candle: '+ohlc(st.forming));
+    const e=evaluation;
+    if(e){
+      lines.push(`Signalregeln af-signal-v1 på senaste stängda candle: ${e.side==='long'?'KÖP':e.side==='short'?'SÄLJ':'ingen signal'}, regim ${regimeName(e.regime)??e.regime}.`+
+        (e.side?` Entry ${p(e.entry)}, SL ${p(e.sl)}, TP ${p(e.tp)}.`:''));
+      if(Array.isArray(e.checks))lines.push('Villkor: '+e.checks.map(c=>`${c.label} ${c.ok?'✓':'–'}`).join(', ')+'.');
+      if(Array.isArray(e.explanation)&&e.explanation.length)lines.push('Förklaring: '+e.explanation.join(' · '));
+    }
+    const f=forecasts.at(-1)?.forecast;
+    if(f?.bands?.length){
+      const h=Math.min(view.horizon,f.bands.length),bands=f.bands.slice(0,h);
+      lines.push(`Senaste prognosen (${f.model}, data t.o.m. ${time(f.cutoff)} UTC, ${h} candles framåt; median och 10–90 %-band):`,
+        ...bands.map(b=>`${time(b.t)} median ${p(b.q50)} · ${p(b.q10)}–${p(b.q90)}`));
+    }
+    const open=(read(()=>runner.account())?.positions??[]).filter(x=>x.symbol===s.symbol);
+    lines.push(open.length?'Öppna demopositioner i '+s.symbol+': '+open.map(x=>`${x.side==='long'?'lång':'kort'} ${x.units} st från ${p(x.entry)}, `+
+      `${x.leverage}×, SL ${p(x.sl)}, TP ${p(x.tp)}, likvidation ${p(x.liq)}`).join('; ')+'.':'Inga öppna demopositioner i '+s.symbol+'.');
+    lines.push(bind(RESEARCH.forecast));
+    return {text:lines.join('\n'),label:`grafen ${s.symbol} ${T.label}`};
+  }
+  // The account as it stands, for read-only panels elsewhere (Multiview's Konto): status, the stored account and its live value.
+  function accountSnapshot(){
+    return {status:read(()=>runner.status()),account:read(()=>runner.account()),live:read(()=>runner.live())};
+  }
+  return {show,hide,refreshLive,renderSummary,accountSnapshot,chartContext,destroy};
 }

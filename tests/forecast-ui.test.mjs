@@ -613,7 +613,7 @@ test('the toolbar switches coin, timeframe, length and layers, and the choices a
   await until(()=>p.q('[data-fc-pair]').textContent==='ETH · USDT-perp · 4h'&&p.q('[data-fc-pill-text]').textContent==='Live','the ETH series');
   click(p.q('[data-fc-horizon="20"]'));click(p.q('[data-fc-toggle="band"]'));click(p.q('[data-fc-toggle="levels"]'));
   assert.equal(p.q('[data-fc-toggle="band"]').getAttribute('aria-pressed'),'false');
-  assert.deepEqual(JSON.parse(p.prefs.getItem('riptide.forecast.ui.v1')),{symbol:'ETH',tf:'4h',horizon:20,band:false,signals:true,levels:false});
+  assert.deepEqual(JSON.parse(p.prefs.getItem('riptide.forecast.ui.v1')),{symbol:'ETH',tf:'4h',horizon:20,forecast:true,band:false,signals:true,levels:false,ask:true});
   assert.equal(p.q('[data-fc-eval="pair"]').textContent,'Kör för ETH 4h');
   // A new tab in the same browser starts where this one left off.
   const again=page({time:after(1998),prefs:p.prefs});
@@ -628,6 +628,87 @@ test('the toolbar switches coin, timeframe, length and layers, and the choices a
   assert.equal(plain.q('[data-fc-symbol]').value,'BTC');assert.equal(plain.q('[data-fc-tf="1h"]').getAttribute('aria-pressed'),'false','painted on show');
   await plain.view.show();
   assert.equal(plain.q('[data-fc-tf="1h"]').getAttribute('aria-pressed'),'true');assert.equal(plain.q('[data-fc-horizon="10"]').getAttribute('aria-pressed'),'true');
+});
+
+test('the chart chat sits on the chart\'s right, folds from the toolbar and asks with what the chart shows',async()=>{
+  // Without the page's chat the toolbar has no Claude button.
+  const bare=page({time:after(1998)});
+  await bare.view.show();
+  assert.equal(bare.q('[data-fc-toggle="ask"]').hidden,true);assert.equal(bare.q('[data-fc-ask]').hidden,true);
+  const mounted=[];
+  const p=page({time:after(1998),extra:{mountAsk:(el,o)=>{mounted.push({el,o});return {show(){}};}}});
+  await p.view.show();
+  assert.equal(mounted.length,1);assert.equal(mounted[0].el,p.q('[data-fc-ask]'));
+  assert.equal(p.q('[data-fc-toggle="ask"]').hidden,false);assert.equal(p.q('[data-fc-ask]').hidden,false);
+  assert.ok(p.q('[data-fc-canvas-wrap]').classList.contains('fc-asking'));
+  click(p.q('[data-fc-toggle="ask"]'));
+  assert.equal(p.q('[data-fc-ask]').hidden,true);assert.ok(!p.q('[data-fc-canvas-wrap]').classList.contains('fc-asking'));
+  assert.equal(JSON.parse(p.prefs.getItem('riptide.forecast.ui.v1')).ask,false);
+  // The material: the coin and timeframe, the closed candles, the signal rule, the forecast and the positions in the coin.
+  const c=mounted[0].o.context();
+  assert.equal(c.label,'grafen BTC 1h');
+  assert.match(c.text,/^AI Forecast-grafen: BTCUSDT perpetual på Bybit, tidsram 1h/);
+  assert.match(c.text,/Senaste 60 stängda candles/);
+  assert.match(c.text,/Signalregeln af-signal-v1 på senaste stängda candle/);
+  assert.match(c.text,/Senaste prognosen .*10 candles framåt/);
+  assert.match(c.text,/Inga öppna demopositioner i BTC\./);
+  assert.equal(p.view.chartContext().label,'grafen BTC 1h');
+  // The chat's ✕ hides it like the toolbar button does.
+  click(p.q('[data-fc-toggle="ask"]'));assert.equal(p.q('[data-fc-ask]').hidden,false);
+  mounted[0].o.close();
+  assert.equal(p.q('[data-fc-ask]').hidden,true);assert.equal(p.q('[data-fc-toggle="ask"]').getAttribute('aria-pressed'),'false');
+  assert.equal(mounted[0].o.draw,null,'no Rita without the app');
+});
+
+test('Prognos hides AI Forecast\'s candles and band, and is kept per browser',async()=>{
+  const p=page({time:after(1998)});
+  await p.view.show();
+  p.draw();
+  assert.ok(p.ctx.calls.some(k=>k[0]==='fillRect'&&k[1]===CHART_COLORS.fcFill));
+  click(p.q('[data-fc-toggle="forecast"]'));
+  assert.equal(p.q('[data-fc-toggle="forecast"]').getAttribute('aria-pressed'),'false');
+  p.ctx.calls.length=0;p.draw();
+  assert.ok(!p.ctx.calls.some(k=>k[0]==='fillRect'&&k[1]===CHART_COLORS.fcFill),'no gray forecast candles');
+  assert.ok(!drawn(p.ctx).includes('Forecast — estimated scenario'));
+  assert.equal(JSON.parse(p.prefs.getItem('riptide.forecast.ui.v1')).forecast,false);
+  const again=page({time:after(1998),prefs:p.prefs});
+  await again.view.show();
+  assert.equal(again.q('[data-fc-toggle="forecast"]').getAttribute('aria-pressed'),'false');
+});
+
+test('✦ Rita asks Claude with the chart and draws its candles as they stream in; the chat gets the question and the reason',async()=>{
+  // Without the app's sketch the toolbar has no Rita button.
+  const bare=page({time:after(1998)});
+  assert.equal(bare.q('[data-fc-sketchbar]').hidden,true);
+  const calls=[],posts=[];
+  const sketch=(prompt,onDelta)=>{let resolve;const done=new Promise(r=>{resolve=r;});const job={prompt,onDelta,resolve,cancelled:false};calls.push(job);
+    return {done,cancel(){job.cancelled=true;}};};
+  const p=page({time:after(1998),extra:{sketch,mountAsk:()=>({show(){},post:(role,text,note)=>posts.push({role,text,note})})}});
+  await p.view.show();
+  assert.equal(p.q('[data-fc-sketchbar]').hidden,false);
+  click(p.q('[data-fc-sketch]'));
+  assert.equal(calls.length,1);
+  assert.match(calls[0].prompt,/AI Forecast-grafen: BTCUSDT/);assert.match(calls[0].prompt,/de 10 kommande candlarna för BTCUSDT på 1h/);
+  assert.equal(p.q('[data-fc-sketch]').textContent,'Ritar… stoppa');
+  assert.equal(posts[0].role,'user');
+  p.draw();assert.ok(drawn(p.ctx).includes('Pablo ritar…'));
+  const price=+(/från senaste priset ([\d.]+)/.exec(calls[0].prompt)[1]);
+  calls[0].onDelta('Svagt uppåt mot motståndet.\n'+price+' '+price*1.01+' '+price*.995+' '+price*1.005+'\n');
+  calls[0].onDelta(price*1.005+' '+price*1.01+' '+price*.99+' '+price*.998+'\n');
+  calls[0].resolve('');
+  await until(()=>p.q('[data-fc-sketch]').textContent==='✦ Rita','the sketch ends');
+  p.ctx.calls.length=0;p.draw();
+  assert.ok(drawn(p.ctx).includes('Pablo — gissning'));
+  assert.ok(p.ctx.calls.some(k=>k[0]==='fillRect'&&k[1]==='rgba(180,140,255,0.75)'),'a rising Claude candle');
+  assert.deepEqual(posts.at(-1),{role:'claude',text:'Svagt uppåt mot motståndet.',note:'ritade 2 candles i grafen'});
+  // ✕ takes the drawing away.
+  assert.equal(p.q('[data-fc-sketch-clear]').hidden,false);
+  click(p.q('[data-fc-sketch-clear]'));
+  p.ctx.calls.length=0;p.draw();
+  assert.ok(!drawn(p.ctx).includes('Pablo — gissning'));
+  // A second press while Claude draws stops it.
+  click(p.q('[data-fc-sketch]'));click(p.q('[data-fc-sketch]'));
+  assert.equal(calls[1].cancelled,true);
 });
 
 test('on 4h and daily candles the data end of every version carries its date',async()=>{
@@ -1383,7 +1464,7 @@ test('on a tablet the toggles and zoom share the second toolbar row, and the bre
   const tablet=/@media \(min-width:561px\) and \(max-width:900px\)\{([\s\S]*?)\n\}/.exec(css)?.[1]??'';
   // A zero-height, full-width break item after the pair, timeframe and length; the toggles and zoom come after it.
   assert.match(tablet,/\.fc-toolbar::after\{content:'';order:1;flex-basis:100%\}/);
-  assert.match(tablet,/\.fc-toggles,\.fc-zoom\{order:2\}/);assert.match(tablet,/\.fc-toggles\{margin-left:0\}/);
+  assert.match(tablet,/\.fc-toggles,\.fc-sketch,\.fc-zoom\{order:2\}/);assert.match(tablet,/\.fc-toggles\{margin-left:0\}/);
   assert.match(tablet,/\.fc-eyebrow\{display:none\}/);
   // Phones lay the toolbar out as a grid, where such an item would take a cell.
   const phone=/@media \(max-width:560px\)\{([\s\S]*?)\n\}/.exec(css)?.[1]??'';
@@ -1868,7 +1949,7 @@ test('with Bekräfta order off an order goes at once, and the ticket\'s choices 
   assert.equal(p.q('[data-fc-lev]').value,'25');
   assert.deepEqual(JSON.parse(prefs.getItem(TICKET_PREFS)),{stake:'12,5',confirm:false,lev:{BTC:25,ETH:5}});
   // The view's own choices are kept apart, as before.
-  assert.deepEqual(Object.keys(JSON.parse(prefs.getItem('riptide.forecast.ui.v1'))),['symbol','tf','horizon','band','signals','levels']);
+  assert.deepEqual(Object.keys(JSON.parse(prefs.getItem('riptide.forecast.ui.v1'))),['symbol','tf','horizon','forecast','band','signals','levels','ask']);
   // The next visit in this browser starts from them.
   const again=page({time:after(L1.i),prefs,storage:p.storage,store:p.store,locks:p.locks});
   assert.deepEqual([again.q('[data-fc-confirm]').checked,again.q('[data-fc-stake]').value,again.q('[data-fc-lev]').value],[false,'12,5','25']);

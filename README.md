@@ -23,6 +23,10 @@ för Yahoos fördröjda data.
 | `cloud-runner.js` | Molnkörningen av momentumkontot och borden: två oberoende planer per inloggning och minut, körs av `molnCron` i `functions/` |
 | `forecast-ui.js`, `forecast-chart.js`, `forecast.css` | AI Forecast: helskärmsvy med candlestick-graf, grå prognoscandles, signaler, orderruta för manuell handel, SL och TP som dras i grafen, kortet för auto-handeln och utvärdering, beskriven i [AI-FORECAST.md](AI-FORECAST.md) |
 | `forecast-terminal.js`, `forecast-terminal.css` | AI Forecasts kontoterminal under grafen: pengarna (kapital, tillgängligt, marginal i bruk, orealiserat resultat, resultat sedan start), Positioner med SL, TP och Stäng, Historik, Händelser och Saldo med insättningar och uttag; fälls ihop med − |
+| `multiview.js`, `multiview.css`, `hub.css` | Startsidan efter inloggningen och Multiview: AI Forecast, kontot, nyheterna och Pablo scanning i samma fönster, med dubbelfönster |
+| `news-crawler.js`, `crawler-advanced.js`, `orb-paint.js`, `news-crawler-core.js`, `news-desk.js`, `account-panel.js` | Multiviews paneler: Pablo scanning, nyheterna i detalj och kontots summary |
+| `claude-chat.js` | Pablo, chatten till höger i AI Forecast-grafen, via Claude Code |
+| `electron/` | Desktop-appen (Riptide.exe): startar den lokala servern, dubbelfönster och Claude-bryggan |
 | `forecast-config.js`, `forecast-model.js`, `forecast-market.js`, `forecast-store.js` | AI Forecasts signalregler (`af-signal-v1`) och analogprognos (`af-forecast-v1`), Bybit-candles stängda enligt Bybits klocka och oföränderliga, versionerade signaler och prognoser |
 | `forecast-account.js`, `forecast-runner.js`, `forecast-backtest.js` | AI Forecasts eget demokonto på 100 $: egna marknadsorder som Bybit fyller dem (isolerad marginal, Bybits steg, avgifter och likvidationsformel) och, med auto-handel på, signalerna med Bybits maxhävstång som standard; motorn som kör kontot i webbläsaren och walk-forward-testet. Resultaten finns i [research/ai-forecast-results.md](research/ai-forecast-results.md) |
 | `motor.js` | Signalmotorn: indikatorer, de fyra familjerna, ICT, gradering. Delas av sidan och workern |
@@ -137,6 +141,52 @@ adress får du de publika proxyerna, och de faller ofta bort: räkna med simuler
 
 Adressen sparas per webbläsare, så den ska in en gång på datorn och en gång på telefonen.
 Sedan visar båda samma konto, samma affärer och samma siffror.
+
+## Desktop-appen (Riptide.exe), startsidan och Multiview
+
+Efter inloggningen kommer man till en startsida med två val:
+
+- **Forecast** — allt som fanns förut: signalerna, AI Forecast, trading floor, summary och kontona.
+- **Multiview** (`#multiview`) — fem paneler som slås av och på var för sig, valet sparas per fönster:
+  **AI Forecast**, **Konto** (summary över AI Forecast-kontot: kapital live, resultat, positioner, saldokurva
+  och senaste avslut, plus en flik för kryptokontot), **Nyheter** (Pablo scannings rubriker i detalj: översikt per mynt,
+  sök, signalmotorns svenska förklaring och effekt på BTC, och "Fråga Claude om den här"), **Pablo scanning** och **Claude**.
+  **⧉ Dubbelfönster** öppnar ett fönster till; i desktop-appen hamnar det på den andra skärmen. Det öppnas från
+  det första fönstret så att inloggningen följer med, och börjar med Konto, Nyheter och Claude.
+
+⌂ Hem i toppraden tar dig tillbaka till startsidan.
+
+**Pablo scanning** (`news-crawler.js`, logiken i `news-crawler-core.js`, orben i `orb-paint.js`) åker med
+Pablos orb till varje nyhetsflöde i inställningarna — kryptoflödena, de internationella och de svenska — och
+hämtar RSS:en på riktigt. Listan visar mynt (BTC, ETH, SOL …), makroord och en ton (▲/▼) som är en
+enkel ordräkning, inte en modell. Ett nytt varv går fem minuter efter det förra.
+**Sidorna** (`crawler-advanced.js`, standard) visar sidan orben är på: en webbläsare med sidans text i klartext.
+Mellan sidorna åker orben upp till adressfältet och läser in nästa adress medan sidan glider över till nästa.
+På sidan läser den rubrikerna rad för rad med en stråle, låser strålar på de nya (inramade i grönt) och drar
+upp dem till Fångat; de den redan har ramas in i grått. 1×/2×/4× styr hur fort den läser. Slår du av Sidorna
+syns nätet med alla sidor runt en mitt. Valet sparas.
+**✦ Summera** (på som standard): för varje sida med nya rubriker skriver Pablo en kort summering, överst i
+Fångat och under **✦ Summeringar** i listan. I desktop-appen skriver Claude den (Opus 5.5, utan verktyg, en sida
+i taget medan orben åker vidare); i webbläsaren, eller om Claude inte svarar, blir det en lokal summering
+(antal, mynt, ton och senaste rubriken). Summeringar görs bara när panelen syns. Med Opus kostar varje
+summering av din Claude-kvot, så slå av ✦ Summera om den tar slut för fort.
+
+**Pablo** (`claude-chat.js`), chatten i AI Forecast-grafen, finns bara i desktop-appen. Den kör Claude Code
+(`claude.exe`, från VS Code-tillägget eller den fristående installationen) med din egen
+inloggning, så ingen API-nyckel behövs. Pablo kör alltid Opus 5.5, både i chatten och när han ritar,
+oavsett vilken modell Claude Code har i inställningarna. Claude får bara webbsökning, inga fil- eller
+kommandoverktyg. Sätt `RIPTIDE_CLAUDE` till sökvägen om claude.exe ligger någon annanstans.
+
+```bash
+npm install          # en gång: hämtar Electron och electron-builder
+npm run app          # kör appen direkt från koden
+npm run app:exe      # bygger dist/Riptide.exe (portabel, ingen installation)
+```
+
+Appen kör samma server som `npm start` inuti sig själv, på **localhost:8080** — Firebase-nyckeln
+är låst dit, så inloggningen fungerar bara på den porten. Kör `npm start` redan används den.
+Appen har en egen webbläsarprofil (`%APPDATA%\Riptide`), så AI Forecasts demokonto i appen är
+ett annat än det i Chrome. Filerna ligger i `electron/` (`main.js`, `preload.cjs`, `claude-bridge.js`).
 
 ## 1. Kör lokalt
 

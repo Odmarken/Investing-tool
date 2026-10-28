@@ -1,0 +1,29 @@
+/* Startsidan efter inloggningen (#hub): två val, Forecast (allt som fanns
+   förut) och Multiview. Samma bakgrund som inloggningssidan. */
+body.hub{background:#03090c}
+body.hub>:not(#hubPage):not(#authModal):not(script):not(link){display:none!important}
+#hubPage[hidden]{display:none}
+#hubPage{position:relative;isolation:isolate;min-height:100svh;overflow:hidden;background:#03090c;color:#eefaf6;font-family:var(--sans,Arial,sans-serif);display:flex;flex-direction:column}
+#hubPage .landing-art{background:radial-gradient(ellipse at 70% 40%,#10463744,transparent 52%),radial-gradient(ellipse at 10% 100%,#06344244,transparent 48%)}
+.hub-user{font:10px var(--mono,monospace);letter-spacing:1.5px;color:#7b9993;display:flex;align-items:center;gap:12px}
+.hub-user button{padding:6px 10px;border:1px solid #2f7562;border-radius:6px;background:none;color:#a8f5ce;font:inherit;letter-spacing:1px;cursor:pointer}
+.hub-hero{position:relative;z-index:2;flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;width:100%;max-width:1240px;margin:0 auto;padding:30px clamp(24px,6vw,100px) 70px}
+.hub-hero h1{margin:0 0 34px;font-size:clamp(36px,5vw,72px);font-weight:550;line-height:1.05;letter-spacing:-.05em;color:#f0faf5}
+.hub-hero h1 span{color:#83efc1;background:linear-gradient(105deg,#bbffdf,#43d6b1 65%,#56b5c7);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hub-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.hub-card{position:relative;display:flex;flex-direction:column;gap:12px;min-height:250px;padding:28px 28px 26px;border:1px solid #1d4a3c;border-radius:16px;
+  background:linear-gradient(160deg,#0b1d18ee,#060f0dee);color:#eefaf6;text-decoration:none;overflow:hidden;
+  box-shadow:0 10px 50px #00000055;transition:border-color .2s,transform .2s,box-shadow .2s}
+.hub-card:hover{border-color:#6ee9b2;transform:translateY(-3px);box-shadow:0 14px 60px #3cd79d22}
+.hub-card:focus-visible{outline:2px solid #daffec;outline-offset:4px}
+.hub-card::after{content:"";position:absolute;right:-60px;top:-60px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,#4af9b21a,transparent 65%)}
+.hub-icon{display:grid;place-items:center;width:48px;height:48px;border:1px solid #2f7562;border-radius:12px;font-size:22px;color:#71f7c4}
+.hub-card b{font-size:30px;font-weight:600;letter-spacing:-.03em}
+.hub-card p{margin:0;max-width:420px;font-size:14px;line-height:1.65;color:#8eaaa3}
+.hub-card ul{margin:auto 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px}
+.hub-card li{padding:3px 9px;border:1px solid #1d4a3c;border-radius:999px;font:10px var(--mono,monospace);letter-spacing:1px;color:#87c5b2;text-transform:uppercase}
+.hub-arrow{position:absolute;right:26px;top:24px;font-size:22px;color:#a8f5ce}
+.hub-foot{margin:22px 0 0;font:10px var(--mono,monospace);letter-spacing:1.2px;color:#55766b}
+@media(max-width:760px){.hub-cards{grid-template-columns:minmax(0,1fr)}.hub-card{min-height:200px}}
+@media(prefers-reduced-motion:reduce){#hubPage *{animation:none!important;transition:none!important}}
+#hubTitle:focus{outline:none}

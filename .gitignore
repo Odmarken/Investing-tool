@@ -15,3 +15,5 @@ functions/floor-trend*.js
 functions/crypto-*.js
 functions/bybit-contracts.js
 .matning/
+dist/
+build/

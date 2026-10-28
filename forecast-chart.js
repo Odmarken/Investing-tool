@@ -15,12 +15,12 @@ import {TF} from './forecast-config.js';
 export const CHART_COLORS=Object.freeze({surface:'#0b0f14',grid:'rgba(148,163,184,.08)',axisText:'#8b9bb0',text:'#e6edf3',
   up:'#14a7a0',down:'#e2483c',fcFill:'rgba(170,179,192,.6)',fcOutline:'rgba(186,195,208,.70)',
   band80:'rgba(156,166,180,.10)',band50:'rgba(156,166,180,.17)',median:'rgba(205,212,222,.75)',region:'rgba(120,130,145,.06)',
-  entry:'#9fb0c0',sl:'#e2483c',tp:'#14a7a0',liq:'#f0a020',crosshair:'rgba(220,228,238,.45)'});
+  entry:'#9fb0c0',sl:'#e2483c',tp:'#14a7a0',liq:'#f0a020',crosshair:'rgba(220,228,238,.45)',claude:'#b48cff'});
 // up/down/sl/tp were validated with the dataviz CVD validator on the dark surface (deutan ΔE 13.4).
 // A forecast candle is one translucent gray, body and wick, like a real candle's one colour: a brighter edge of its
 // own made the bodies read as light rims around a darker middle.
 const C=CHART_COLORS,MINUTE=60000,HOUR=3600000,DAY=86400000;
-const LABEL='Forecast — estimated scenario';
+const LABEL='Forecast — estimated scenario',CLAUDE_LABEL='Pablo — gissning',CLAUDE_BUSY='Pablo ritar…';
 // A no-break space, and a ' · ' separator that a wrapped line may break before but never after.
 const NB='\xa0',DOT=' ·'+NB;
 // A signal's explanation line laid out for wrapping (in the tooltip and the signal card): a label keeps its number
@@ -29,7 +29,7 @@ const NB='\xa0',DOT=' ·'+NB;
 export const keepNumbers=s=>String(s).trim().replace(/ (?=[−+-]?\d)/g,NB).replace(/ · /g,DOT);
 // AUTO_MIN, MIN_REAL: on a narrow plot the automatic slot width shrinks (not below AUTO_MIN px) until the forecast and
 // at least MIN_REAL closed candles fit.
-const BAR_PX=9,MIN_BAR=1.5,MAX_BAR=60,AXIS_H=26,INSET=30,PAD=.08,EASE_MS=250,TICK_PX=84,TAG_H=18,AUTO_MIN=5.5,MIN_REAL=30;
+const BAR_PX=9,MIN_BAR=1.5,MAX_BAR=60,AXIS_H=26,INSET=30,PAD=.08,EASE_MS=250,GROW_MS=320,TICK_PX=84,TAG_H=18,AUTO_MIN=5.5,MIN_REAL=30;
 // The regime of an evaluation or a stored signal, as the cards and the tooltip name it.
 export const REGIME_LABELS=Object.freeze({'trend-up':'Trend upp','trend-down':'Trend ned',range:'Sidledes',weak:'Svag trend',insufficient:'För kort historik'});
 const SANS='Inter, "Segoe UI", system-ui, -apple-system, Roboto, sans-serif';
@@ -169,6 +169,9 @@ export function comparisonStats(forecast,bars,horizon){
  * tick: the decimals of Bybit's price tick for the coin, when known: the last price's
  * axis tag and a real candle's prices in the tooltip are written with them, as the page
  * writes the price now (dec otherwise).
+ * claude: Claude's sketch of the coming candles ({symbol,tf,candles,pending}), drawn in
+ * violet after the newest real candle; each candle grows in as it arrives, and while
+ * pending the chart says that Claude is drawing.
  * picked: a stored signal record whose entry, SL and TP are drawn from its candle
  * on, marked as that signal's (a label just left of its candle, outlined axis tags).
  * View {rightT,barPx,price:null|{lo,hi}}: rightT is the time at the plot's
@@ -204,6 +207,8 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   // tickDec: the decimals of Bybit's price tick for the coin (setData's tick), for the last price's tag and the real
   // candles' prices in the tooltip; null: dec's.
   let d=null,tfMs=HOUR,bars=[],byT=new Map(),forming=null,closedT=null,lastT=null,dec=2,tickDec=null,horizon=10,latest=null,compare=null,same=false,pick=null;
+  // sketch: Claude's candles ({candles,at,pending}); born: when each of its candles (by time) was first drawn, for the grow-in.
+  let sketch=null;const born=new Map();
   // pinned: the candle slot ({t,y}) a tap on a touch screen holds the crosshair and tooltip at.
   let hover=null,pinned=null,drag=null,dirty=true,queued=false,destroyed=false,anim=null,shown=null,emitted='',cursor='';
   // lv: the level being dragged ({id,kind,pointerId,source,el,start,y,moved,raw,price,view}); pending: a dropped level
@@ -238,7 +243,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   // candles stay large on a wide screen. On a narrow plot (a phone) it shrinks, down to AUTO_MIN px, until the
   // forecast slots, the two empty slots after them and MIN_REAL closed candles fit, so history stays in view.
   const defaultBar=()=>{
-    const w=plot.right-plot.left,ahead=(latest?horizon:1)+2;
+    const w=plot.right-plot.left,ahead=Math.max(latest?horizon:1,sketch?.candles.length??0)+2;
     return clamp(Math.min(Math.max(w/100,BAR_PX),w/(ahead+MIN_REAL)),AUTO_MIN,16);
   };
   const inner=()=>plot.top+Math.min(INSET,(plot.bottom-plot.top)*.15);
@@ -262,10 +267,18 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     return {key:r.id??r.hash??f.model+'|'+f.cutoff,cutoff:f.cutoff,close:finite(r.cutoffClose)?r.cutoffClose:f.cutoff+tfMs,base:f.base,
       candles,bands,at:new Map(candles.map((c,i)=>[c.t,i]))};
   }
+  // Claude's sketch for this coin and timeframe: its valid candles after the newest real one, in time order.
+  function sketchOf(x){
+    if(!x||typeof x!=='object'||x.tf&&x.tf!==d.tf||x.symbol&&d.symbol&&x.symbol!==d.symbol)return null;
+    const candles=(Array.isArray(x.candles)?x.candles:[]).filter(c=>validCandle(c)&&(lastT===null||c.t>lastT)).sort((a,b)=>a.t-b.t);
+    if(!candles.length&&!x.pending)return null;
+    return {candles,at:new Map(candles.map((c,i)=>[c.t,i])),pending:!!x.pending};
+  }
   function anchorTime(){
     const ends=[];
     if(lastT!==null)ends.push(lastT+tfMs);
     if(latest)ends.push(latest.cutoff+(horizon+1)*tfMs);
+    if(sketch?.candles.length)ends.push(sketch.candles.at(-1).t+tfMs);
     return ends.length?Math.max(...ends)+2*tfMs:null;
   }
   const levelList=()=>(Array.isArray(d?.levels)?d.levels:[]).filter(l=>LEVELS[l?.kind]&&positive(l.price));
@@ -307,7 +320,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   function axisWidth(){
     let hi=forming?.h??0;
     for(const b of bars)if(b.h>hi)hi=b.h;
-    for(const f of [latest,compare])if(f)for(const c of f.candles)if(c.h>hi)hi=c.h;
+    for(const f of [latest,compare,sketch])if(f)for(const c of f.candles)if(c.h>hi)hi=c.h;
     // The last price's tag has the tick's decimals where those are more (BTC's tenth).
     ctx.font=FONT;let w=ctx.measureText(fmt(hi||1,Math.max(dec,tickDec??dec))).width+20;
     // Level tags ("Entry 85 230") are wider than a bare price, so the axis makes room while they are shown, but at
@@ -321,7 +334,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
   }
   function setData(next){
     if(!next){
-      d=null;bars=[];byT=new Map();forming=null;closedT=lastT=null;latest=compare=pick=null;anim=shown=pinned=null;vs.rightT=anchor=null;
+      d=null;bars=[];byT=new Map();forming=null;closedT=lastT=null;latest=compare=pick=sketch=null;anim=shown=pinned=null;vs.rightT=anchor=null;born.clear();
       invalidate();emit();return;
     }
     const tf=TF[next.tf];if(!tf)throw Error('Okänd tidsram för diagrammet: '+next.tf);
@@ -337,6 +350,11 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     latest=prepare(next.latest,horizon);compare=prepare(next.compare,horizon);
     same=!!(latest&&compare&&latest.key===compare.key);
     pick=pickOf(next.picked);
+    sketch=sketchOf(next.claude);
+    // A candle seen before keeps its birth, so a redraw does not grow it again; reduced motion shows it at once.
+    if(!sketch?.candles.length)born.clear();
+    else{const t=clock(),keep=new Set(sketch.candles.map(c=>c.t));for(const k of born.keys())if(!keep.has(k))born.delete(k);
+      for(const c of sketch.candles)if(!born.has(c.t))born.set(c.t,reduced()?-Infinity:t);}
     dec=Number.isInteger(next.dec)&&next.dec>=0&&next.dec<=12?next.dec:priceDecimals((forming??bars.at(-1))?.c);
     tickDec=Number.isInteger(next.tick)&&next.tick>=0&&next.tick<=12?next.tick:null;
     // Ease the forming close from what is on screen; a new candle, a new series or reduced motion jumps.
@@ -371,7 +389,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     const add=(l,h)=>{if(l<lo)lo=l;if(h>hi)hi=h;};
     for(let i=firstAt(t0);i<bars.length&&bars[i].t<=t1;i++)add(bars[i].l,bars[i].h);
     if(forming&&forming.t>=t0&&forming.t<=t1)add(forming.l,forming.h);
-    for(const f of [latest,compare])if(f)for(const c of f.candles)if(c.t>=t0&&c.t<=t1)add(c.l,c.h);
+    for(const f of [latest,compare,sketch])if(f)for(const c of f.candles)if(c.t>=t0&&c.t<=t1)add(c.l,c.h);
     if(latest&&d.showBand!==false)for(const b of latest.bands.values())if(b.t>=t0&&b.t<=t1)add(b.q10,b.q90);
     // A picked signal in view shows its whole stop-to-target span; one far back does not squeeze today's prices.
     if(pick&&pick.barTime>=t0&&pick.barTime<=t1)add(Math.min(pick.sl,pick.tp),Math.max(pick.sl,pick.tp));
@@ -491,6 +509,39 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       // The wick ends at the body's edges, so no pixel gets the translucent gray twice.
       ctx.setLineDash([]);ctx.strokeStyle=C.fcFill;ctx.lineWidth=g.wd/ratio;wick(c,b);
     }
+  }
+  // Claude's candles: violet, a rising one filled and a falling one hollow, with a dotted line through the closes from
+  // the last price. Each grows from its open over GROW_MS after it arrives. Returns whether one is still growing.
+  function sketchCandles(now,from){
+    let growing=false;const pts=[];
+    ctx.setLineDash([]);
+    for(const c of sketch.candles){
+      const p=clamp((now-(born.get(c.t)??-Infinity))/GROW_MS,0,1);if(p<1)growing=true;
+      const e=1-(1-p)**3,close=c.o+(c.c-c.o)*e,hi=c.o+(c.h-c.o)*e,lo=c.o+(c.l-c.o)*e;
+      const b=box(c.t,c.o,close);
+      ctx.globalAlpha=.35+.65*e;
+      ctx.strokeStyle=C.claude;ctx.lineWidth=g.wd/ratio;
+      ctx.beginPath();ctx.moveTo(b.cx,snap(yOf(hi)));ctx.lineTo(b.cx,b.y);ctx.moveTo(b.cx,b.y+b.h);ctx.lineTo(b.cx,snap(yOf(lo)));ctx.stroke();
+      if(close>=c.o){ctx.fillStyle=rgba(C.claude,.75);ctx.fillRect(b.x,b.y,b.w,b.h);}
+      else{const lw=g.wd/ratio;ctx.strokeRect(b.x+lw/2,b.y+lw/2,Math.max(0,b.w-lw),Math.max(0,b.h-lw));}
+      pts.push([b.cx,yOf(close)]);
+    }
+    ctx.globalAlpha=1;
+    if(pts.length){
+      ctx.beginPath();ctx.moveTo(...(from??pts[0]));
+      for(const [x,y] of pts)ctx.lineTo(x,y);
+      ctx.strokeStyle=rgba(C.claude,.8);ctx.lineWidth=1.25;ctx.lineJoin='round';ctx.setLineDash([2,3]);ctx.stroke();ctx.setLineDash([]);
+    }
+    return growing;
+  }
+  // The sketch's pill at the top right of the plot (below the forecast's when that one is drawn): "Claude ritar…" while
+  // its answer streams in.
+  function sketchLabel(){
+    const text=sketch.pending?CLAUDE_BUSY:CLAUDE_LABEL;
+    ctx.font=BOLD;const pw=Math.ceil(ctx.measureText(text).width)+22,ph=20;
+    const px=Math.max(plot.left+6,plot.right-pw-6),py=latest?32:6;
+    rr(px,py,pw,ph,ph/2);ctx.fillStyle=PILL_FILL;ctx.fill();ctx.setLineDash(sketch.pending?[3,3]:[]);ctx.strokeStyle=rgba(C.claude,.7);ctx.lineWidth=1;ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=C.claude;ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(text,px+11,py+ph/2+.5);
   }
   // The forming candle's close as drawn this frame (eased ~250 ms towards the latest poll).
   function formingClose(now){
@@ -744,10 +795,13 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
       if(s)out.push(...signalLines(s,b.t));
       return out;
     }
-    if(!hit.forecast)return [];
-    const {candle,band}=hit.forecast,out=['Prognos (scenario) · '+stamp(candle.t,tfMs),...ohlc(candle)];
-    // "80 %" alone could read as a probability; it names the band between the analogues' 10th and 90th percentiles.
-    if(band)out.push('80 %-band: '+fmt(band.q10,dec)+' – '+fmt(band.q90,dec));
+    const out=[];
+    if(hit.forecast){
+      const {candle,band}=hit.forecast;out.push('Prognos (scenario) · '+stamp(candle.t,tfMs),...ohlc(candle));
+      // "80 %" alone could read as a probability; it names the band between the analogues' 10th and 90th percentiles.
+      if(band)out.push('80 %-band: '+fmt(band.q10,dec)+' – '+fmt(band.q90,dec));
+    }
+    if(hit.claude)out.push('Pablo (gissning) · '+stamp(hit.claude.t,tfMs),...ohlc(hit.claude));
     return out;
   }
   function tip(hit){
@@ -795,6 +849,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     if(latest&&d.showBand!==false)band(latest);
     if(compare)comparison();
     if(latest)forecastCandles();
+    const growing=sketch?.candles.length?sketchCandles(finite(ts)?ts:clock(),lastT!==null&&finite(close)?[cxOf(lastT),yOf(close)]:null):false;
     realCandles(close);
     if(d.showSignals!==false)signals();
     if(d.showLevels!==false)levels(list);
@@ -804,7 +859,8 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     if(hit)crossLines(hit);
     ctx.restore();
     const badgeAt=badgeBox();
-    if(latest)regionLabels(badgeAt);else noteLabel(badgeAt);
+    if(latest)regionLabels(badgeAt);else if(!sketch)noteLabel(badgeAt);
+    if(sketch)sketchLabel();
     axisTags(tags,cross);
     drawGhosts(ghosts);
     formingTag(mark);
@@ -814,20 +870,21 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     // A dragged level's note (an invalid zone's reason, or what a drop there does), else a tap's hint, else the tooltip.
     const note=lv?.moved&&lv.view?.note?{text:lv.view.note,y:lv.y,bad:!lv.view.ok}:hint&&hint.until>clock()?hintBox(tags,ghosts):null;
     if(note)callout(note.text,note.y,note.bad);else tip(hit);
-    if(anim)invalidate();
+    if(anim||growing)invalidate();
   }
 
   function hitAt(x,y){
     if(!d||vs.rightT===null||!finite(x)||!finite(y)||x<plot.left||x>plot.right||y<plot.top||y>plot.bottom)return null;
     const t=slotAt(x),bar=forming?.t===t?forming:byT.get(t)??null,closed=!!bar&&bar!==forming;
     const li=latest?.at.get(t),ci=compare?.at.get(t),fc=li===undefined?null:latest.candles[li],cc=ci===undefined?null:compare.candles[ci];
+    const si=bar?undefined:sketch?.at.get(t),sk=si===undefined?null:sketch.candles[si];
     const state=lastT!==null&&t<=lastT?'realized':'future';
     const slot=f=>Math.round((t-f.cutoff)/tfMs);
     const forecast=fc?{h:slot(latest),candle:fc,band:latest.bands.get(t)??null,state}:
       cc&&!bar&&(state==='realized'||ahead())?{h:slot(compare),candle:cc,band:compare.bands.get(t)??null,state,compare:true}:null;
     // The outcome is only compared once the real candle has closed.
     const ref=!closed?null:cc?{c:cc,base:compare.base}:fc?{c:fc,base:latest.base}:null;
-    return {t,x:cxOf(t),y,price:priceAt(y),kind:bar?'real':forecast?'forecast':'empty',bar,forming:!!bar&&bar===forming,closed,forecast,
+    return {t,x:cxOf(t),y,price:priceAt(y),kind:bar?'real':forecast?'forecast':sk?'claude':'empty',bar,forming:!!bar&&bar===forming,closed,forecast,claude:sk,
       compare:ref?{candle:ref.c,error:(ref.c.c-bar.c)/ref.base}:null};
   }
   function hitTest(x,y){measure();if(d)computeRange();return hitAt(x,y);}
