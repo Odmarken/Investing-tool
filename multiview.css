@@ -111,6 +111,10 @@ body.multiview>.wrap,body.multiview>footer,body.multiview>.banner,body.multiview
 .ch-msg.user{align-self:flex-end;background:#123a27;border:1px solid #2a8f5c;color:#e9fff3}
 .ch-msg.claude{align-self:flex-start;background:var(--mv-panel-2);border:1px solid var(--mv-line-2)}
 .ch-msg.err{border-color:rgba(226,72,60,.55)}
+.ch-guess{margin:6px 0 0;padding:4px 8px;border-radius:6px;font-size:12px;border:1px solid var(--mv-line-2)}
+.ch-guess.long{color:#3ddc97;background:rgba(61,220,151,.1);border-color:rgba(61,220,151,.45)}
+.ch-guess.short{color:#ff6b5e;background:rgba(226,72,60,.1);border-color:rgba(226,72,60,.5)}
+.ch-guess.flat{color:var(--mv-text-2)}
 .ch-msg small{display:block;margin-top:4px;font-size:10.5px;color:var(--mv-muted)}
 .ch-msg code{font-family:var(--mono,ui-monospace,monospace);font-size:11.5px;background:#0b0f14;padding:0 4px;border-radius:4px}
 .ch-msg pre{margin:6px 0;padding:8px;background:#0b0f14;border-radius:6px;overflow:auto}

@@ -169,7 +169,7 @@ export function comparisonStats(forecast,bars,horizon){
  * tick: the decimals of Bybit's price tick for the coin, when known: the last price's
  * axis tag and a real candle's prices in the tooltip are written with them, as the page
  * writes the price now (dec otherwise).
- * claude: Claude's sketch of the coming candles ({symbol,tf,candles,pending}), drawn in
+ * claude: Claude's sketch of the coming candles ({symbol,tf,candles,pending,guess}), drawn in
  * violet after the newest real candle; each candle grows in as it arrives, and while
  * pending the chart says that Claude is drawing.
  * picked: a stored signal record whose entry, SL and TP are drawn from its candle
@@ -272,7 +272,7 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     if(!x||typeof x!=='object'||x.tf&&x.tf!==d.tf||x.symbol&&d.symbol&&x.symbol!==d.symbol)return null;
     const candles=(Array.isArray(x.candles)?x.candles:[]).filter(c=>validCandle(c)&&(lastT===null||c.t>lastT)).sort((a,b)=>a.t-b.t);
     if(!candles.length&&!x.pending)return null;
-    return {candles,at:new Map(candles.map((c,i)=>[c.t,i])),pending:!!x.pending};
+    return {candles,at:new Map(candles.map((c,i)=>[c.t,i])),pending:!!x.pending,guess:typeof x.guess?.text==='string'?x.guess.text:''};
   }
   function anchorTime(){
     const ends=[];
@@ -535,9 +535,9 @@ export function createForecastChart(canvas,{tooltip=null,onViewChange=null,raf=g
     return growing;
   }
   // The sketch's pill at the top right of the plot (below the forecast's when that one is drawn): "Claude ritar…" while
-  // its answer streams in.
+  // its answer streams in, then the label with Pablo's long/kort guess.
   function sketchLabel(){
-    const text=sketch.pending?CLAUDE_BUSY:CLAUDE_LABEL;
+    const text=sketch.pending?CLAUDE_BUSY:CLAUDE_LABEL+(sketch.guess?' · '+sketch.guess:'');
     ctx.font=BOLD;const pw=Math.ceil(ctx.measureText(text).width)+22,ph=20;
     const px=Math.max(plot.left+6,plot.right-pw-6),py=latest?32:6;
     rr(px,py,pw,ph,ph/2);ctx.fillStyle=PILL_FILL;ctx.fill();ctx.setLineDash(sketch.pending?[3,3]:[]);ctx.strokeStyle=rgba(C.claude,.7);ctx.lineWidth=1;ctx.stroke();ctx.setLineDash([]);

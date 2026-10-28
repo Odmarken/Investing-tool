@@ -2,7 +2,7 @@
    den här datorn (window.riptideDesktop.claude), med din egen inloggning — ingen
    API-nyckel. I webbläsaren finns ingen sådan väg, och panelen säger det.
 
-   mountChat(root, {desktop, context, key, title, sub, ctxLabel, hint, onClose, onDraw}) → {ask(text, {withContext}), post(role, text), show()}
+   mountChat(root, {desktop, context, key, title, sub, ctxLabel, hint, onClose, onDraw}) → {ask(text, {withContext}), post(role, text, note, guess), show()}
    key: var chatten sparas i sessionStorage — en per fönster och chatt, så två aldrig delar en Claude-session.
    context(): {text, label} | null — underlaget som kan skickas med frågan.
    title, sub, ctxLabel, hint: rubriken, raden under den, rutan för underlaget och texten i en tom chatt
@@ -28,6 +28,15 @@ export function renderMarkdown(src){
       .replace(/<\/span>\n+(?=<span class="ch-li">)/g, '</span>')   // punkterna är block: inga tomrader mellan dem
       .replace(/\n/g, '<br>');
   }).join('');
+}
+
+/* Ett meddelande i chatten: texten, Pablos long/kort-gissning under en ritning (guess) och den lilla raden (note). */
+export function messageHtml(m){
+  const side = { long: 'long', kort: 'short' }[m.guess?.side] || 'flat';
+  return `<div class="ch-msg ${m.role}${m.error ? ' err' : ''}">
+      ${m.role === 'user' ? esc(m.text).replace(/\n/g, '<br>') : renderMarkdown(m.text) || (m.pending ? '<span class="ch-dots"><i></i><i></i><i></i></span>' : '')}
+      ${m.guess ? `<p class="ch-guess ${side}">Pablos gissning: <b>${esc(m.guess.text)}</b></p>` : ''}
+      ${m.note ? `<small>${esc(m.note)}</small>` : ''}</div>`;
 }
 
 export function mountChat(root, { desktop = globalThis.riptideDesktop, context = () => null, storage = globalThis.sessionStorage, key = 'riptide.chat.v1',
@@ -78,9 +87,7 @@ export function mountChat(root, { desktop = globalThis.riptideDesktop, context =
       ? `<p class="ch-note">Chatten pratar med Claude Code på din dator, med din egen inloggning — utan API-nyckel. Det går bara i <b>desktop-appen</b> (Riptide.exe), inte i webbläsaren.</p>`
       : !ready && chat.notice ? `<p class="ch-note">${esc(chat.notice)}</p>`
       : !chat.messages.length ? `<p class="ch-note">${esc(hint)}</p>` : '';
-    el.log.innerHTML = intro + chat.messages.map(m => `<div class="ch-msg ${m.role}${m.error ? ' err' : ''}">
-      ${m.role === 'user' ? esc(m.text).replace(/\n/g, '<br>') : renderMarkdown(m.text) || (m.pending ? '<span class="ch-dots"><i></i><i></i><i></i></span>' : '')}
-      ${m.note ? `<small>${esc(m.note)}</small>` : ''}</div>`).join('');
+    el.log.innerHTML = intro + chat.messages.map(messageHtml).join('');
     el.log.scrollTop = el.log.scrollHeight;
     el.send.textContent = busy ? 'Stoppa' : 'Skicka';
     el.send.classList.toggle('mv-danger', !!busy);
@@ -134,10 +141,12 @@ export function mountChat(root, { desktop = globalThis.riptideDesktop, context =
   };
 
   void check();
-  // En rad från någon annan än chatten själv (grafens ritning): sparas och visas som chattens egna.
-  function post(role, text, note = ''){
+  // En rad från någon annan än chatten själv (grafens ritning): sparas och visas som chattens egna. guess: Pablos
+  // gissning ur ritningen ({side, text} från sketchGuess), visad under svaret.
+  function post(role, text, note = '', guess = null){
     if(!text) return;
-    chat.messages.push({ role: role === 'user' ? 'user' : 'claude', text: String(text), note }); save(); render();
+    chat.messages.push({ role: role === 'user' ? 'user' : 'claude', text: String(text), note,
+      ...(guess?.text ? { guess: { side: guess.side, text: guess.text } } : {}) }); save(); render();
   }
 
   return {

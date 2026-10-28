@@ -683,12 +683,13 @@ test('✦ Rita asks Claude with the chart and draws its candles as they stream i
   const calls=[],posts=[];
   const sketch=(prompt,onDelta)=>{let resolve;const done=new Promise(r=>{resolve=r;});const job={prompt,onDelta,resolve,cancelled:false};calls.push(job);
     return {done,cancel(){job.cancelled=true;}};};
-  const p=page({time:after(1998),extra:{sketch,mountAsk:()=>({show(){},post:(role,text,note)=>posts.push({role,text,note})})}});
+  const p=page({time:after(1998),extra:{sketch,mountAsk:()=>({show(){},post:(role,text,note,guess)=>posts.push(guess?{role,text,note,guess}:{role,text,note})})}});
   await p.view.show();
   assert.equal(p.q('[data-fc-sketchbar]').hidden,false);
   click(p.q('[data-fc-sketch]'));
   assert.equal(calls.length,1);
-  assert.match(calls[0].prompt,/AI Forecast-grafen: BTCUSDT/);assert.match(calls[0].prompt,/de 10 kommande candlarna för BTCUSDT på 1h/);
+  assert.match(calls[0].prompt,/BTCUSDT perpetual på Bybit, tidsram 1h/);assert.match(calls[0].prompt,/de 10 kommande candlarna för BTCUSDT på 1h/);
+  assert.doesNotMatch(calls[0].prompt,/af-forecast-v1|af-signal-v1/,'the clean chart leaves out the forecast and the signal rule');
   assert.equal(p.q('[data-fc-sketch]').textContent,'Ritar… stoppa');
   assert.equal(posts[0].role,'user');
   p.draw();assert.ok(drawn(p.ctx).includes('Pablo ritar…'));
@@ -698,9 +699,10 @@ test('✦ Rita asks Claude with the chart and draws its candles as they stream i
   calls[0].resolve('');
   await until(()=>p.q('[data-fc-sketch]').textContent==='✦ Rita','the sketch ends');
   p.ctx.calls.length=0;p.draw();
-  assert.ok(drawn(p.ctx).includes('Pablo — gissning'));
+  assert.ok(drawn(p.ctx).includes('Pablo — gissning · Kort ▼ −0,20 %'),'the pill carries his long/kort guess');
   assert.ok(p.ctx.calls.some(k=>k[0]==='fillRect'&&k[1]==='rgba(180,140,255,0.75)'),'a rising Claude candle');
-  assert.deepEqual(posts.at(-1),{role:'claude',text:'Svagt uppåt mot motståndet.',note:'ritade 2 candles i grafen'});
+  assert.deepEqual(posts.at(-1),{role:'claude',text:'Svagt uppåt mot motståndet.',note:'ritade 2 candles i grafen',
+    guess:{side:'kort',pct:posts.at(-1).guess.pct,text:'Kort ▼ −0,20 %'}});
   // ✕ takes the drawing away.
   assert.equal(p.q('[data-fc-sketch-clear]').hidden,false);
   click(p.q('[data-fc-sketch-clear]'));

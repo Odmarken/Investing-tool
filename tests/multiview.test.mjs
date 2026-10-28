@@ -4,10 +4,10 @@ import { EventEmitter } from 'node:events';
 import { buildSources, sourceName, tagHeadline, mergeItems, headlineBrief, ago, overview, summaryPrompt, localSummary, connectSummary } from '../news-crawler-core.js';
 import { readHeadline } from '../news-desk.js';
 import { equityPoints } from '../account-panel.js';
-import { renderMarkdown } from '../claude-chat.js';
+import { renderMarkdown, messageHtml } from '../claude-chat.js';
 import { windowNumber, readLayout, DOUBLE } from '../multiview.js';
 import { readLine, findClaude, createClaudeBridge } from '../electron/claude-bridge.js';
-import { createSketchReader, sketchPrompt } from '../claude-sketch.js';
+import { createSketchReader, ritaPrompt, bounceSignal, sketchGuess } from '../claude-sketch.js';
 
 const T = Date.parse('2026-10-23T12:00:00Z');
 
@@ -272,8 +272,59 @@ test('the sketch reader takes candles line by line as they stream, chained from 
   r.end();
   assert.equal(r.candles.length, 3, 'no more than n');
   assert.equal(r.note, 'Svagt uppåt: 100, 101, 99 och 102 är nivåerna.');
-  const p = sketchPrompt({ context: 'X', n: 5, symbol: 'BTC', tf: '1h', price: 100, question: 'bryter den?', from: '2026-10-26 12:00' });
-  assert.match(p, /de 5 kommande candlarna för BTCUSDT på 1h, från senaste priset 100\. Den första börjar 2026-10-26 12:00 UTC/);
-  assert.match(p, /Användarens fråga: bryter den\?/);
-  assert.match(p, /Rad 2–6: en candle per rad/);
+});
+
+// Hourly candles: a long, steady fall (a strong downtrend), optionally ending in a sharp three-candle drop.
+function hourly(n, { crash = false } = {}){
+  const out = [];
+  let c = 200;
+  for(let i = 0; i < n; i++){
+    const drop = crash && i >= n - 3 ? 3 : 0.6, o = c;
+    c = o - drop;
+    out.push({ t: Date.UTC(2026, 9, 1) + i * 3600000, o, h: o + 1.5, l: c - 1.5, c, v: 1000 + i });
+  }
+  return out;
+}
+
+test('sketchGuess calls long or kort from where the drawing ends', () => {
+  const at = c => [{ t: 0, o: 100, h: 101, l: 99, c: 100.5 }, { t: 1, o: 100.5, h: 101, l: 98, c }];
+  assert.deepEqual(sketchGuess(at(100.42), 100), { side: 'long', pct: sketchGuess(at(100.42), 100).pct, text: 'Long ▲ +0,42 %' });
+  assert.equal(sketchGuess(at(98.75), 100).text, 'Kort ▼ −1,25 %');
+  assert.equal(sketchGuess(at(100), 100).side, 'platt');
+  assert.equal(sketchGuess([], 100), null);
+  assert.equal(sketchGuess(at(101), 0), null);
+});
+
+test('a posted sketch answer shows Pablo\'s guess under it', () => {
+  const html = messageHtml({ role: 'claude', text: 'Studsläge: upp.', note: 'ritade 10 candles i grafen', guess: { side: 'kort', text: 'Kort ▼ −0,30 %' } });
+  assert.match(html, /class="ch-guess short">Pablos gissning: <b>Kort ▼ −0,30 %<\/b><\/p>\s*<small>ritade 10 candles/);
+  assert.doesNotMatch(messageHtml({ role: 'claude', text: 'Hej' }), /ch-guess/);
+});
+
+test('bounceSignal fires only on a sharp drop inside a strong downtrend', () => {
+  const steady = bounceSignal(hourly(300)), crash = bounceSignal(hourly(300, { crash: true }));
+  assert.equal(steady.on, false, 'a steady fall is no crash');
+  assert.ok(steady.trend < -1.34);
+  assert.equal(crash.on, true);
+  assert.ok(crash.r3 < -1.25 && crash.trend < -1.34);
+  assert.equal(bounceSignal(hourly(40, { crash: true })).on, false, 'too little history');
+  const up = hourly(300, { crash: true }).map(b => ({ ...b, o: 400 - b.o, h: 400 - b.l, l: 400 - b.h, c: 400 - b.c }));
+  assert.equal(bounceSignal(up).on, false, 'a spike up in an uptrend is not the mirror rule');
+});
+
+test('ritaPrompt sends the clean chart, adds the bounce only when it fires, and keeps the app format', () => {
+  const base = { symbol: 'BTC', tf: '1h', tfMs: 3600000, n: 5, dec: 2, from: '2026-10-13 12:00', start: Date.UTC(2026, 9, 13, 12), question: 'bryter den?' };
+  const calm = ritaPrompt({ ...base, bars: hourly(300), price: 20 });
+  assert.match(calm, /BTCUSDT perpetual på Bybit, tidsram 1h/);
+  assert.match(calm, /Högre tidsram 4h/);
+  assert.match(calm, /de 5 kommande candlarna för BTCUSDT på 1h, från senaste priset 20\.00\. Den första börjar 2026-10-13 12:00 UTC/);
+  assert.match(calm, /Användarens fråga: bryter den\?/);
+  assert.match(calm, /Rad 2–6: en candle per rad/);
+  assert.doesNotMatch(calm, /STUDSLÄGE|af-forecast|af-signal/);
+  const bars = hourly(300, { crash: true }), sig = bounceSignal(bars);
+  const crash = ritaPrompt({ ...base, bars, price: bars.at(-1).c });
+  assert.match(crash, /STUDSLÄGE/);
+  assert.match(crash, /77 % av 31 ras jul–sep 2026, 57 % av 957 ras 2022–2025/);
+  assert.ok(crash.includes(`hamna runt ${(bars.at(-1).c + 0.3 * sig.atr).toFixed(2)}`));
+  assert.match(crash, /Börja rad 1 med "Studsläge:"/);
 });

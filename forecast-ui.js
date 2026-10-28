@@ -22,7 +22,7 @@ import {ACCOUNT,SETTING_LIMITS,accountStats,stepDecimals,levelDecimals} from './
 import {walkForwardSteps,DEV_END} from './forecast-backtest.js';
 import {createContractCache,roundPrice} from './bybit-contracts.js';
 import {mountTerminal,terminalFigures} from './forecast-terminal.js';
-import {sketchPrompt,createSketchReader} from './claude-sketch.js';
+import {ritaPrompt,createSketchReader,sketchGuess} from './claude-sketch.js';
 
 const PREFS='riptide.forecast.ui.v1',HISTORY=2000,HORIZONS=Object.freeze([5,10,20]),BACKFILL=Object.freeze([20,10,5]);
 // The order ticket's choices per browser: the stake as typed, the leverage per coin and whether an order is confirmed
@@ -1355,7 +1355,7 @@ export function mountForecast(root,deps={}){
     if(!s||!last){levelMsg('Pablo kan rita när grafen har candles.',true);return;}
     const T=TF[s.tf],n=view.horizon,dec=decimals(),start=last.t+T.ms,base=last.c;
     const reader=createSketchReader({base,start,tfMs:T.ms,n});
-    const prompt=sketchPrompt({context:chartContext()?.text??'',n,symbol:s.symbol,tf:T.label,price:+base.toFixed(dec),question,
+    const prompt=ritaPrompt({bars:s.state().bars,symbol:s.symbol,tf:T.label,tfMs:T.ms,n,price:base,dec,start,question,
       from:new Date(start).toISOString().slice(0,16).replace('T',' ')});
     const mine={symbol:s.symbol,tf:s.tf,candles:reader.candles,pending:true,job:null};
     sketch=mine;
@@ -1371,7 +1371,9 @@ export function mountForecast(root,deps={}){
       reader.end();
       mine.pending=false;
       if(!reader.candles.length){sketch=null;levelMsg('Pablo svarade utan candles att rita.',true);}
-      ask?.post?.('claude',reader.note||'Här är min gissning.',reader.candles.length?`ritade ${reader.candles.length} candles i grafen`:'');
+      // Long or kort from where the last drawn close ends; shown under his answer and in the chart's pill.
+      mine.guess=sketchGuess(reader.candles,base);
+      ask?.post?.('claude',reader.note||'Här är min gissning.',reader.candles.length?`ritade ${reader.candles.length} candles i grafen`:'',mine.guess);
     },e=>{
       if(sketch!==mine)return;
       reader.end();mine.pending=false;
